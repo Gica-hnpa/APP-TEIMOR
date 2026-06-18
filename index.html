@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ca">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TEIMOR · Gestor de pressupostos</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">T</div>
+        <div>
+          <strong>TEIMOR</strong>
+          <span>Gestor contractista</span>
+        </div>
+      </div>
+      <nav id="tabs" class="tabs">
+        <button data-view="inici" class="active">Inici</button>
+        <button data-view="clients">Clients</button>
+        <button data-view="feines">Feines / anys</button>
+        <button data-view="llibreria">Llibreria partides</button>
+        <button data-view="pressupostos">Pressupostos</button>
+        <button data-view="factures">Factures</button>
+        <button data-view="rendiment">Rendiment</button>
+        <button data-view="arxius">Arxius / albarans</button>
+      </nav>
+      <div class="sidebar-actions">
+        <button id="exportData" class="secondary">Exportar còpia JSON</button>
+        <label class="secondary file-label">Importar JSON<input id="importData" type="file" accept="application/json" hidden /></label>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <h1 id="viewTitle">Inici</h1>
+          <p id="viewSubtitle">Base local per pressupostos, factures, rendiment i documentació.</p>
+        </div>
+        <div class="top-actions">
+          <button id="resetDemo" class="danger ghost">Restaurar demo</button>
+        </div>
+      </header>
+      <section id="content" class="content"></section>
+    </main>
+  </div>
+
+  <template id="emptyState">
+    <div class="empty">Encara no hi ha dades en aquest apartat.</div>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>
