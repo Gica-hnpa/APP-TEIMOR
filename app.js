@@ -1,9 +1,11 @@
-/* TEIMOR · Gestor de pressupostos v03
+/* TEIMOR · Gestor de pressupostos v04
    App estàtica: les dades importades d'Excel/ZIP es llegeixen al navegador i es guarden localment.
 */
-const STORE_KEY = 'teimor_gestor_pressupostos_v03';
-const AUTH_KEY = 'teimor_auth_v03';
-const DB_NAME = 'teimor_attachments_v03';
+const STORE_KEY = 'teimor_gestor_pressupostos_v04';
+const LEGACY_STORE_KEY = 'teimor_gestor_pressupostos_v03';
+const AUTH_KEY = 'teimor_auth_v04';
+const LEGACY_AUTH_KEY = 'teimor_auth_v03';
+const DB_NAME = 'teimor_attachments_v04';
 const DB_STORE = 'files';
 const DEFAULT_USER = 'admin';
 const DEFAULT_PASS = 'teimor2026';
@@ -36,7 +38,7 @@ const normKey = s => strip(s).replace(/[^a-z0-9]+/g,' ').trim();
 
 function defaultData(){
   return {
-    meta:{version:'3.0.0',createdAt:today(),updatedAt:today()},
+    meta:{version:'4.0.0',createdAt:today(),updatedAt:today()},
     settings:{
       appName:'TEIMOR · Base de dades de pressupostos',
       loginUser:DEFAULT_USER,
@@ -78,8 +80,13 @@ let data = loadData();
 let state = {view:'dashboard', selectedBudgetId:data.budgets[0]?.id || '', selectedClientId:'', selectedJobId:'', selectedLibId:'', importDraft:null, draftLog:[]};
 
 function loadData(){
-  try { const parsed = JSON.parse(localStorage.getItem(STORE_KEY)); return parsed || defaultData(); }
-  catch { return defaultData(); }
+  try {
+    const current = localStorage.getItem(STORE_KEY);
+    const legacy = localStorage.getItem(LEGACY_STORE_KEY);
+    const parsed = JSON.parse(current || legacy || 'null');
+    if(parsed){ parsed.meta = parsed.meta || {}; parsed.meta.version = parsed.meta.version || 'importada'; return parsed; }
+    return defaultData();
+  } catch { return defaultData(); }
 }
 function saveData(){ data.meta = data.meta || {}; data.meta.updatedAt = new Date().toISOString(); localStorage.setItem(STORE_KEY, JSON.stringify(data)); updateBadge(); }
 function updateBadge(){ const b=document.getElementById('syncBadge'); if(b) b.textContent=`Mode local · ${new Date().toLocaleTimeString('ca-ES',{hour:'2-digit',minute:'2-digit'})}`; }
@@ -103,7 +110,14 @@ function jobInvoices(jobId){ return data.invoices.filter(i=>i.jobId===jobId); }
 function jobBudgetTotal(jobId){ return jobBudgets(jobId).reduce((s,b)=>s+budgetBase(b),0); }
 function jobInvoiceTotal(jobId){ return jobInvoices(jobId).reduce((s,i)=>s+invoiceTotal(i),0); }
 function options(arr, selected, labelFn=x=>x.name||x.title||x.id){ return arr.map(x=>`<option value="${esc(x.id)}" ${x.id===selected?'selected':''}>${esc(labelFn(x))}</option>`).join(''); }
-function statusPill(status){ const s=strip(status); let c='soft'; if(s.includes('valid')) c='green'; else if(s.includes('pendent')||s.includes('revis')) c='yellow'; else if(s.includes('historic')) c='purple'; else if(s.includes('sense')||s.includes('duplic')) c='red'; return `<span class="pill ${c}">${esc(status||'')}</span>`; }
+function statusPill(status){
+  const s=strip(status); let c='soft';
+  if(s.includes('acceptat') || s.includes('cobrat') || s.includes('valid') || s.includes('fet')) c='green';
+  else if(s.includes('enviat') || s.includes('pendent') || s.includes('revis') || s.includes('esborrany')) c='yellow';
+  else if(s.includes('historic') || s.includes('històric')) c='purple';
+  else if(s.includes('rebutjat') || s.includes('anul') || s.includes('sense') || s.includes('duplic')) c='red';
+  return `<span class="pill ${c}">${esc(status||'')}</span>`;
+}
 
 async function sha256(text){
   const msg = new TextEncoder().encode(text);
@@ -137,7 +151,7 @@ function init(){
   const exportPackageBtn=document.getElementById('exportPackage'); if(exportPackageBtn) exportPackageBtn.onclick=exportPackageZip;
   document.getElementById('exportJsonClean').onclick=()=>exportJson(false);
   document.getElementById('importJson').onchange=importJson;
-  showApp(localStorage.getItem(AUTH_KEY)==='1');
+  showApp(localStorage.getItem(AUTH_KEY)==='1' || localStorage.getItem(LEGACY_AUTH_KEY)==='1');
 }
 window.addEventListener('DOMContentLoaded', init);
 
@@ -177,7 +191,7 @@ function renderDashboard(){
 }
 function clientsTable(rows=data.clients){
   return table(['Client','NIF/DNI/CIF','Contacte','Telèfon','Email','Adreça obra','Estat','Accions'], rows.map(c=>`
-    <tr><td><strong>${esc(c.name)}</strong><br><span class="muted">${esc(c.id)}</span></td><td>${esc(c.nif||'')}</td><td>${esc(c.contact||'')}</td><td>${esc(c.phone||'')}</td><td>${esc(c.email||'')}</td><td>${esc(c.workAddress||c.fiscalAddress||'')}</td><td>${statusPill(c.status||'Actiu')}</td><td><button class="ghost small" data-edit-client="${esc(c.id)}">Editar</button></td></tr>`));
+    <tr><td><strong>${esc(c.name)}</strong><br><span class="muted">${esc(c.id)}</span></td><td>${esc(c.nif||'')}</td><td>${esc(c.contact||'')}</td><td>${esc(c.phone||'')}</td><td>${esc(c.email||'')}</td><td>${esc(c.workAddress||c.fiscalAddress||'')}</td><td>${statusPill(c.status||'Actiu')}</td><td class="nowrap"><button class="ghost small" data-edit-client="${esc(c.id)}">Editar</button> <button class="danger small" data-delete-client="${esc(c.id)}">Eliminar</button></td></tr>`));
 }
 function renderClients(editId=''){
   setHeader('Clients','Llistat principal de clients finals detectats al requadre del pressupost, amb filtres intel·ligents i fitxa editable.');
@@ -296,7 +310,7 @@ function libraryTable(rows){
       <td class="num">${money(item.unitPrice || libFinal(item))}</td>
       <td>${statusPill(item.status||'Pendent')}</td>
       <td>${esc(item.origin||'')}</td>
-      <td class="nowrap"><button class="ghost small" data-view-lib="${esc(item.id)}">Veure / editar</button></td>
+      <td class="nowrap"><button class="ghost small" data-view-lib="${esc(item.id)}">Veure / editar</button> <button class="danger small" data-delete-lib="${esc(item.id)}">Eliminar</button></td>
     </tr>`));
 }
 function openLibModal(id=''){
@@ -333,16 +347,74 @@ function openLibModal(id=''){
 function decompRow(l={},i=0){
   return `<tr data-decomp-row><td><select name="type_${i}">${['Mà d’obra','Material','Maquinària','Altres'].map(t=>`<option ${l.type===t?'selected':''}>${t}</option>`).join('')}</select></td><td><input name="name_${i}" value="${esc(l.name||'')}"></td><td><input name="unit_${i}" value="${esc(l.unit||'')}"></td><td><input name="yield_${i}" type="number" step="0.0001" value="${esc(l.yield||'')}"></td><td><input name="price_${i}" type="number" step="0.01" value="${esc(l.price||'')}"></td><td class="num">${money(num(l.yield)*num(l.price))}</td><td><button class="danger small" type="button" data-remove-decomp>×</button></td></tr>`;
 }
-function renderBudgets(){
-  setHeader('Pressupostos','Crear pressupost amb partides de la llibreria o partides noves, amb CI/DGE/BI configurables per pressupost.');
-  if(!state.selectedBudgetId && data.budgets[0]) state.selectedBudgetId=data.budgets[0].id;
-  const b=byId(data.budgets,state.selectedBudgetId) || data.budgets[0];
-  const formBudget=b || {id:'', lines:[], ci:data.settings.defaultCI,dge:data.settings.defaultDGE,bi:data.settings.defaultBI,iva:data.settings.defaultIVA};
+
+function budgetStatusOptions(current=''){
+  const statuses=['Esborrany','Enviat','Acceptat','Rebutjat','Acceptat i fet','Facturat','Cobrat','Històric importat','Anul·lat'];
+  if(current && !statuses.includes(current)) statuses.push(current);
+  return statuses.map(x=>`<option ${x===current?'selected':''}>${esc(x)}</option>`).join('');
+}
+function budgetYear(b){
+  const d=parseDateValue(b.date); if(d) return Number(d.slice(0,4));
+  const j=byId(data.jobs,b.jobId); if(j?.year) return Number(j.year);
+  return '';
+}
+function budgetRowsFiltered(){
+  const q=strip(document.getElementById('budgetSearch')?.value ?? state.budgetSearch ?? '');
+  const year=document.getElementById('budgetYearFilter')?.value ?? state.budgetYearFilter ?? '';
+  const status=strip(document.getElementById('budgetStatusFilter')?.value ?? state.budgetStatusFilter ?? '');
+  const client=document.getElementById('budgetClientFilter')?.value ?? state.budgetClientFilter ?? '';
+  return data.budgets.filter(b=>{
+    const j=byId(data.jobs,b.jobId);
+    const c=byId(data.clients,b.clientId);
+    const blob=[b.id,b.number,b.date,b.title,b.status,b.source,b.notes,c?.name,c?.nif,c?.phone,c?.email,j?.title,j?.address,j?.city,budgetYear(b)].join(' ');
+    return (!q || strip(blob).includes(q)) && (!year || String(budgetYear(b))===String(year)) && (!status || strip(b.status)===status) && (!client || b.clientId===client);
+  }).sort((a,b)=>(String(b.date||'').localeCompare(String(a.date||'')) || String(b.number||'').localeCompare(String(a.number||''))));
+}
+function budgetsTable(rows){
+  return table(['Any','Data','Núm.','Client','Feina / obra','Estat','Base','Total IVA incl.','Partides','Accions'], rows.map(b=>`
+    <tr>
+      <td>${esc(budgetYear(b)||'')}</td>
+      <td>${esc(b.date||'')}</td>
+      <td><strong>${esc(b.number||b.id)}</strong><br><span class="muted">${esc(b.source||'')}</span></td>
+      <td>${esc(clientName(b.clientId))}</td>
+      <td><strong>${esc(b.title||jobName(b.jobId)||'')}</strong><br><span class="muted">${esc(byId(data.jobs,b.jobId)?.address||'')}</span></td>
+      <td><select class="status-select" data-budget-status="${esc(b.id)}">${budgetStatusOptions(b.status||'Esborrany')}</select></td>
+      <td class="num">${money(budgetBase(b))}</td>
+      <td class="num"><strong>${money(budgetTotal(b))}</strong></td>
+      <td class="num">${(b.lines||[]).length}</td>
+      <td class="nowrap"><button class="ghost small" data-edit-budget="${esc(b.id)}">Editar</button> <button class="danger small" data-delete-budget="${esc(b.id)}">Eliminar</button></td>
+    </tr>`));
+}
+function renderBudgets(editId=''){
+  setHeader('Pressupostos','Llistat complet de pressupostos importats o creats, amb any, client, feina, estat i partides.');
+  if(editId) { state.editBudgetId=editId; state.selectedBudgetId=editId === '__new' ? '' : editId; }
+  const years=[...new Set(data.budgets.map(b=>budgetYear(b)).filter(Boolean))].sort((a,b)=>b-a);
+  const statuses=[...new Set(data.budgets.map(b=>b.status).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const rows=budgetRowsFiltered();
+  const editing = state.editBudgetId === '__new' ? {id:'', lines:[], date:today(), ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, iva:data.settings.defaultIVA, status:'Esborrany'} : byId(data.budgets,state.editBudgetId);
   setContent(`
-    <div class="card"><h2>Crear / seleccionar pressupost</h2>
-      <div class="toolbar"><div class="left"><select id="budgetSelect"><option value="">Nou pressupost</option>${options(data.budgets,b?.id,x=>`${x.number || x.id} · ${clientName(x.clientId)} · ${x.title || ''}`)}</select></div><div class="right"><button class="primary" id="newBudgetBtn">Nou pressupost</button><button class="ghost" id="exportBudgetCsv">Exportar CSV</button></div></div>
+    <div class="grid four">
+      <div class="kpi"><span>Pressupostos</span><strong>${data.budgets.length}</strong></div>
+      <div class="kpi"><span>Base total</span><strong>${money(data.budgets.reduce((s,b)=>s+budgetBase(b),0))}</strong></div>
+      <div class="kpi"><span>Acceptats / fets</span><strong>${data.budgets.filter(b=>strip(b.status).includes('acceptat')||strip(b.status).includes('fet')).length}</strong></div>
+      <div class="kpi"><span>Rebutjats / anul·lats</span><strong>${data.budgets.filter(b=>strip(b.status).includes('rebutjat')||strip(b.status).includes('anul')).length}</strong></div>
     </div>
-    <div class="card"><h2>${b?'Pressupost actiu':'Nou pressupost'}</h2>
+    <div class="card"><div class="toolbar"><h2>Tots els pressupostos</h2><div class="right"><button class="primary" id="newBudgetBtn">+ Nou pressupost</button><button class="ghost" id="exportBudgetCsv">Exportar CSV del seleccionat</button></div></div>
+      <div class="filter-grid">
+        <label>Cerca<input id="budgetSearch" placeholder="Client, obra, núm., adreça, any..." value="${esc(state.budgetSearch||'')}"></label>
+        <label>Any<select id="budgetYearFilter"><option value="">Tots</option>${years.map(y=>`<option value="${y}" ${String(y)===String(state.budgetYearFilter||'')?'selected':''}>${y}</option>`).join('')}</select></label>
+        <label>Client<select id="budgetClientFilter"><option value="">Tots</option>${options(data.clients,state.budgetClientFilter||'')}</select></label>
+        <label>Estat<select id="budgetStatusFilter"><option value="">Tots</option>${statuses.map(x=>`<option ${strip(x)===strip(state.budgetStatusFilter||'')?'selected':''}>${esc(x)}</option>`).join('')}</select></label>
+      </div>
+      <div id="budgetFilterInfo" class="small-text" style="margin:10px 0">Mostrant ${rows.length} de ${data.budgets.length} pressupostos.</div>
+      <div id="budgetsTable">${budgetsTable(rows)}</div>
+    </div>
+    ${editing ? budgetFormCard(editing, state.editBudgetId==='__new') : '<div class="empty">Selecciona “Editar” en un pressupost o crea’n un de nou per veure la fitxa i les partides.</div>'}
+    ${editing && editing.id ? budgetLinesCard(editing) : ''}
+  `);
+}
+function budgetFormCard(formBudget,isNew=false){
+  return `<div class="card"><h2>${isNew?'Nou pressupost':'Editar pressupost'}</h2>
       <form id="budgetForm" class="form-grid">
         <input type="hidden" name="id" value="${esc(formBudget.id||uid('P'))}">
         <label>Número<input name="number" value="${esc(formBudget.number||'')}"></label>
@@ -350,17 +422,25 @@ function renderBudgets(){
         <label class="wide">Client<select name="clientId" required><option value="">Selecciona client</option>${options(data.clients,formBudget.clientId)}</select></label>
         <label class="wide">Feina<select name="jobId"><option value="">Sense feina</option>${options(data.jobs,formBudget.jobId,x=>`${x.year} · ${x.title}`)}</select></label>
         <label class="wide">Títol pressupost<input name="title" value="${esc(formBudget.title||'')}"></label>
-        <label>Estat<select name="status"><option ${formBudget.status==='Esborrany'?'selected':''}>Esborrany</option><option ${formBudget.status==='Enviat'?'selected':''}>Enviat</option><option ${formBudget.status==='Acceptat'?'selected':''}>Acceptat</option><option ${formBudget.status==='Històric'?'selected':''}>Històric</option></select></label>
+        <label>Estat<select name="status">${budgetStatusOptions(formBudget.status||'Esborrany')}</select></label>
         <label>CI %<input name="ci" type="number" step="0.01" value="${esc(formBudget.ci ?? data.settings.defaultCI)}"></label>
         <label>DGE %<input name="dge" type="number" step="0.01" value="${esc(formBudget.dge ?? data.settings.defaultDGE)}"></label>
         <label>BI %<input name="bi" type="number" step="0.01" value="${esc(formBudget.bi ?? data.settings.defaultBI)}"></label>
         <label>IVA %<input name="iva" type="number" step="0.01" value="${esc(formBudget.iva ?? data.settings.defaultIVA)}"></label>
         <label class="full">Notes<textarea name="notes">${esc(formBudget.notes||'')}</textarea></label>
-        <div class="actions full"><button class="primary">Guardar capçalera</button></div>
+        <div class="actions full"><button class="primary">Guardar pressupost</button><button class="ghost" type="button" data-render-budgets>Cancel·lar</button></div>
       </form>
-    </div>
-    ${b?budgetLinesCard(b):'<div class="empty">Crea o selecciona un pressupost per afegir partides.</div>'}
-  `);
+    </div>`;
+}
+function filterBudgets(){
+  state.budgetSearch=document.getElementById('budgetSearch')?.value||'';
+  state.budgetYearFilter=document.getElementById('budgetYearFilter')?.value||'';
+  state.budgetClientFilter=document.getElementById('budgetClientFilter')?.value||'';
+  state.budgetStatusFilter=document.getElementById('budgetStatusFilter')?.value||'';
+  const rows=budgetRowsFiltered();
+  const tableEl=document.getElementById('budgetsTable'); if(tableEl) tableEl.innerHTML=budgetsTable(rows);
+  const info=document.getElementById('budgetFilterInfo'); if(info) info.textContent=`Mostrant ${rows.length} de ${data.budgets.length} pressupostos.`;
+  bindViewEvents();
 }
 function budgetLinesCard(b){
   return `<div class="card"><div class="toolbar"><h2>Partides del pressupost</h2><div class="right"><button class="primary" id="addLineFromLibrary">Afegir de llibreria</button><button class="ghost" id="addManualLine">Afegir partida nova</button></div></div>
@@ -394,7 +474,7 @@ function renderInvoices(editId=''){
 }
 function invoicesTable(){
   return table(['Núm.','Data','Feina','Pressupost','Concepte','Base','Total IVA','Estat','Accions'], data.invoices.map(i=>`
-    <tr><td>${esc(i.number||i.id)}</td><td>${esc(i.date||'')}</td><td>${esc(jobName(i.jobId))}</td><td>${esc(budgetName(i.budgetId))}</td><td>${esc(i.concept||'')}</td><td class="num">${money(invoiceBase(i))}</td><td class="num">${money(invoiceTotal(i))}</td><td>${statusPill(i.paid?'Pagada':'Pendent')}</td><td><button class="ghost small" data-edit-invoice="${esc(i.id)}">Editar</button></td></tr>`));
+    <tr><td>${esc(i.number||i.id)}</td><td>${esc(i.date||'')}</td><td>${esc(jobName(i.jobId))}</td><td>${esc(budgetName(i.budgetId))}</td><td>${esc(i.concept||'')}</td><td class="num">${money(invoiceBase(i))}</td><td class="num">${money(invoiceTotal(i))}</td><td>${statusPill(i.paid?'Pagada':'Pendent')}</td><td class="nowrap"><button class="ghost small" data-edit-invoice="${esc(i.id)}">Editar</button> <button class="danger small" data-delete-invoice="${esc(i.id)}">Eliminar</button></td></tr>`));
 }
 function renderPerformance(){
   setHeader('Rendiment','Comparativa per feina: pressupostat, facturat/despeses i marge.');
@@ -440,13 +520,13 @@ function renderImporter(){
   const ready = typeof XLSX !== 'undefined';
   setContent(`
     ${!ready?'<div class="card notice-red"><strong>Llibreria Excel no carregada.</strong> Comprova connexió o inclou SheetJS localment. Sense aquesta llibreria no es poden llegir .xls/.xlsx.</div>':''}
-    <div class="card notice-blue"><strong>Criteri d’importació V03:</strong> el client guardat és el del requadre/destinatari del pressupost, no TEIMOR. En pressupostos antics TEIMOR d’una sola partida, l’app crea una partida única amb CONCEPTE + TREBALLS + MEDICIÓ + BASE IMPOSABLE, i no barreja clients dins la llibreria.</div>
+    <div class="card notice-blue"><strong>Criteri d’importació V04:</strong> el client guardat és el del requadre/destinatari del pressupost, no TEIMOR. En pressupostos antics TEIMOR d’una sola partida, l’app crea una partida única amb CONCEPTE + TREBALLS + MEDICIÓ + BASE IMPOSABLE, i no barreja clients dins la llibreria.</div>
     <div class="card"><div id="dropzone" class="dropzone">
       <h2>Importació massiva</h2><p>Arrossega aquí Excels o un ZIP, o fes servir els botons.</p>
       <div class="actions" style="justify-content:center">
         <label class="primary file-label">Seleccionar molts Excels<input id="excelInput" type="file" multiple accept=".xls,.xlsx,.xlsm,.csv" hidden></label>
         <label class="ghost file-label">Seleccionar carpeta<input id="folderInput" type="file" webkitdirectory directory multiple hidden></label>
-        <label class="ghost file-label">Importar ZIP / WinRAR ZIP<input id="zipInput" type="file" accept=".zip" hidden></label>
+        <label class="ghost file-label">Importar ZIP / detectar RAR<input id="zipInput" type="file" accept=".zip,.rar" hidden></label>
       </div>
     </div></div>
     <div id="importPreview">${state.importDraft ? importPreviewHtml(state.importDraft) : '<div class="empty">Encara no has importat cap fitxer en aquesta sessió.</div>'}</div>
@@ -505,20 +585,27 @@ function bindViewEvents(){
   const newClientBtn=document.getElementById('newClientBtn'); if(newClientBtn) newClientBtn.onclick=()=>renderClients('__new');
   ['clientSearch','clientYearFilter','clientCityFilter','clientStatusFilter'].forEach(id=>{ const el=document.getElementById(id); if(el) el.oninput=filterClients; if(el) el.onchange=filterClients; });
   document.querySelectorAll('[data-edit-client]').forEach(b=>b.onclick=()=>renderClients(b.dataset.editClient));
+  document.querySelectorAll('[data-delete-client]').forEach(b=>b.onclick=()=>deleteClient(b.dataset.deleteClient));
   document.querySelectorAll('[data-render-clients]').forEach(b=>b.onclick=()=>renderClients());
 
   const jobForm=document.getElementById('jobForm'); if(jobForm) jobForm.onsubmit=saveJob;
   const yearFilter=document.getElementById('yearFilter'); if(yearFilter) yearFilter.onchange=e=>{ state.yearFilter=e.target.value; renderJobs(); };
   document.querySelectorAll('[data-edit-job]').forEach(b=>b.onclick=()=>renderJobs(b.dataset.editJob));
+  document.querySelectorAll('[data-delete-job]').forEach(b=>b.onclick=()=>deleteJob(b.dataset.deleteJob));
   document.querySelectorAll('[data-render-jobs]').forEach(b=>b.onclick=()=>renderJobs());
 
   const libSearch=document.getElementById('libSearch'); if(libSearch) libSearch.oninput=e=>{ state.libSearch=e.target.value; renderLibrary(); };
   const newLib=document.getElementById('newLibItem'); if(newLib) newLib.onclick=()=>openLibModal('');
   document.querySelectorAll('[data-view-lib]').forEach(b=>b.onclick=()=>openLibModal(b.dataset.viewLib));
+  document.querySelectorAll('[data-delete-lib]').forEach(b=>b.onclick=()=>deleteLibraryItem(b.dataset.deleteLib));
 
-  const budgetSelect=document.getElementById('budgetSelect'); if(budgetSelect) budgetSelect.onchange=e=>{ state.selectedBudgetId=e.target.value; renderBudgets(); };
-  const newBudget=document.getElementById('newBudgetBtn'); if(newBudget) newBudget.onclick=()=>{ state.selectedBudgetId=''; renderBudgets(); };
+  const newBudget=document.getElementById('newBudgetBtn'); if(newBudget) newBudget.onclick=()=>{ state.editBudgetId='__new'; state.selectedBudgetId=''; renderBudgets('__new'); };
   const budgetForm=document.getElementById('budgetForm'); if(budgetForm) budgetForm.onsubmit=saveBudget;
+  ['budgetSearch','budgetYearFilter','budgetClientFilter','budgetStatusFilter'].forEach(id=>{ const el=document.getElementById(id); if(el) el.oninput=filterBudgets; if(el) el.onchange=filterBudgets; });
+  document.querySelectorAll('[data-edit-budget]').forEach(b=>b.onclick=()=>{ state.editBudgetId=b.dataset.editBudget; state.selectedBudgetId=b.dataset.editBudget; renderBudgets(b.dataset.editBudget); });
+  document.querySelectorAll('[data-delete-budget]').forEach(b=>b.onclick=()=>deleteBudget(b.dataset.deleteBudget));
+  document.querySelectorAll('[data-budget-status]').forEach(sel=>sel.onchange=e=>updateBudgetStatus(e.target.dataset.budgetStatus,e.target.value));
+  document.querySelectorAll('[data-render-budgets]').forEach(b=>b.onclick=()=>{ state.editBudgetId=''; renderBudgets(); });
   const addLib=document.getElementById('addLineFromLibrary'); if(addLib) addLib.onclick=openAddLineFromLibrary;
   const addManual=document.getElementById('addManualLine'); if(addManual) addManual.onclick=()=>addManualLine();
   const exportBudgetCsv=document.getElementById('exportBudgetCsv'); if(exportBudgetCsv) exportBudgetCsv.onclick=downloadBudgetCsv;
@@ -527,6 +614,7 @@ function bindViewEvents(){
 
   const invoiceForm=document.getElementById('invoiceForm'); if(invoiceForm) invoiceForm.onsubmit=saveInvoice;
   document.querySelectorAll('[data-edit-invoice]').forEach(b=>b.onclick=()=>renderInvoices(b.dataset.editInvoice));
+  document.querySelectorAll('[data-delete-invoice]').forEach(b=>b.onclick=()=>deleteInvoice(b.dataset.deleteInvoice));
   document.querySelectorAll('[data-render-invoices]').forEach(b=>b.onclick=()=>renderInvoices());
 
   const attachForm=document.getElementById('attachmentForm'); if(attachForm) attachForm.onsubmit=saveAttachment;
@@ -551,8 +639,12 @@ function bindViewEvents(){
 }
 function formObj(form){ return Object.fromEntries(new FormData(form).entries()); }
 function saveClient(e){ e.preventDefault(); const f=formObj(e.target); const c={id:f.id,name:f.name,nif:f.nif,phone:f.phone,email:f.email,contact:f.contact,fiscalAddress:f.fiscalAddress,workAddress:f.workAddress,city:f.city,status:f.status,notes:f.notes}; const idx=data.clients.findIndex(x=>x.id===f.editId || x.id===c.id); if(idx>=0) data.clients[idx]=c; else data.clients.push(c); saveData(); renderClients(); }
+function deleteClient(id){ if(!confirm('Eliminar aquest client? Les feines i pressupostos vinculats quedaran sense client.')) return; data.clients=data.clients.filter(x=>x.id!==id); data.jobs.forEach(j=>{ if(j.clientId===id) j.clientId=''; }); data.budgets.forEach(b=>{ if(b.clientId===id) b.clientId=''; }); data.invoices.forEach(i=>{ if(i.clientId===id) i.clientId=''; }); saveData(); renderClients(); }
 function saveJob(e){ e.preventDefault(); const f=formObj(e.target); const j={id:f.id,year:Number(f.year)||new Date().getFullYear(),clientId:f.clientId,title:f.title,address:f.address,city:f.city,status:f.status,notes:f.notes,mainBudgetId:byId(data.jobs,f.editId)?.mainBudgetId||''}; const idx=data.jobs.findIndex(x=>x.id===f.editId || x.id===j.id); if(idx>=0) data.jobs[idx]=j; else data.jobs.push(j); saveData(); renderJobs(); }
-function saveBudget(e){ e.preventDefault(); const f=formObj(e.target); const old=byId(data.budgets,f.id); const b={...(old||{}), id:f.id, number:f.number, date:f.date, clientId:f.clientId, jobId:f.jobId, title:f.title, status:f.status, ci:num(f.ci), dge:num(f.dge), bi:num(f.bi), iva:num(f.iva), notes:f.notes, lines:old?.lines||[]}; const idx=data.budgets.findIndex(x=>x.id===b.id); if(idx>=0) data.budgets[idx]=b; else data.budgets.push(b); state.selectedBudgetId=b.id; const job=byId(data.jobs,b.jobId); if(job && !job.mainBudgetId) job.mainBudgetId=b.id; saveData(); renderBudgets(); }
+function deleteJob(id){ if(!confirm('Eliminar aquesta feina/obra? Els pressupostos vinculats quedaran sense feina.')) return; data.jobs=data.jobs.filter(x=>x.id!==id); data.budgets.forEach(b=>{ if(b.jobId===id) b.jobId=''; }); data.invoices.forEach(i=>{ if(i.jobId===id) i.jobId=''; }); saveData(); renderJobs(); }
+function saveBudget(e){ e.preventDefault(); const f=formObj(e.target); const old=byId(data.budgets,f.id); const b={...(old||{}), id:f.id, number:f.number, date:f.date, clientId:f.clientId, jobId:f.jobId, title:f.title, status:f.status, ci:num(f.ci), dge:num(f.dge), bi:num(f.bi), iva:num(f.iva), notes:f.notes, lines:old?.lines||[]}; const idx=data.budgets.findIndex(x=>x.id===b.id); if(idx>=0) data.budgets[idx]=b; else data.budgets.push(b); state.selectedBudgetId=b.id; state.editBudgetId=b.id; const job=byId(data.jobs,b.jobId); if(job && !job.mainBudgetId) job.mainBudgetId=b.id; saveData(); renderBudgets(b.id); }
+function updateBudgetStatus(id,status){ const b=byId(data.budgets,id); if(!b) return; b.status=status; saveData(); filterBudgets(); }
+function deleteBudget(id){ if(!confirm('Eliminar aquest pressupost i les seves partides?')) return; data.budgets=data.budgets.filter(x=>x.id!==id); data.jobs.forEach(j=>{ if(j.mainBudgetId===id) j.mainBudgetId=''; }); data.invoices.forEach(i=>{ if(i.budgetId===id) i.budgetId=''; }); if(state.selectedBudgetId===id) state.selectedBudgetId=''; if(state.editBudgetId===id) state.editBudgetId=''; saveData(); renderBudgets(); }
 function updateBudgetLine(e){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; const l=(b.lines||[]).find(x=>x.id===e.target.dataset.lineId); if(!l) return; const field=e.target.dataset.lineField; l[field]=['qty','unitPrice'].includes(field)?num(e.target.value):e.target.value; l.total=num(l.qty)*num(l.unitPrice); saveData(); renderBudgets(); }
 function deleteBudgetLine(id){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; b.lines=(b.lines||[]).filter(x=>x.id!==id); saveData(); renderBudgets(); }
 function addManualLine(){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; b.lines=b.lines||[]; b.lines.push({id:uid('LIN'),code:'',chapter:'',unit:'',concept:'Nova partida',longDesc:'',qty:1,unitPrice:0,total:0,status:'Manual pendent revisar',origin:'Manual'}); saveData(); renderBudgets(); }
@@ -566,6 +658,7 @@ function addLibResultsHtml(rows,b){ return table(['Codi','Ut','Concepte','PU seg
 function bindAddLibButtons(b){ document.querySelectorAll('[data-add-lib-to-budget]').forEach(btn=>btn.onclick=()=>{ const x=byId(data.library,btn.dataset.addLibToBudget); b.lines=b.lines||[]; const pu=x.unitPrice || libFinal(x,b); b.lines.push({id:uid('LIN'),libraryId:x.id,code:x.code,chapter:x.chapter,unit:x.unit,concept:x.concept,longDesc:x.longDesc,qty:1,unitPrice:Number(pu.toFixed(2)),total:Number(pu.toFixed(2)),status:x.status||'De llibreria',origin:'Llibreria'}); saveData(); closeModal(); renderBudgets(); }); }
 function downloadBudgetCsv(){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return alert('Selecciona un pressupost.'); const rows=[['Codi','Ut','Concepte','Descripcio llarga','Quantitat','Preu unitari','Total']].concat((b.lines||[]).map(l=>[l.code,l.unit,l.concept,l.longDesc,l.qty,l.unitPrice,lineTotal(l)])); downloadText(rows.map(r=>r.map(x=>`"${String(x??'').replace(/"/g,'""')}"`).join(';')).join('\n'), `pressupost_${b.number||b.id}.csv`, 'text/csv;charset=utf-8'); }
 function saveInvoice(e){ e.preventDefault(); const f=formObj(e.target); const i={id:f.id,number:f.number,date:f.date,jobId:f.jobId,budgetId:f.budgetId,type:f.type,concept:f.concept,base:num(f.base),iva:num(f.iva),paid:f.paid==='true',notes:f.notes}; const idx=data.invoices.findIndex(x=>x.id===f.editId || x.id===i.id); if(idx>=0) data.invoices[idx]=i; else data.invoices.push(i); saveData(); renderInvoices(); }
+function deleteInvoice(id){ if(!confirm('Eliminar aquesta factura?')) return; data.invoices=data.invoices.filter(x=>x.id!==id); saveData(); renderInvoices(); }
 async function saveSettings(e){ e.preventDefault(); const f=formObj(e.target); data.settings.appName=f.appName; data.settings.defaultCI=num(f.defaultCI); data.settings.defaultDGE=num(f.defaultDGE); data.settings.defaultBI=num(f.defaultBI); data.settings.defaultIVA=num(f.defaultIVA); data.settings.contractista={name:f.contractista_name,nif:f.contractista_nif,phone:f.contractista_phone,email:f.contractista_email,address:f.contractista_address,city:f.contractista_city}; saveData(); alert('Configuració guardada.'); renderSettings(); }
 async function savePassword(e){ e.preventDefault(); const f=formObj(e.target); data.settings.loginUser=f.loginUser || DEFAULT_USER; if(f.newPass) data.settings.passwordHash=await sha256(f.newPass); saveData(); alert('Usuari/contrasenya guardats.'); renderSettings(); }
 function openModal(html){ document.getElementById('modalContent').innerHTML=html; document.getElementById('modal').classList.remove('hidden'); bindModalEvents(); }
@@ -587,6 +680,7 @@ function saveLibraryItem(e){
   if(idx>=0) data.library[idx]=item; else data.library.push(item);
   saveData(); closeModal(); renderLibrary();
 }
+function deleteLibraryItem(id){ if(!confirm('Eliminar aquesta partida de la llibreria? Les línies ja inserides en pressupostos no s’esborraran.')) return; data.library=data.library.filter(x=>x.id!==id); saveData(); renderLibrary(); }
 
 function openIdb(){
   return new Promise((resolve,reject)=>{
@@ -611,7 +705,7 @@ async function deleteAttachment(id){ if(!confirm('Eliminar arxiu local?')) retur
 async function exportPackageZip(){
   if(typeof JSZip === 'undefined') return alert('No s’ha carregat JSZip. Prova exportar JSON complet o revisa la connexió.');
   const zip=new JSZip();
-  const payload={...data, exportedAt:new Date().toISOString(), packageType:'TEIMOR_V03_COMPLET'};
+  const payload={...data, exportedAt:new Date().toISOString(), packageType:'TEIMOR_V04_COMPLET'};
   zip.file('teimor_dades_completes.json', JSON.stringify(payload,null,2));
   zip.file('README.txt', 'Paquet exportat des de TEIMOR Gestor. Aquest ZIP és compatible amb WinRAR. Per seguretat, pot contenir dades personals si has exportat la còpia completa.');
   const folder=zip.folder('arxius_incrustats');
@@ -655,6 +749,10 @@ async function handleImportFiles(files){
   const excelFiles=[];
   for(const file of files){
     const name=(file.webkitRelativePath || file.name || '').toLowerCase();
+    if(name.endsWith('.rar')){
+      state.draftLog.push(`RAR detectat: ${file.name}. Aquesta versió el detecta, però no pot descomprimir RAR real dins el navegador sense mòdul extern. Descomprimeix-lo amb WinRAR i importa la carpeta, o crea un ZIP.`);
+      continue;
+    }
     if(name.endsWith('.zip')){
       if(typeof JSZip === 'undefined'){ state.draftLog.push(`ZIP ignorat perquè JSZip no està carregat: ${file.name}`); continue; }
       const zip=await JSZip.loadAsync(file);
@@ -690,11 +788,12 @@ function parseWorkbook(fileName, arrayBuffer){
   sheets.forEach(sh => sh.aoa.forEach((row,ri)=>flat.push({sheet:sh.name, rowIndex:ri, cells:row.map(v=>cleanText(v)).filter(v=>v!==''), raw:row})));
   warnings.push(`${fileName}: ${sheets.length} pestanya/es llegides.`);
   const client = detectClient(fileName, flat);
-  const year = detectYear(fileName, flat);
+  const detectedDate = detectDate(flat);
+  const year = detectedDate ? Number(detectedDate.slice(0,4)) : detectYear(fileName, flat);
   const job = {id:uid('F'), year, clientTempKey:client.tempKey, title:detectJobTitle(fileName, flat), address:client.workAddress || detectAddress(flat), city:detectCity(flat), status:'Històrica', source:fileName, notes:'Importada automàticament des d’Excel antic.'};
   const parsedItems=[];
   sheets.forEach(sh => parsedItems.push(...detectItemsFromSheet(fileName, sh.name, sh.aoa)));
-  const budget = {id:uid('P'), number:detectBudgetNumber(fileName, flat), date:detectDate(flat) || `${year}-01-01`, clientTempKey:client.tempKey, jobTempKey:job.id, title:job.title, status:'Històric importat', ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, iva:data.settings.defaultIVA, source:fileName, notes:'Pressupost importat. Revisa partides sense amidament.', lines:[]};
+  const budget = {id:uid('P'), number:detectBudgetNumber(fileName, flat), date:detectedDate || `${year}-01-01`, clientTempKey:client.tempKey, jobTempKey:job.id, title:job.title, status:'Històric importat', ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, iva:data.settings.defaultIVA, source:fileName, notes:'Pressupost importat. Revisa partides sense amidament.', lines:[]};
   budget.lines = parsedItems.map(it=>({...it,id:uid('LIN')}));
   const items = parsedItems.map(it=>({...it, origin:fileName, sourceBudget:budget.number || fileName}));
   if(!parsedItems.length) warnings.push(`${fileName}: no s’han detectat partides tabulades. Es guardarà només client/feina/pressupost si confirmes.`);
@@ -716,44 +815,53 @@ function detectClient(fileName, flat){
   const nif = firstRegex(candidateText, /\b(?!B55271159\b)([A-HJNP-SUVW][0-9]{7}[0-9A-J]|[0-9]{8}[A-Z]|[XYZ][0-9]{7}[A-Z])\b/i) || '';
   const email = firstRegex(candidateText, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || '';
   const phone = detectPhone(candidateText);
-  const name = recipient.name || findValueByLabels(flat, ['client','cliente','destinatari','destinatario','senyors','sres','promotor','propietari','propiedad','comunitat','comunidad']) || guessNameFromFile(fileName);
+  let name = recipient.name || findValueByLabels(flat, ['client','cliente','destinatari','destinatario','senyors','sres','promotor','propietari','propiedad','comunitat','comunidad']) || '';
+  if(badClientName(name)) name = guessNameFromFile(fileName);
   const workAddress = recipient.address || findValueByLabels(flat, ['obra','direccion obra','direcció obra','adreça obra','situada','situat','emplaçament','emplazamiento']) || detectAddress(flat);
   const city = recipient.city || detectCity(flat);
   return {id:uid('CLI'), tempKey:uid('TMPCLI'), name:cleanClientName(name), nif, phone, email, contact:'', fiscalAddress:'', workAddress, city, status:'Actiu', source:fileName, notes:'Client detectat automàticament del requadre/destinatari. Revisar si cal.'};
 }
 function detectRecipientBlock(flat){
   const candidates=[];
+  // Format TEIMOR: destinatari dins requadre superior dret, normalment columnes D/I i files 8-18.
   for(const r of flat){
     const cells=r.raw.map(v=>cleanText(v));
     cells.forEach((c,ci)=>{
       if(!c || isTeimorText(c) || isNonRecipientText(c)) return;
-      // En els pressupostos TEIMOR antics, el destinatari acostuma a estar al requadre dret superior.
-      if(r.rowIndex <= 18 && ci >= 3) candidates.push({row:r.rowIndex,col:ci,text:c});
+      if(r.rowIndex <= 22 && ci >= 3) candidates.push({row:r.rowIndex,col:ci,text:c});
     });
   }
+  // Si hi ha etiquetes explícites de client/destinatari, també les afegim amb prioritat.
+  const labelled=findValueByLabels(flat, ['client','cliente','destinatari','destinatario','senyors','sres','promotor','propietari','propiedad','comunitat','comunidad']);
+  if(labelled) candidates.push({row:0,col:99,text:labelled});
   if(!candidates.length) return {name:'',address:'',city:'',text:''};
   const lines=[]; const seen=new Set();
-  candidates.sort((a,b)=>a.row-b.row || a.col-b.col).forEach(x=>{ const k=strip(x.text); if(!seen.has(k)){ seen.add(k); lines.push(x.text); }});
-  const name = lines.find(x=>!looksLikeAddress(x) && !looksLikeCityLine(x) && !/^\(?girona\)?$/i.test(x) && strip(x).length>3) || '';
+  candidates.sort((a,b)=>a.row-b.row || a.col-b.col).forEach(x=>{
+    const k=strip(x.text); if(!seen.has(k)){ seen.add(k); lines.push(x.text); }
+  });
+  const ranked=lines.map(x=>({text:x,score:clientLineScore(x)})).sort((a,b)=>b.score-a.score);
+  const name=(ranked.find(x=>x.score>0)?.text) || '';
   const address = lines.find(looksLikeAddress) || '';
   const cityLine = lines.find(looksLikeCityLine) || '';
   return {name, address, city:extractCityFromLine(cityLine), text:lines.join('\n')};
 }
-function isNonRecipientText(s){ return /^(data|fecha|pressupost|presupuesto|obra|concepte|concepto|medicio|medición|medicion|treballs|trabajos|base imposable|iva|exclos|excl[oò]s)$/i.test(cleanText(s)); }
-function looksLikeAddress(s){ return /\b(c\/|carrer|calle|avinguda|avenida|avda\.?|passeig|plaza|plaça|rambla|carretera|ctra\.?|n[ºo]|núm|num\.?|bloc|esc\.?|baixos|pis)\b/i.test(String(s)); }
+function isNonRecipientText(s){ return /^(data|fecha|date|pressupost|presupuesto|n[úu]m\.?|numero|número|obra|concepte|concepto|medicio|medició|medición|medicion|treballs|trabajos|base imposable|base imponible|iva|exclos|excl[oò]s)$/i.test(cleanText(s)); }
+function looksLikeAddress(s){ return /\b(c\/|c\.|carrer|calle|avinguda|avenida|av\.?|avda\.?|passeig|pg\.?|plaza|plaça|rambla|carretera|ctra\.?|urbanitzaci[oó]|urb\.?|travessera|cam[ií]|n[ºo]|núm|num\.?|número|numero|bloc|bloque|esc\.?|escala|baixos|pis|portal|local)\b/i.test(String(s)); }
 function looksLikeCityLine(s){ return /\b(17\d{3}|08\d{3}|Girona|Barcelona|Palafrugell|Palam[oó]s|Calonge|Sant Antoni|Begur|Pals|Sant Feliu de Gu[ií]xols|S.?Agar[oó])\b/i.test(String(s)); }
+function badClientName(s){ const t=cleanText(s); return !t || looksLikeAddress(t) || looksLikeCityLine(t) || isTeimorText(t) || isNonRecipientText(t) || /^\(?girona\)?$/i.test(t) || /^[0-9\s.,()-]+$/.test(t); }
+function clientLineScore(s){ const t=cleanText(s); if(badClientName(t)) return -100; let score=Math.min(t.length,80); if(/com\.?\s*de\s*prop|comunitat|comunidad|propietaris|propietarios|s\.?l\.?|s\.?a\.?|scp|cb|riart/i.test(t)) score+=80; if(/^[A-ZÀ-Ý0-9 .&()'-]+$/.test(t)) score+=10; if(/@|\d{8}[A-Z]|[A-Z]\d{7}/i.test(t)) score-=40; return score; }
 function extractCityFromLine(s){ const m=String(s||'').match(/(Palafrugell|Palam[oó]s|Calonge(?: i Sant Antoni)?|Sant Antoni|Begur|Pals|Sant Feliu de Gu[ií]xols|S.?Agar[oó]|Girona|Barcelona)/i); return m?m[0]:cleanText(s||''); }
 function cleanClientName(s){
-  s=cleanText(s);
-  if(!s || isTeimorText(s) || s.length<3) return 'Client pendent de revisar';
-  return s.replace(/^(client|cliente|destinatari|destinatario|senyors|sres|promotor|propietari|propiedad)\s*[:\-]?\s*/i,'').trim();
+  s=cleanText(s).replace(/^(client|cliente|destinatari|destinatario|senyors|sres|promotor|propietari|propiedad)\s*[:\-]?\s*/i,'').trim();
+  if(!s || badClientName(s) || s.length<3) return 'Client pendent de revisar';
+  return s;
 }
 function guessNameFromFile(file){
   let base=file.split('/').pop().replace(/\.(xls|xlsx|xlsm|csv)$/i,'').replace(/[_-]+/g,' ');
   base=base.replace(/^\d+\s*/,'').replace(/pressupost|presupuesto|obra/ig,'').trim();
   return base || 'Client pendent de revisar';
 }
-function isTeimorText(s){ return /teimor|teixidor|mora|marçal|trinxeria|b55271159|palafrugell|info@teimor|www\.teimor|620988264|675520117|609036162/i.test(s); }
+function isTeimorText(s){ return /teimor|teixidor|mora|marçal|trinxeria|b55271159|info@teimor|www\.teimor|620988264|675520117|609036162/i.test(s); }
 function findValueByLabels(flat, labels){
   const labs=labels.map(strip);
   for(const r of flat){
@@ -786,15 +894,45 @@ function detectAddress(flat){
 function detectCity(flat){ const text=flat.map(r=>r.cells.join(' ')).join('\n'); const m=text.match(/\b(Palafrugell|Palam[oó]s|Calonge(?: i Sant Antoni)?|Sant Antoni|Begur|Pals|Sant Feliu de Gu[ií]xols|S.?Agar[oó]|Girona|Barcelona)\b/i); return m?m[0]:''; }
 function detectYear(fileName, flat){
   const d=detectDate(flat); if(d){ const y=Number(d.slice(0,4)); if(y) return y; }
-  const text=[fileName, ...flat.slice(0,80).map(r=>r.cells.join(' '))].join(' ');
+  const text=[fileName, ...flat.slice(0,120).map(r=>r.cells.join(' '))].join(' ');
   const m=text.match(/\b(20\d{2}|19\d{2})\b/); return m?Number(m[1]):new Date().getFullYear();
 }
-function detectDate(flat){
-  const text=flat.slice(0,100).map(r=>r.cells.join(' ')).join('\n');
-  let m=text.match(/\b(20\d{2}|19\d{2})[\/\-.](\d{1,2})[\/\-.](\d{1,2})\b/);
+function dateIso(d){
+  if(!(d instanceof Date) || isNaN(d)) return '';
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function parseDateValue(v){
+  if(v == null || v === '') return '';
+  if(v instanceof Date) return dateIso(v);
+  if(typeof v === 'number' && v > 20000 && v < 70000){ return dateIso(new Date(Math.round((v - 25569) * 86400 * 1000))); }
+  let s=cleanText(v).replace(/^[A-Za-zÀ-ÿ]+:\s*/,'').trim();
+  if(!s) return '';
+  let m=s.match(/\b(20\d{2}|19\d{2})[\/\-.](\d{1,2})[\/\-.](\d{1,2})\b/);
   if(m) return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;
-  m=text.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](20\d{2}|19\d{2})\b/);
-  if(m) return `${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
+  m=s.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2}|20\d{2}|19\d{2})\b/);
+  if(m){ let y=Number(m[3]); if(y<100) y+=2000; return `${y}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`; }
+  // Dates textuals que a vegades entrega SheetJS amb cellDates/raw false
+  const d=new Date(s); if(!isNaN(d) && /\d{4}/.test(s)) return dateIso(d);
+  return '';
+}
+function detectDate(flat){
+  // 1) Primer busquem la cel·la Data/Fecha i el valor adjacent, que és el patró dels Excels TEIMOR.
+  for(let ri=0; ri<Math.min(flat.length,140); ri++){
+    const r=flat[ri]; const cells=r.raw || [];
+    for(let i=0;i<cells.length;i++){
+      const label=strip(cells[i]).replace(/:$/,'');
+      if(label==='data' || label==='fecha' || label==='date'){
+        const own=parseDateValue(cells[i]); if(own) return own;
+        for(let j=i+1;j<Math.min(cells.length,i+6);j++){ const d=parseDateValue(cells[j]); if(d) return d; }
+        const next=flat[ri+1]?.raw || [];
+        for(let j=i;j<Math.min(next.length,i+4);j++){ const d=parseDateValue(next[j]); if(d) return d; }
+      }
+    }
+  }
+  // 2) Si no hi ha etiqueta, escanegem totes les cel·les superiors.
+  for(const r of flat.slice(0,160)){
+    for(const c of (r.raw||[])){ const d=parseDateValue(c); if(d) return d; }
+  }
   return '';
 }
 function detectBudgetNumber(fileName, flat){ return findValueByLabels(flat,['pressupost','presupuesto','num','nº','numero','número']) || fileName.split('/').pop().replace(/\.(xls|xlsx|xlsm|csv)$/i,''); }
@@ -870,7 +1008,7 @@ function headerMap(row){
 }
 function isNonItemLine(line){
   const sl=strip(line);
-  return !sl || /teimor|teixidor|mora|marçal|trinxeria|www\.teimor|info@teimor|base imposable|base imponible|iva|exclos|excl[oò]s|forma de pago|condicions|condiciones|data:|fecha:|pressupost$|presupuesto$|obra$|concepte$|concepto$|medicio$|medición$|treballs$|trabajos$/.test(sl);
+  return !sl || /teimor|teixidor|mora|marçal|trinxeria|www\.teimor|info@teimor|base imposable|base imponible|iva|exclos|excl[oò]s|forma de pago|condicions|condiciones|data:?|fecha:?|pressupost$|presupuesto$|obra$|concepte$|concepto$|medicio$|medición$|medicion$|treballs$|trabajos$/.test(sl);
 }
 function parseWithHeader(rows,fileName,sheetName){
   let start=-1, map={};
@@ -886,7 +1024,7 @@ function parseWithHeader(rows,fileName,sheetName){
     const lineText=row.join(' '); const sline=strip(lineText);
     if(isNonItemLine(lineText)) continue;
     const desc=cell(row,map.desc) || longestText(row);
-    if(!desc || desc.length<3 || isTeimorText(desc)) continue;
+    if(!desc || desc.length<3 || isTeimorText(desc) || looksLikeAddress(desc) || looksLikeCityLine(desc)) continue;
     const unit=cell(row,map.unit) || detectUnit(row);
     const qty=num(cell(row,map.qty)); let pu=num(cell(row,map.pu)); let total=num(cell(row,map.total));
     const code=cell(row,map.code) || '';
@@ -910,6 +1048,7 @@ function parseFallback(rows,fileName,sheetName){
     const textCells=row.filter(c=>strip(c) && num(c)===0 && !isNonRecipientText(c));
     if(numericCells.length===0 && textCells.length && line.length<80 && line===line.toUpperCase()){ chapter=line; continue; }
     if(!textCells.length && numericCells.length<1) continue;
+    if(!unit && (looksLikeAddress(line) || looksLikeCityLine(line) || /@|tel[èe]fon|telefono|nif|dni|cif/i.test(line))) continue;
     let desc=longestText(row); if(!desc || desc.length<8 || looksLikeAddress(desc)) continue;
     // Només acceptem fallback si hi ha unitat explícita o prou informació econòmica, evitant clients/contactes.
     if(!unit && numericCells.length<2) continue;
@@ -937,7 +1076,8 @@ function classifyItem(unit,qty,pu,total,desc){
 }
 function makeItem({code,chapter,unit,desc,qty,pu,total,status,fileName,sheetName,longDescOverride}){
   const longDesc=cleanText(longDescOverride || desc);
-  const concept=longDesc.length>140 ? longDesc.slice(0,137)+'...' : longDesc;
+  const shortDesc=cleanText(desc || longDesc);
+  const concept=shortDesc.length>140 ? shortDesc.slice(0,137)+'...' : shortDesc;
   return {code:code||'',chapter:chapter||'',unit:unit||'',concept,longDesc,qty:qty||'',unitPrice:pu||'',total:total||'',status,origin:`${fileName} · ${sheetName}`,source:fileName,decomp:[]};
 }
 function confirmDraftImport(){
