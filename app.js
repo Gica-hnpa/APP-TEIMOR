@@ -1,312 +1,813 @@
-const STORE_KEY = 'teimor_gestor_v01';
-const DB_NAME = 'teimor_files_v01';
+/* TEIMOR · Gestor de pressupostos v02
+   App estàtica: les dades importades d'Excel/ZIP es llegeixen al navegador i es guarden localment.
+*/
+const STORE_KEY = 'teimor_gestor_pressupostos_v02';
+const AUTH_KEY = 'teimor_auth_v02';
+const DB_NAME = 'teimor_attachments_v02';
 const DB_STORE = 'files';
+const DEFAULT_USER = 'admin';
+const DEFAULT_PASS = 'teimor2026';
 
-const defaultData = () => ({
-  clients: [
-    {id:'CLI-TEIMOR', name:'TEIMOR / Teixidor & Mora S.L.', nif:'B55271159', contact:'Alfons Mora / Albert Teixidor / Joan Bachs', phone:'620988264 / 675520117 / 609036162', email:'info@teimor.com', address:'C/ Marçal de la Trinxeria, 48, esc. A, planta 5, àtic 4', city:'17200 Palafrugell (Girona)', status:'Actiu', notes:'Client contractista.'},
-    {id:'CLI-VALENTINA', name:'Comunitat de Propietaris Valentina Mar', nif:'', contact:'', phone:'', email:'', address:'Avda. Torre Valentina, 11', city:'17251 Calonge (Girona)', status:'Actiu', notes:'Client final del pressupost històric aportat.'}
-  ],
-  jobs: [
-    {id:'F-2016-001', year:2016, clientId:'CLI-VALENTINA', title:'Garatges Valentina Mar - impermeabilització terrassa no transitable', address:'Avda. Torre Valentina, 11', city:'Calonge', status:'Finalitzada', start:'2016-07-05', end:'', mainBudgetId:'P-2016-001', notes:'Pressupost històric aportat.'},
-    {id:'F-2026-001', year:2026, clientId:'CLI-TEIMOR', title:'Base de dades pressupostos TEIMOR', address:'Palafrugell / Baix Empordà', city:'Palafrugell', status:'En curs', start:'2026-06-18', end:'', mainBudgetId:'P-2026-001', notes:'Feina interna per preparar plantilla, app i llibreria.'}
-  ],
-  library: [
-    {code:'IMP-001', chapter:'Impermeabilització', unit:'m²', concept:'Impermeabilització de terrassa no transitable', desc:'Neteja del suport, imprimació, regates puntuals i col·locació de làmina bituminosa SBS 50/G FP autoprotegida, incloent remats, solapaments i mitjans auxiliars manuals.', unitPrice:28.95, origin:'Valentina Mar 2016', status:'Revisar'},
-    {code:'DEM-001', chapter:'Treballs previs', unit:'m²', concept:'Retirada de graveta solta i transport a deixalleria', desc:'Retirada manual de graveta solta existent, càrrega, transport interior i gestió a deixalleria o contenidor segons obra.', unitPrice:0, origin:'Valentina Mar 2016', status:'Pendent'},
-    {code:'REG-001', chapter:'Paleteria impermeabilització', unit:'ml', concept:'Obertura de regates per entrega de làmina', desc:'Obertura de regata en paraments verticals per encaix i remat superior de làmina impermeable.', unitPrice:0, origin:'Valentina Mar 2016', status:'Pendent'},
-    {code:'NET-001', chapter:'Preparació suport', unit:'m²', concept:'Rascar i netejar superfície', desc:'Raspat, neteja i preparació de suport abans d’impermeabilització, incloent retirada de petites restes.', unitPrice:0, origin:'Valentina Mar 2016', status:'Pendent'},
-    {code:'LAM-001', chapter:'Impermeabilització', unit:'m²', concept:'Làmina LBM SBS 50/G FP autoprotegida', desc:'Subministrament i col·locació de làmina polimèrica de 5 kg/m² autoprotegida amb pissarreta/mineral gris.', unitPrice:0, origin:'Valentina Mar 2016', status:'Pendent'}
-  ],
-  budgets: [
-    {id:'P-2016-001', date:'2016-07-05', jobId:'F-2016-001', clientId:'CLI-VALENTINA', status:'Tancat', vat:21, notes:'Pressupost històric Valentina Mar.', lines:[
-      {id:'LIN-1', code:'IMP-001', chapter:'Impermeabilització', unit:'m²', concept:'Impermeabilització de terrassa no transitable', desc:'Paquet històric: neteja, imprimació, regates puntuals i làmina LBM SBS 50/G FP autoprotegida.', qty:255.60, unitPrice:28.95, origin:'Llibreria'}
-    ]},
-    {id:'P-2026-001', date:'2026-06-18', jobId:'F-2026-001', clientId:'CLI-TEIMOR', status:'Esborrany', vat:21, notes:'Pressupost actiu de treball.', lines:[]}
-  ],
-  invoices: [
-    {id:'FAC-001', date:'2026-06-18', budgetId:'P-2026-001', jobId:'F-2026-001', provider:'Exemple proveïdor', number:'S/N', concept:'Factura exemple per validar rendiment', base:0, vat:21, paid:false, notes:''}
-  ],
-  attachments: []
-});
+const today = () => new Date().toISOString().slice(0,10);
+const uid = (prefix='ID') => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7).toUpperCase()}`;
+const esc = v => String(v ?? '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[s]));
+const strip = s => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+const cleanText = s => String(s ?? '').replace(/\s+/g,' ').trim();
+const money = v => new Intl.NumberFormat('ca-ES',{style:'currency',currency:'EUR'}).format(num(v));
+const num = v => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+  if (v == null) return 0;
+  let s = String(v).trim();
+  if (!s) return 0;
+  s = s.replace(/€/g,'').replace(/\s/g,'').replace(/[^0-9,.-]/g,'');
+  if (!s || s === '-' || s === ',') return 0;
+  const hasComma = s.includes(','), hasDot = s.includes('.');
+  if (hasComma && hasDot) {
+    if (s.lastIndexOf(',') > s.lastIndexOf('.')) s = s.replace(/\./g,'').replace(',','.');
+    else s = s.replace(/,/g,'');
+  } else if (hasComma) s = s.replace(',','.');
+  else if ((s.match(/\./g)||[]).length > 1) s = s.replace(/\./g,'');
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+};
+const pct = v => `${num(v).toFixed(2)}%`;
+const byId = (arr,id) => arr.find(x => x.id === id);
+const normKey = s => strip(s).replace(/[^a-z0-9]+/g,' ').trim();
+
+function defaultData(){
+  return {
+    meta:{version:'2.0.0',createdAt:today(),updatedAt:today()},
+    settings:{
+      appName:'TEIMOR · Base de dades de pressupostos',
+      loginUser:DEFAULT_USER,
+      passwordHash:'',
+      defaultCI:3,
+      defaultDGE:13,
+      defaultBI:10,
+      defaultIVA:21,
+      contractista:{
+        name:'TEIMOR / Teixidor & Mora S.L.',
+        nif:'B55271159',
+        address:'C/ Marçal de la Trinxeria, 48, esc. A, planta 5, àtic 4',
+        city:'17200 Palafrugell (Girona)',
+        phone:'620988264 / 675520117 / 609036162',
+        email:'info@teimor.com'
+      }
+    },
+    clients:[
+      {id:'CLI-VALENTINA', name:'Comunitat de Propietaris Valentina Mar', nif:'', phone:'', email:'', contact:'', fiscalAddress:'', workAddress:'Avda. Torre Valentina, 11', city:'Calonge i Sant Antoni', status:'Actiu', notes:'Client final detectat al pressupost històric de prova.'}
+    ],
+    jobs:[
+      {id:'F-2016-001', year:2016, clientId:'CLI-VALENTINA', title:'Garatges Valentina Mar - impermeabilització', address:'Avda. Torre Valentina, 11', city:'Calonge i Sant Antoni', status:'Històrica', mainBudgetId:'P-2016-001', notes:'Feina històrica de prova.'}
+    ],
+    library:[
+      {id:'LIB-IMP-001', code:'IMP-001', chapter:'Impermeabilització', unit:'m²', concept:'Impermeabilització de terrassa no transitable', longDesc:'Neteja del suport, imprimació, regates puntuals i col·locació de làmina bituminosa SBS 50/G FP autoprotegida, incloent remats, solapaments i mitjans auxiliars manuals.', directCost:22.20, unitPrice:28.95, ci:3, dge:13, bi:10, origin:'Valentina Mar 2016', status:'Validada pendent revisió', decomp:[{type:'Material', name:'Làmina LBM SBS 50/G FP autoprotegida', unit:'m²', yield:1.12, price:10.80},{type:'Mà d’obra', name:'Oficial impermeabilitzador', unit:'h', yield:0.18, price:31},{type:'Mà d’obra', name:'Ajudant', unit:'h', yield:0.14, price:27}]}
+    ],
+    budgets:[
+      {id:'P-2016-001', number:'2016-001', date:'2016-07-05', clientId:'CLI-VALENTINA', jobId:'F-2016-001', title:'Pressupost històric Valentina Mar', status:'Històric', ci:3, dge:13, bi:10, iva:21, notes:'Pressupost històric de prova.', lines:[
+        {id:'LIN-1', libraryId:'LIB-IMP-001', code:'IMP-001', chapter:'Impermeabilització', unit:'m²', concept:'Impermeabilització de terrassa no transitable', longDesc:'Paquet històric: neteja, imprimació, regates i làmina autoprotegida.', qty:255.60, unitPrice:28.95, total:7402.62, status:'Importada amb amidament', origin:'Demo'}
+      ]}
+    ],
+    invoices:[],
+    attachments:[],
+    importLogs:[]
+  };
+}
 
 let data = loadData();
-let currentView = 'inici';
-let editing = {client:null, job:null, library:null, invoice:null};
-let selectedBudgetId = data.budgets[0]?.id || '';
+let state = {view:'dashboard', selectedBudgetId:data.budgets[0]?.id || '', selectedClientId:'', selectedJobId:'', selectedLibId:'', importDraft:null, draftLog:[]};
 
 function loadData(){
-  try { return JSON.parse(localStorage.getItem(STORE_KEY)) || defaultData(); }
-  catch(e){ return defaultData(); }
+  try { const parsed = JSON.parse(localStorage.getItem(STORE_KEY)); return parsed || defaultData(); }
+  catch { return defaultData(); }
 }
-function saveData(){ localStorage.setItem(STORE_KEY, JSON.stringify(data)); }
-function uid(prefix){ return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,6).toUpperCase()}`; }
-function esc(v){ return String(v ?? '').replace(/[&<>"]/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[s])); }
-function n(v){ const x = Number(String(v ?? '').replace(',','.')); return isNaN(x) ? 0 : x; }
-function money(v){ return new Intl.NumberFormat('ca-ES',{style:'currency',currency:'EUR'}).format(n(v)); }
-function pct(v){ return `${(n(v)*100).toFixed(1)}%`; }
-function byId(arr,id){ return arr.find(x=>x.id===id); }
+function saveData(){ data.meta = data.meta || {}; data.meta.updatedAt = new Date().toISOString(); localStorage.setItem(STORE_KEY, JSON.stringify(data)); updateBadge(); }
+function updateBadge(){ const b=document.getElementById('syncBadge'); if(b) b.textContent=`Mode local · ${new Date().toLocaleTimeString('ca-ES',{hour:'2-digit',minute:'2-digit'})}`; }
+function hardReset(){ if(confirm('Vols esborrar les dades locals i tornar a la demo inicial?')){ data=defaultData(); saveData(); render(); }}
+
 function clientName(id){ return byId(data.clients,id)?.name || id || ''; }
 function jobName(id){ return byId(data.jobs,id)?.title || id || ''; }
-function budgetBase(b){ return (b?.lines || []).reduce((s,l)=>s+n(l.qty)*n(l.unitPrice),0); }
-function budgetVat(b){ return budgetBase(b)*(n(b?.vat)/100); }
-function budgetTotal(b){ return budgetBase(b)+budgetVat(b); }
-function invoiceBase(i){ return n(i.base); }
-function invoiceTotal(i){ return n(i.base)*(1+n(i.vat)/100); }
+function budgetName(id){ const b=byId(data.budgets,id); return b ? `${b.number || b.id} · ${b.title || ''}` : id || ''; }
+function factor(ci,dge,bi){ return (1 + num(ci)/100) * (1 + (num(dge)+num(bi))/100); }
+function decompCost(item){ return (item.decomp || []).reduce((s,l)=>s + num(l.yield) * num(l.price), 0); }
+function libDirect(item){ return num(item.directCost) || decompCost(item); }
+function libFinal(item, b){ const ci = b?.ci ?? item.ci ?? data.settings.defaultCI; const dge = b?.dge ?? item.dge ?? data.settings.defaultDGE; const bi = b?.bi ?? item.bi ?? data.settings.defaultBI; return libDirect(item) * factor(ci,dge,bi); }
+function lineTotal(l){ return num(l.total) || num(l.qty) * num(l.unitPrice); }
+function budgetBase(b){ return (b?.lines || []).reduce((s,l)=>s+lineTotal(l),0); }
+function budgetIVA(b){ return budgetBase(b) * num(b?.iva)/100; }
+function budgetTotal(b){ return budgetBase(b) + budgetIVA(b); }
+function invoiceBase(i){ return num(i.base); }
+function invoiceTotal(i){ return num(i.base) * (1 + num(i.iva)/100); }
 function jobBudgets(jobId){ return data.budgets.filter(b=>b.jobId===jobId); }
-function jobBudgetBase(jobId){ return jobBudgets(jobId).reduce((s,b)=>s+budgetBase(b),0); }
 function jobInvoices(jobId){ return data.invoices.filter(i=>i.jobId===jobId); }
+function jobBudgetTotal(jobId){ return jobBudgets(jobId).reduce((s,b)=>s+budgetBase(b),0); }
 function jobInvoiceTotal(jobId){ return jobInvoices(jobId).reduce((s,i)=>s+invoiceTotal(i),0); }
-function options(arr, selected, getId=x=>x.id, getLabel=x=>x.name || x.title || x.id){ return arr.map(x=>`<option value="${esc(getId(x))}" ${getId(x)===selected?'selected':''}>${esc(getLabel(x))}</option>`).join(''); }
+function options(arr, selected, labelFn=x=>x.name||x.title||x.id){ return arr.map(x=>`<option value="${esc(x.id)}" ${x.id===selected?'selected':''}>${esc(labelFn(x))}</option>`).join(''); }
+function statusPill(status){ const s=strip(status); let c='soft'; if(s.includes('valid')) c='green'; else if(s.includes('pendent')||s.includes('revis')) c='yellow'; else if(s.includes('historic')) c='purple'; else if(s.includes('sense')||s.includes('duplic')) c='red'; return `<span class="pill ${c}">${esc(status||'')}</span>`; }
 
-function setView(view){ currentView=view; document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('active', b.dataset.view===view)); render(); }
-document.querySelectorAll('#tabs button').forEach(btn=>btn.addEventListener('click',()=>setView(btn.dataset.view)));
-document.getElementById('resetDemo').onclick=()=>{ if(confirm('Vols restaurar les dades demo? Se substituiran les dades locals.')){ data=defaultData(); saveData(); render(); }};
-document.getElementById('exportData').onclick=()=>{
-  const blob = new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`teimor_backup_${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(a.href);
-};
-document.getElementById('importData').onchange=async(e)=>{
-  const file=e.target.files[0]; if(!file) return;
-  const text=await file.text();
-  try { data=JSON.parse(text); saveData(); render(); alert('Dades importades correctament.'); }
-  catch(err){ alert('No s’ha pogut importar el JSON.'); }
-  e.target.value='';
-};
+async function sha256(text){
+  const msg = new TextEncoder().encode(text);
+  const hash = await crypto.subtle.digest('SHA-256', msg);
+  return [...new Uint8Array(hash)].map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+async function checkLogin(user, pass){
+  const expectedUser = data.settings.loginUser || DEFAULT_USER;
+  if (user !== expectedUser) return false;
+  if (!data.settings.passwordHash) return pass === DEFAULT_PASS;
+  return await sha256(pass) === data.settings.passwordHash;
+}
+function showApp(logged){
+  document.getElementById('loginScreen').classList.toggle('hidden', logged);
+  document.getElementById('appShell').classList.toggle('hidden', !logged);
+  if(logged) render();
+}
 
-function viewHeader(title, subtitle){ document.getElementById('viewTitle').textContent=title; document.getElementById('viewSubtitle').textContent=subtitle; }
-function content(html){ document.getElementById('content').innerHTML=html; bindAfterRender(); }
+function init(){
+  document.getElementById('loginForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const ok = await checkLogin(document.getElementById('loginUser').value.trim(), document.getElementById('loginPass').value);
+    if(ok){ localStorage.setItem(AUTH_KEY,'1'); showApp(true); }
+    else document.getElementById('loginMsg').textContent='Usuari o contrasenya incorrectes.';
+  });
+  document.getElementById('logout').onclick=()=>{ localStorage.removeItem(AUTH_KEY); showApp(false); };
+  document.querySelectorAll('#tabs button').forEach(btn=>btn.addEventListener('click',()=>{ state.view=btn.dataset.view; render(); }));
+  document.getElementById('modalClose').onclick=closeModal;
+  document.getElementById('modal').addEventListener('click', e=>{ if(e.target.id==='modal') closeModal(); });
+  document.getElementById('exportJson').onclick=()=>exportJson(true);
+  document.getElementById('exportJsonClean').onclick=()=>exportJson(false);
+  document.getElementById('importJson').onchange=importJson;
+  showApp(localStorage.getItem(AUTH_KEY)==='1');
+}
+window.addEventListener('DOMContentLoaded', init);
+
+function setHeader(title, subtitle){ document.getElementById('viewTitle').textContent=title; document.getElementById('viewSubtitle').textContent=subtitle; }
+function setContent(html){ document.getElementById('content').innerHTML=html; bindViewEvents(); }
 function render(){
-  const views={inici:renderInici, clients:renderClients, feines:renderFeines, llibreria:renderLlibreria, pressupostos:renderPressupostos, factures:renderFactures, rendiment:renderRendiment, arxius:renderArxius};
-  (views[currentView]||renderInici)();
+  document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('active', b.dataset.view===state.view));
+  const views={dashboard:renderDashboard,clients:renderClients,jobs:renderJobs,library:renderLibrary,budgets:renderBudgets,invoices:renderInvoices,performance:renderPerformance,attachments:renderAttachments,importer:renderImporter,settings:renderSettings};
+  (views[state.view]||renderDashboard)();
 }
-
-function renderInici(){
-  viewHeader('Inici', 'Resum ràpid de clients, feines, pressupostos, factures i rendiment.');
-  const totalBudget=data.budgets.reduce((s,b)=>s+budgetBase(b),0);
-  const totalInvoices=data.invoices.reduce((s,i)=>s+invoiceTotal(i),0);
-  const margin=totalBudget-totalInvoices;
-  content(`
+function empty(msg='Encara no hi ha dades.'){ return `<div class="empty">${esc(msg)}</div>`; }
+function table(headers, rows){
+  if(!rows || !rows.length) return empty();
+  return `<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
+}
+function renderDashboard(){
+  setHeader('Inici','Resum de clients, feines, pressupostos, factures, rendiment i importació local.');
+  const totalB=data.budgets.reduce((s,b)=>s+budgetBase(b),0), totalI=data.invoices.reduce((s,i)=>s+invoiceTotal(i),0);
+  const valid=data.library.filter(x=>strip(x.status).includes('valid')).length;
+  const hist=data.library.filter(x=>strip(x.status).includes('historic') || strip(x.status).includes('sense')).length;
+  const lastJobs=[...data.jobs].sort((a,b)=>Number(b.year)-Number(a.year)).slice(0,8);
+  setContent(`
     <div class="grid four">
-      <div class="kpi"><span>Clients</span><strong>${data.clients.length}</strong></div>
-      <div class="kpi"><span>Feines</span><strong>${data.jobs.length}</strong></div>
-      <div class="kpi"><span>Total pressupostat base</span><strong>${money(totalBudget)}</strong></div>
-      <div class="kpi ${margin>=0?'good':'bad'}"><span>Rendiment global</span><strong>${money(margin)}</strong></div>
+      <div class="kpi"><span>Clients finals</span><strong>${data.clients.length}</strong></div>
+      <div class="kpi"><span>Feines / obres</span><strong>${data.jobs.length}</strong></div>
+      <div class="kpi"><span>Pressupostat base</span><strong>${money(totalB)}</strong></div>
+      <div class="kpi ${totalB-totalI>=0?'good':'bad'}"><span>Rendiment base - factures</span><strong>${money(totalB-totalI)}</strong></div>
     </div>
-    <div class="card notice">Aquesta app és local: treballa al navegador i guarda les dades en aquest dispositiu. Fes servir “Exportar còpia JSON” sovint.</div>
-    <div class="grid two">
-      <div class="card"><h2>Flux de treball</h2><ol><li>Crear client o seleccionar TEIMOR.</li><li>Crear feina/obra classificada per any.</li><li>Crear pressupost i afegir partides de la llibreria o noves.</li><li>Associar factures i arxius/albarans.</li><li>Revisar rendiment per obra.</li></ol></div>
-      <div class="card"><h2>Últimes feines</h2>${jobsTable(data.jobs.slice(-6).reverse(), true)}</div>
+    <div class="card notice-blue"><strong>Funcionament de privacitat:</strong> quan importis Excel o ZIP des d’aquesta app, el navegador els llegeix localment. Els originals no es pugen ni a Render ni a GitHub. Si exportes un JSON complet, aquest JSON sí que contindrà les dades que li vulguis passar a TEIMOR.</div>
+    <div class="grid three">
+      <div class="card"><h2>Llibreria</h2><p><strong>${data.library.length}</strong> partides totals.</p><p>${valid} validades · ${hist} històriques/pendents.</p><button class="primary" data-go="library">Obrir llibreria</button></div>
+      <div class="card"><h2>Importació massiva</h2><p>Pots seleccionar molts Excels, una carpeta o un ZIP amb pressupostos antics.</p><button class="primary" data-go="importer">Importar pressupostos</button></div>
+      <div class="card"><h2>Còpia transferible</h2><p>Exporta un JSON complet perquè TEIMOR vegi la mateixa base que tu.</p><button class="ghost" id="dashExport">Exportar JSON complet</button></div>
     </div>
+    <div class="card"><h2>Últimes feines</h2>${jobsTable(lastJobs)}</div>
   `);
 }
-
-function renderClients(){
-  viewHeader('Clients', 'Alta i manteniment de clients del contractista.');
-  const item = editing.client ? byId(data.clients, editing.client) : {};
-  content(`
-    <div class="card"><h2>${editing.client?'Editar client':'Nou client'}</h2>
+function clientsTable(rows=data.clients){
+  return table(['Client','NIF/DNI/CIF','Contacte','Telèfon','Email','Adreça obra','Estat','Accions'], rows.map(c=>`
+    <tr><td><strong>${esc(c.name)}</strong><br><span class="muted">${esc(c.id)}</span></td><td>${esc(c.nif||'')}</td><td>${esc(c.contact||'')}</td><td>${esc(c.phone||'')}</td><td>${esc(c.email||'')}</td><td>${esc(c.workAddress||c.fiscalAddress||'')}</td><td>${statusPill(c.status||'Actiu')}</td><td><button class="ghost small" data-edit-client="${esc(c.id)}">Editar</button></td></tr>`));
+}
+function renderClients(editId=''){
+  setHeader('Clients','Clients finals detectats al requadre del pressupost, amb dades fiscals i de contacte.');
+  const c = editId ? byId(data.clients,editId) : {};
+  setContent(`
+    <div class="card"><h2>${editId?'Editar client':'Nou client final'}</h2>
       <form id="clientForm" class="form-grid">
-        <label>Codi<input name="id" value="${esc(item.id || uid('CLI'))}" ${editing.client?'readonly':''}></label>
-        <label class="wide">Client / empresa<input name="name" value="${esc(item.name||'')}"></label>
-        <label>NIF/CIF<input name="nif" value="${esc(item.nif||'')}"></label>
-        <label class="wide">Contacte<input name="contact" value="${esc(item.contact||'')}"></label>
-        <label>Telèfon<input name="phone" value="${esc(item.phone||'')}"></label>
-        <label>Email<input name="email" value="${esc(item.email||'')}"></label>
-        <label class="wide">Adreça<input name="address" value="${esc(item.address||'')}"></label>
-        <label>Municipi<input name="city" value="${esc(item.city||'')}"></label>
-        <label>Estat<select name="status"><option ${item.status==='Actiu'?'selected':''}>Actiu</option><option ${item.status==='Inactiu'?'selected':''}>Inactiu</option><option ${item.status==='Potencial'?'selected':''}>Potencial</option></select></label>
-        <label class="full">Notes<textarea name="notes">${esc(item.notes||'')}</textarea></label>
-        <div class="actions full"><button class="primary">Guardar client</button>${editing.client?'<button type="button" class="ghost" data-action="cancelEdit">Cancel·lar</button>':''}</div>
+        <input type="hidden" name="editId" value="${esc(editId)}">
+        <label>Codi<input name="id" value="${esc(c.id||uid('CLI'))}" ${editId?'readonly':''}></label>
+        <label class="wide">Nom client / comunitat / empresa<input name="name" value="${esc(c.name||'')}" required></label>
+        <label>NIF / DNI / CIF<input name="nif" value="${esc(c.nif||'')}"></label>
+        <label>Telèfon<input name="phone" value="${esc(c.phone||'')}"></label>
+        <label>Email<input name="email" value="${esc(c.email||'')}"></label>
+        <label class="wide">Persona de contacte<input name="contact" value="${esc(c.contact||'')}"></label>
+        <label class="wide">Adreça fiscal<input name="fiscalAddress" value="${esc(c.fiscalAddress||'')}"></label>
+        <label class="wide">Adreça de l’obra habitual<input name="workAddress" value="${esc(c.workAddress||'')}"></label>
+        <label>Municipi<input name="city" value="${esc(c.city||'')}"></label>
+        <label>Estat<select name="status"><option ${c.status==='Actiu'?'selected':''}>Actiu</option><option ${c.status==='Històric'?'selected':''}>Històric</option><option ${c.status==='Inactiu'?'selected':''}>Inactiu</option></select></label>
+        <label class="full">Observacions<textarea name="notes">${esc(c.notes||'')}</textarea></label>
+        <div class="actions full"><button class="primary">Guardar client</button>${editId?'<button class="ghost" type="button" data-render-clients>Cancel·lar</button>':''}</div>
       </form>
     </div>
-    <div class="card"><h2>Llistat de clients</h2>${clientsTable()}</div>
+    <div class="card"><div class="toolbar"><h2>Llistat de clients</h2><input id="clientSearch" placeholder="Cercar client, NIF, telèfon, email..." style="max-width:320px"></div><div id="clientsTable">${clientsTable()}</div></div>
   `);
 }
-function clientsTable(){ if(!data.clients.length) return empty(); return `<div class="table-wrap"><table><thead><tr><th>Codi</th><th>Client</th><th>Contacte</th><th>Telèfon</th><th>Email</th><th>Estat</th><th>Accions</th></tr></thead><tbody>${data.clients.map(c=>`<tr><td>${esc(c.id)}</td><td><strong>${esc(c.name)}</strong><br><span class="muted">${esc(c.city)}</span></td><td>${esc(c.contact)}</td><td>${esc(c.phone)}</td><td>${esc(c.email)}</td><td><span class="pill">${esc(c.status)}</span></td><td><button class="ghost small" data-edit-client="${esc(c.id)}">Editar</button> <button class="ghost small danger" data-delete-client="${esc(c.id)}">Eliminar</button></td></tr>`).join('')}</tbody></table></div>`; }
-
-function renderFeines(){
-  viewHeader('Feines / anys', 'Obres i feines classificades per any, client i estat.');
-  const item = editing.job ? byId(data.jobs, editing.job) : {};
-  const years=[...new Set(data.jobs.map(j=>j.year))].sort((a,b)=>b-a);
-  content(`
-    <div class="card"><h2>${editing.job?'Editar feina':'Nova feina'}</h2>
+function jobsTable(rows=data.jobs){
+  return table(['Any','Feina / obra','Client','Adreça','Estat','Pressupostat','Factures','Accions'], rows.map(j=>`
+    <tr><td>${esc(j.year)}</td><td><strong>${esc(j.title)}</strong><br><span class="muted">${esc(j.id)}</span></td><td>${esc(clientName(j.clientId))}</td><td>${esc(j.address||'')}</td><td>${statusPill(j.status||'')}</td><td class="num">${money(jobBudgetTotal(j.id))}</td><td class="num">${money(jobInvoiceTotal(j.id))}</td><td><button class="ghost small" data-edit-job="${esc(j.id)}">Editar</button></td></tr>`));
+}
+function renderJobs(editId=''){
+  setHeader('Feines / anys','Obres classificades per any, associades a client final, pressupostos, factures i arxius.');
+  const j = editId ? byId(data.jobs,editId) : {year:new Date().getFullYear()};
+  const years=[...new Set(data.jobs.map(x=>x.year))].sort((a,b)=>b-a);
+  const filterYear=state.yearFilter || '';
+  const rows=filterYear?data.jobs.filter(x=>String(x.year)===String(filterYear)):data.jobs;
+  setContent(`
+    <div class="card"><h2>${editId?'Editar feina':'Nova feina / obra'}</h2>
       <form id="jobForm" class="form-grid">
-        <label>Codi feina<input name="id" value="${esc(item.id || uid('F'))}" ${editing.job?'readonly':''}></label>
-        <label>Any<input name="year" type="number" value="${esc(item.year || new Date().getFullYear())}"></label>
-        <label class="wide">Client<select name="clientId">${options(data.clients,item.clientId)}</select></label>
-        <label class="wide">Nom obra / feina<input name="title" value="${esc(item.title||'')}"></label>
-        <label class="wide">Adreça obra<input name="address" value="${esc(item.address||'')}"></label>
-        <label>Municipi<input name="city" value="${esc(item.city||'')}"></label>
-        <label>Estat<select name="status">${['Pendent','En curs','Finalitzada','Tancada'].map(s=>`<option ${item.status===s?'selected':''}>${s}</option>`).join('')}</select></label>
-        <label>Data inici<input name="start" type="date" value="${esc(item.start||'')}"></label>
-        <label>Data final<input name="end" type="date" value="${esc(item.end||'')}"></label>
-        <label>Pressupost principal<input name="mainBudgetId" value="${esc(item.mainBudgetId||'')}"></label>
-        <label class="full">Observacions<textarea name="notes">${esc(item.notes||'')}</textarea></label>
-        <div class="actions full"><button class="primary">Guardar feina</button>${editing.job?'<button type="button" class="ghost" data-action="cancelEdit">Cancel·lar</button>':''}</div>
+        <input type="hidden" name="editId" value="${esc(editId)}">
+        <label>Codi<input name="id" value="${esc(j.id||uid('F'))}" ${editId?'readonly':''}></label>
+        <label>Any<input name="year" type="number" value="${esc(j.year||new Date().getFullYear())}"></label>
+        <label class="wide">Client<select name="clientId" required><option value="">Selecciona client</option>${options(data.clients,j.clientId)}</select></label>
+        <label class="wide">Títol feina / obra<input name="title" value="${esc(j.title||'')}" required></label>
+        <label class="wide">Adreça obra<input name="address" value="${esc(j.address||'')}"></label>
+        <label>Municipi<input name="city" value="${esc(j.city||'')}"></label>
+        <label>Estat<select name="status"><option ${j.status==='En curs'?'selected':''}>En curs</option><option ${j.status==='Pendent'?'selected':''}>Pendent</option><option ${j.status==='Finalitzada'?'selected':''}>Finalitzada</option><option ${j.status==='Històrica'?'selected':''}>Històrica</option></select></label>
+        <label class="full">Notes<textarea name="notes">${esc(j.notes||'')}</textarea></label>
+        <div class="actions full"><button class="primary">Guardar feina</button>${editId?'<button class="ghost" type="button" data-render-jobs>Cancel·lar</button>':''}</div>
       </form>
     </div>
-    <div class="card"><div class="toolbar"><h2>Llistat de feines</h2><label>Filtrar any<select id="yearFilter"><option value="">Tots</option>${years.map(y=>`<option>${y}</option>`).join('')}</select></label></div><div id="jobsTableWrap">${jobsTable(data.jobs)}</div></div>
+    <div class="card"><div class="toolbar"><h2>Llistat de feines</h2><select id="yearFilter"><option value="">Tots els anys</option>${years.map(y=>`<option value="${y}" ${String(y)===String(filterYear)?'selected':''}>${y}</option>`).join('')}</select></div><div id="jobsTable">${jobsTable(rows)}</div></div>
   `);
 }
-function jobsTable(rows, compact=false){ if(!rows.length) return empty(); return `<div class="table-wrap"><table><thead><tr><th>Any</th><th>Codi</th><th>Client</th><th>Obra</th><th>Estat</th><th>Pressupost</th>${compact?'':'<th>Rendiment</th><th>Accions</th>'}</tr></thead><tbody>${rows.map(j=>{ const base=jobBudgetBase(j.id), inv=jobInvoiceTotal(j.id), margin=base-inv; return `<tr><td>${esc(j.year)}</td><td>${esc(j.id)}</td><td>${esc(clientName(j.clientId))}</td><td><strong>${esc(j.title)}</strong><br><span class="muted">${esc(j.address)} · ${esc(j.city)}</span></td><td><span class="pill">${esc(j.status)}</span></td><td>${esc(j.mainBudgetId||'')}</td>${compact?'':`<td class="num">${money(margin)}</td><td><button class="ghost small" data-edit-job="${esc(j.id)}">Editar</button> <button class="ghost small danger" data-delete-job="${esc(j.id)}">Eliminar</button></td>`}</tr>`}).join('')}</tbody></table></div>`; }
-
-function renderLlibreria(){
-  viewHeader('Llibreria de partides', 'Partides tipus per reutilitzar en pressupostos.');
-  const item = editing.library ? data.library.find(x=>x.code===editing.library) : {};
-  content(`
-    <div class="card"><h2>${editing.library?'Editar partida':'Nova partida tipus'}</h2>
-      <form id="libraryForm" class="form-grid">
-        <label>Codi<input name="code" value="${esc(item.code || uid('PAR'))}" ${editing.library?'readonly':''}></label>
-        <label>Capítol/ofici<input name="chapter" value="${esc(item.chapter||'')}"></label>
-        <label>Unitat<input name="unit" value="${esc(item.unit||'m²')}"></label>
-        <label>PU venda<input name="unitPrice" type="number" step="0.01" value="${esc(item.unitPrice ?? 0)}"></label>
-        <label class="wide">Concepte<input name="concept" value="${esc(item.concept||'')}"></label>
-        <label>Origen/ref.<input name="origin" value="${esc(item.origin||'')}"></label>
-        <label>Estat<select name="status">${['Actualitzat','Revisar','Pendent','Informatiu'].map(s=>`<option ${item.status===s?'selected':''}>${s}</option>`).join('')}</select></label>
-        <label class="full">Descripció tècnica<textarea name="desc">${esc(item.desc||'')}</textarea></label>
-        <div class="actions full"><button class="primary">Guardar partida</button>${editing.library?'<button type="button" class="ghost" data-action="cancelEdit">Cancel·lar</button>':''}</div>
+function renderLibrary(){
+  setHeader('Llibreria de partides','Partides tipus BEDEC: codi, unitat, descripció curta/llarga, PU, estat i descompost vinculat.');
+  const q=state.libSearch || '';
+  const filter=strip(q);
+  const rows=data.library.filter(x=>!filter || strip([x.code,x.chapter,x.unit,x.concept,x.longDesc,x.status,x.origin].join(' ')).includes(filter));
+  setContent(`
+    <div class="card">
+      <div class="toolbar"><h2>Llibreria</h2><div class="right"><input id="libSearch" placeholder="Cercar partida..." value="${esc(q)}"><button class="primary" id="newLibItem">Nova partida</button></div></div>
+      ${libraryTable(rows)}
+    </div>
+  `);
+}
+function libraryTable(rows){
+  return table(['Codi','Capítol','Ut','Descripció','PU final','Estat','Origen','Accions'], rows.map(item=>`
+    <tr>
+      <td><strong>${esc(item.code||'')}</strong></td>
+      <td>${esc(item.chapter||'')}</td>
+      <td>${esc(item.unit||'')}</td>
+      <td><strong>${esc(item.concept||'')}</strong><div class="long muted">${esc(item.longDesc||'')}</div></td>
+      <td class="num">${money(item.unitPrice || libFinal(item))}</td>
+      <td>${statusPill(item.status||'Pendent')}</td>
+      <td>${esc(item.origin||'')}</td>
+      <td class="nowrap"><button class="ghost small" data-view-lib="${esc(item.id)}">Veure / editar</button></td>
+    </tr>`));
+}
+function openLibModal(id=''){
+  const item = id ? byId(data.library,id) : {id:uid('LIB'), ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, decomp:[], status:'Pendent de revisar'};
+  const lines = item.decomp || [];
+  openModal(`
+    <h2>${id?'Editar partida':'Nova partida de llibreria'}</h2>
+    <form id="libForm" class="form-grid">
+      <input type="hidden" name="editId" value="${esc(id)}"><input type="hidden" name="id" value="${esc(item.id)}">
+      <label>Codi<input name="code" value="${esc(item.code||'')}"></label>
+      <label>Capítol<input name="chapter" value="${esc(item.chapter||'')}"></label>
+      <label>Unitat<input name="unit" value="${esc(item.unit||'')}"></label>
+      <label>Estat<select name="status">
+        ${['Validada','Validada pendent revisió','Importada pendent de revisar','Històrica sense amidament','PA pendent amidament','Duplicada possible'].map(s=>`<option ${item.status===s?'selected':''}>${s}</option>`).join('')}
+      </select></label>
+      <label class="wide">Descripció curta<input name="concept" value="${esc(item.concept||'')}"></label>
+      <label>Cost directe<input name="directCost" type="number" step="0.01" value="${esc(item.directCost||'')}"></label>
+      <label>PU final històric<input name="unitPrice" type="number" step="0.01" value="${esc(item.unitPrice||'')}"></label>
+      <label class="full">Descripció llarga<textarea name="longDesc">${esc(item.longDesc||'')}</textarea></label>
+      <label>CI %<input name="ci" type="number" step="0.01" value="${esc(item.ci ?? data.settings.defaultCI)}"></label>
+      <label>DGE %<input name="dge" type="number" step="0.01" value="${esc(item.dge ?? data.settings.defaultDGE)}"></label>
+      <label>BI %<input name="bi" type="number" step="0.01" value="${esc(item.bi ?? data.settings.defaultBI)}"></label>
+      <label>Origen<input name="origin" value="${esc(item.origin||'Manual')}"></label>
+      <div class="full detail-box"><h3>Descompost vinculat</h3>
+        <div class="table-wrap"><table id="decompTable"><thead><tr><th>Tipus</th><th>Recurs</th><th>Ut</th><th>Rendiment</th><th>Preu</th><th>Total CD</th><th></th></tr></thead><tbody>
+          ${lines.map((l,i)=>decompRow(l,i)).join('')}
+        </tbody></table></div>
+        <div class="actions"><button class="ghost small" type="button" id="addDecompLine">Afegir línia</button><span class="muted">El cost directe és la suma rendiment × preu.</span></div>
+      </div>
+      <div class="actions full"><button class="primary">Guardar partida</button><button class="ghost" type="button" id="closeModalBtn">Cancel·lar</button></div>
+    </form>
+  `);
+}
+function decompRow(l={},i=0){
+  return `<tr data-decomp-row><td><select name="type_${i}">${['Mà d’obra','Material','Maquinària','Altres'].map(t=>`<option ${l.type===t?'selected':''}>${t}</option>`).join('')}</select></td><td><input name="name_${i}" value="${esc(l.name||'')}"></td><td><input name="unit_${i}" value="${esc(l.unit||'')}"></td><td><input name="yield_${i}" type="number" step="0.0001" value="${esc(l.yield||'')}"></td><td><input name="price_${i}" type="number" step="0.01" value="${esc(l.price||'')}"></td><td class="num">${money(num(l.yield)*num(l.price))}</td><td><button class="danger small" type="button" data-remove-decomp>×</button></td></tr>`;
+}
+function renderBudgets(){
+  setHeader('Pressupostos','Crear pressupost amb partides de la llibreria o partides noves, amb CI/DGE/BI configurables per pressupost.');
+  if(!state.selectedBudgetId && data.budgets[0]) state.selectedBudgetId=data.budgets[0].id;
+  const b=byId(data.budgets,state.selectedBudgetId) || data.budgets[0];
+  const formBudget=b || {id:'', lines:[], ci:data.settings.defaultCI,dge:data.settings.defaultDGE,bi:data.settings.defaultBI,iva:data.settings.defaultIVA};
+  setContent(`
+    <div class="card"><h2>Crear / seleccionar pressupost</h2>
+      <div class="toolbar"><div class="left"><select id="budgetSelect"><option value="">Nou pressupost</option>${options(data.budgets,b?.id,x=>`${x.number || x.id} · ${clientName(x.clientId)} · ${x.title || ''}`)}</select></div><div class="right"><button class="primary" id="newBudgetBtn">Nou pressupost</button><button class="ghost" id="exportBudgetCsv">Exportar CSV</button></div></div>
+    </div>
+    <div class="card"><h2>${b?'Pressupost actiu':'Nou pressupost'}</h2>
+      <form id="budgetForm" class="form-grid">
+        <input type="hidden" name="id" value="${esc(formBudget.id||uid('P'))}">
+        <label>Número<input name="number" value="${esc(formBudget.number||'')}"></label>
+        <label>Data<input name="date" type="date" value="${esc(formBudget.date||today())}"></label>
+        <label class="wide">Client<select name="clientId" required><option value="">Selecciona client</option>${options(data.clients,formBudget.clientId)}</select></label>
+        <label class="wide">Feina<select name="jobId"><option value="">Sense feina</option>${options(data.jobs,formBudget.jobId,x=>`${x.year} · ${x.title}`)}</select></label>
+        <label class="wide">Títol pressupost<input name="title" value="${esc(formBudget.title||'')}"></label>
+        <label>Estat<select name="status"><option ${formBudget.status==='Esborrany'?'selected':''}>Esborrany</option><option ${formBudget.status==='Enviat'?'selected':''}>Enviat</option><option ${formBudget.status==='Acceptat'?'selected':''}>Acceptat</option><option ${formBudget.status==='Històric'?'selected':''}>Històric</option></select></label>
+        <label>CI %<input name="ci" type="number" step="0.01" value="${esc(formBudget.ci ?? data.settings.defaultCI)}"></label>
+        <label>DGE %<input name="dge" type="number" step="0.01" value="${esc(formBudget.dge ?? data.settings.defaultDGE)}"></label>
+        <label>BI %<input name="bi" type="number" step="0.01" value="${esc(formBudget.bi ?? data.settings.defaultBI)}"></label>
+        <label>IVA %<input name="iva" type="number" step="0.01" value="${esc(formBudget.iva ?? data.settings.defaultIVA)}"></label>
+        <label class="full">Notes<textarea name="notes">${esc(formBudget.notes||'')}</textarea></label>
+        <div class="actions full"><button class="primary">Guardar capçalera</button></div>
       </form>
     </div>
-    <div class="card"><div class="toolbar"><h2>Llistat de partides</h2><input id="librarySearch" placeholder="Filtrar per codi, concepte o capítol"></div><div id="libraryTableWrap">${libraryTable(data.library)}</div></div>
+    ${b?budgetLinesCard(b):'<div class="empty">Crea o selecciona un pressupost per afegir partides.</div>'}
   `);
 }
-function libraryTable(rows){ if(!rows.length) return empty(); return `<div class="table-wrap"><table><thead><tr><th>Codi</th><th>Capítol</th><th>Ut</th><th>Partida</th><th>PU</th><th>Estat</th><th>Accions</th></tr></thead><tbody>${rows.map(p=>`<tr><td>${esc(p.code)}</td><td>${esc(p.chapter)}</td><td>${esc(p.unit)}</td><td><strong>${esc(p.concept)}</strong><br><span class="muted">${esc(p.desc)}</span></td><td class="num">${money(p.unitPrice)}</td><td><span class="pill">${esc(p.status)}</span></td><td><button class="ghost small" data-edit-library="${esc(p.code)}">Editar</button> <button class="ghost small" data-add-lib-line="${esc(p.code)}">Afegir a pressupost</button> <button class="ghost small danger" data-delete-library="${esc(p.code)}">Eliminar</button></td></tr>`).join('')}</tbody></table></div>`; }
-
-function renderPressupostos(){
-  viewHeader('Pressupostos', 'Crear pressupostos amb partides de llibreria o línies noves.');
-  if(!selectedBudgetId && data.budgets[0]) selectedBudgetId=data.budgets[0].id;
-  const b=byId(data.budgets, selectedBudgetId) || data.budgets[0];
-  const libOptions = data.library.map(p=>`<option value="${esc(p.code)}">${esc(p.code)} · ${esc(p.concept)}</option>`).join('');
-  content(`
-    <div class="grid two">
-      <div class="card"><h2>Crear pressupost</h2>
-        <form id="budgetForm" class="form-grid">
-          <label>Codi<input name="id" value="${esc(uid('P'))}"></label>
-          <label>Data<input name="date" type="date" value="${new Date().toISOString().slice(0,10)}"></label>
-          <label class="wide">Feina<select name="jobId">${options(data.jobs,'',x=>x.id,x=>`${x.id} · ${x.title}`)}</select></label>
-          <label>Estat<select name="status"><option>Esborrany</option><option>Enviat</option><option>Acceptat</option><option>Rebutjat</option><option>Tancat</option></select></label>
-          <label>IVA %<input name="vat" type="number" step="0.01" value="21"></label>
-          <label class="wide">Notes<input name="notes"></label>
-          <div class="actions full"><button class="primary">Crear pressupost</button></div>
-        </form>
-      </div>
-      <div class="card"><h2>Seleccionar pressupost</h2><label>Pressupost actiu<select id="budgetSelect">${options(data.budgets,b?.id,x=>x.id,x=>`${x.id} · ${jobName(x.jobId)} · ${money(budgetBase(x))}`)}</select></label>${b?`<p class="muted">Client: ${esc(clientName(b.clientId))}<br>Feina: ${esc(jobName(b.jobId))}<br>Estat: ${esc(b.status)}</p>`:''}</div>
-    </div>
-    ${b ? `<div class="card"><div class="toolbar"><div><h2>Editor: ${esc(b.id)}</h2><span class="muted">Base ${money(budgetBase(b))} · IVA ${money(budgetVat(b))} · Total ${money(budgetTotal(b))}</span></div><div class="right"><button class="ghost" data-action="deleteBudget">Eliminar pressupost</button></div></div>
-      <div class="grid two">
-        <form id="addLibraryLineForm" class="card"><h2>Afegir des de llibreria</h2><label>Partida<select name="code">${libOptions}</select></label><label>Quantitat<input name="qty" type="number" step="0.01" value="1"></label><div class="actions"><button class="primary">Afegir partida</button></div></form>
-        <form id="addManualLineForm" class="card"><h2>Afegir línia nova</h2><div class="form-grid"><label>Codi<input name="code" value="${esc(uid('NOVA'))}"></label><label>Capítol<input name="chapter"></label><label>Ut<input name="unit" value="ut"></label><label>PU<input name="unitPrice" type="number" step="0.01" value="0"></label><label class="wide">Concepte<input name="concept"></label><label>Quantitat<input name="qty" type="number" step="0.01" value="1"></label><label class="full">Descripció<textarea name="desc"></textarea></label></div><div class="actions"><button class="primary">Afegir línia manual</button></div></form>
-      </div>
-      ${budgetLinesTable(b)}
-    </div>` : `<div class="empty">Crea un pressupost per començar.</div>`}
-  `);
+function budgetLinesCard(b){
+  return `<div class="card"><div class="toolbar"><h2>Partides del pressupost</h2><div class="right"><button class="primary" id="addLineFromLibrary">Afegir de llibreria</button><button class="ghost" id="addManualLine">Afegir partida nova</button></div></div>
+    <div class="table-wrap budget-lines"><table><thead><tr><th>Codi</th><th>Ut</th><th>Concepte / descripció</th><th>Quantitat</th><th>Preu/ut</th><th>Total</th><th>Estat</th><th></th></tr></thead><tbody>${(b.lines||[]).map(l=>`
+      <tr><td><input data-line-field="code" data-line-id="${esc(l.id)}" value="${esc(l.code||'')}"></td><td><input data-line-field="unit" data-line-id="${esc(l.id)}" value="${esc(l.unit||'')}"></td><td><input data-line-field="concept" data-line-id="${esc(l.id)}" value="${esc(l.concept||'')}"><div class="long muted">${esc(l.longDesc||'')}</div></td><td><input class="num" data-line-field="qty" data-line-id="${esc(l.id)}" type="number" step="0.0001" value="${esc(l.qty||'')}"></td><td><input class="num" data-line-field="unitPrice" data-line-id="${esc(l.id)}" type="number" step="0.01" value="${esc(l.unitPrice||'')}"></td><td class="num"><strong>${money(lineTotal(l))}</strong></td><td>${statusPill(l.status||'')}</td><td><button class="danger small" data-delete-line="${esc(l.id)}">Eliminar</button></td></tr>`).join('')}</tbody></table></div>
+    <div class="budget-total"><div>Base: <strong>${money(budgetBase(b))}</strong></div><div>IVA: <strong>${money(budgetIVA(b))}</strong></div><div>Total: <strong>${money(budgetTotal(b))}</strong></div></div>
+  </div>`;
 }
-function budgetLinesTable(b){ return `<div class="table-wrap budget-lines"><table><thead><tr><th>#</th><th>Codi</th><th>Capítol</th><th>Ut</th><th>Concepte</th><th>Quantitat</th><th>Preu/Ut</th><th>Total</th><th>Accions</th></tr></thead><tbody>${(b.lines||[]).map((l,i)=>`<tr><td>${i+1}</td><td>${esc(l.code)}</td><td><input data-line-field="chapter" data-line-id="${esc(l.id)}" value="${esc(l.chapter)}"></td><td><input data-line-field="unit" data-line-id="${esc(l.id)}" value="${esc(l.unit)}"></td><td><input data-line-field="concept" data-line-id="${esc(l.id)}" value="${esc(l.concept)}"><br><span class="muted">${esc(l.desc||'')}</span></td><td><input class="num" type="number" step="0.01" data-line-field="qty" data-line-id="${esc(l.id)}" value="${esc(l.qty)}"></td><td><input class="num" type="number" step="0.01" data-line-field="unitPrice" data-line-id="${esc(l.id)}" value="${esc(l.unitPrice)}"></td><td class="num"><strong>${money(n(l.qty)*n(l.unitPrice))}</strong></td><td><button class="ghost small danger" data-delete-line="${esc(l.id)}">Eliminar</button></td></tr>`).join('') || `<tr><td colspan="9" class="muted">Encara no hi ha partides.</td></tr>`}</tbody></table></div><div class="budget-total"><span>Base: <strong>${money(budgetBase(b))}</strong></span><span>IVA: <strong>${money(budgetVat(b))}</strong></span><span>Total: <strong>${money(budgetTotal(b))}</strong></span></div>`; }
-
-function renderFactures(){
-  viewHeader('Factures', 'Factures i despeses associades a pressupostos i feines.');
-  const item = editing.invoice ? byId(data.invoices, editing.invoice) : {};
-  content(`
-    <div class="card"><h2>${editing.invoice?'Editar factura':'Nova factura'}</h2>
+function renderInvoices(editId=''){
+  setHeader('Factures','Factures associades a pressupostos i feines per calcular rendiment.');
+  const i=editId ? byId(data.invoices,editId) : {date:today(), iva:data.settings.defaultIVA, paid:false};
+  setContent(`
+    <div class="card"><h2>${editId?'Editar factura':'Nova factura'}</h2>
       <form id="invoiceForm" class="form-grid">
-        <label>ID factura<input name="id" value="${esc(item.id || uid('FAC'))}" ${editing.invoice?'readonly':''}></label>
-        <label>Data<input name="date" type="date" value="${esc(item.date || new Date().toISOString().slice(0,10))}"></label>
-        <label class="wide">Pressupost<select name="budgetId">${options(data.budgets,item.budgetId,x=>x.id,x=>`${x.id} · ${jobName(x.jobId)}`)}</select></label>
-        <label class="wide">Proveïdor<input name="provider" value="${esc(item.provider||'')}"></label>
-        <label>Núm. factura<input name="number" value="${esc(item.number||'')}"></label>
-        <label>Base<input name="base" type="number" step="0.01" value="${esc(item.base ?? 0)}"></label>
-        <label>IVA %<input name="vat" type="number" step="0.01" value="${esc(item.vat ?? 21)}"></label>
-        <label>Pagada?<select name="paid"><option value="false" ${!item.paid?'selected':''}>No</option><option value="true" ${item.paid?'selected':''}>Sí</option></select></label>
-        <label class="wide">Concepte<input name="concept" value="${esc(item.concept||'')}"></label>
-        <label class="full">Notes<textarea name="notes">${esc(item.notes||'')}</textarea></label>
-        <div class="actions full"><button class="primary">Guardar factura</button>${editing.invoice?'<button type="button" class="ghost" data-action="cancelEdit">Cancel·lar</button>':''}</div>
+        <input type="hidden" name="editId" value="${esc(editId)}"><input type="hidden" name="id" value="${esc(i.id||uid('FAC'))}">
+        <label>Núm. factura<input name="number" value="${esc(i.number||'')}"></label>
+        <label>Data<input name="date" type="date" value="${esc(i.date||today())}"></label>
+        <label class="wide">Feina<select name="jobId"><option value="">Sense feina</option>${options(data.jobs,i.jobId,x=>`${x.year} · ${x.title}`)}</select></label>
+        <label class="wide">Pressupost<select name="budgetId"><option value="">Sense pressupost</option>${options(data.budgets,i.budgetId,x=>`${x.number || x.id} · ${x.title || ''}`)}</select></label>
+        <label>Tipus<select name="type"><option ${i.type==='Client'?'selected':''}>Client</option><option ${i.type==='Proveïdor'?'selected':''}>Proveïdor</option><option ${i.type==='Industrial'?'selected':''}>Industrial</option></select></label>
+        <label class="wide">Concepte<input name="concept" value="${esc(i.concept||'')}"></label>
+        <label>Base €<input name="base" type="number" step="0.01" value="${esc(i.base||'')}"></label>
+        <label>IVA %<input name="iva" type="number" step="0.01" value="${esc(i.iva ?? data.settings.defaultIVA)}"></label>
+        <label>Pagada<select name="paid"><option value="false" ${!i.paid?'selected':''}>No</option><option value="true" ${i.paid?'selected':''}>Sí</option></select></label>
+        <label class="full">Notes<textarea name="notes">${esc(i.notes||'')}</textarea></label>
+        <div class="actions full"><button class="primary">Guardar factura</button>${editId?'<button class="ghost" type="button" data-render-invoices>Cancel·lar</button>':''}</div>
       </form>
     </div>
-    <div class="card"><h2>Llistat factures</h2>${invoicesTable()}</div>
+    <div class="card"><h2>Llistat de factures</h2>${invoicesTable()}</div>
   `);
 }
-function invoicesTable(){ if(!data.invoices.length) return empty(); return `<div class="table-wrap"><table><thead><tr><th>ID</th><th>Data</th><th>Pressupost</th><th>Feina</th><th>Proveïdor</th><th>Factura</th><th>Base</th><th>Total</th><th>Pagada</th><th>Accions</th></tr></thead><tbody>${data.invoices.map(i=>`<tr><td>${esc(i.id)}</td><td>${esc(i.date)}</td><td>${esc(i.budgetId)}</td><td>${esc(i.jobId || byId(data.budgets,i.budgetId)?.jobId || '')}</td><td>${esc(i.provider)}</td><td>${esc(i.number)}</td><td class="num">${money(invoiceBase(i))}</td><td class="num"><strong>${money(invoiceTotal(i))}</strong></td><td>${i.paid?'Sí':'No'}</td><td><button class="ghost small" data-edit-invoice="${esc(i.id)}">Editar</button> <button class="ghost small danger" data-delete-invoice="${esc(i.id)}">Eliminar</button></td></tr>`).join('')}</tbody></table></div>`; }
-
-function renderRendiment(){
-  viewHeader('Rendiment', 'Comparativa per obra: pressupostat, factures/despeses i marge.');
-  const rows=data.jobs.map(j=>{ const base=jobBudgetBase(j.id), inv=jobInvoiceTotal(j.id), margin=base-inv, ratio=base?margin/base:0; return {j,base,inv,margin,ratio}; });
-  const totalBudget=rows.reduce((s,r)=>s+r.base,0), totalInv=rows.reduce((s,r)=>s+r.inv,0), totalMargin=totalBudget-totalInv;
-  content(`
-    <div class="grid four"><div class="kpi"><span>Total pressupostat</span><strong>${money(totalBudget)}</strong></div><div class="kpi"><span>Total factures/despeses</span><strong>${money(totalInv)}</strong></div><div class="kpi ${totalMargin>=0?'good':'bad'}"><span>Rendiment €</span><strong>${money(totalMargin)}</strong></div><div class="kpi"><span>Rendiment %</span><strong>${pct(totalBudget?totalMargin/totalBudget:0)}</strong></div></div>
-    <div class="card"><h2>Rendiment per feina</h2><div class="table-wrap"><table><thead><tr><th>Any</th><th>Feina</th><th>Pressupostat</th><th>Factures</th><th>Rendiment</th><th>%</th><th>Visual</th></tr></thead><tbody>${rows.map(r=>{ const width=Math.max(0,Math.min(100,r.ratio*100)); return `<tr><td>${esc(r.j.year)}</td><td><strong>${esc(r.j.title)}</strong><br><span class="muted">${esc(r.j.id)} · ${esc(clientName(r.j.clientId))}</span></td><td class="num">${money(r.base)}</td><td class="num">${money(r.inv)}</td><td class="num"><strong>${money(r.margin)}</strong></td><td class="num">${pct(r.ratio)}</td><td><div class="bar ${r.margin<0?'red':''}"><span style="width:${width}%"></span></div></td></tr>`}).join('')}</tbody></table></div></div>
+function invoicesTable(){
+  return table(['Núm.','Data','Feina','Pressupost','Concepte','Base','Total IVA','Estat','Accions'], data.invoices.map(i=>`
+    <tr><td>${esc(i.number||i.id)}</td><td>${esc(i.date||'')}</td><td>${esc(jobName(i.jobId))}</td><td>${esc(budgetName(i.budgetId))}</td><td>${esc(i.concept||'')}</td><td class="num">${money(invoiceBase(i))}</td><td class="num">${money(invoiceTotal(i))}</td><td>${statusPill(i.paid?'Pagada':'Pendent')}</td><td><button class="ghost small" data-edit-invoice="${esc(i.id)}">Editar</button></td></tr>`));
+}
+function renderPerformance(){
+  setHeader('Rendiment','Comparativa per feina: pressupostat, facturat/despeses i marge.');
+  const rows=data.jobs.map(j=>({j,b:jobBudgetTotal(j.id),i:jobInvoiceTotal(j.id)})).sort((a,b)=>b.b-a.b);
+  const max=Math.max(1,...rows.map(r=>r.b));
+  setContent(`
+    <div class="grid four">
+      <div class="kpi"><span>Total base pressupostos</span><strong>${money(data.budgets.reduce((s,b)=>s+budgetBase(b),0))}</strong></div>
+      <div class="kpi"><span>Total factures IVA incl.</span><strong>${money(data.invoices.reduce((s,i)=>s+invoiceTotal(i),0))}</strong></div>
+      <div class="kpi good"><span>Partides llibreria</span><strong>${data.library.length}</strong></div>
+      <div class="kpi warn"><span>Pressupostos</span><strong>${data.budgets.length}</strong></div>
+    </div>
+    <div class="card"><h2>Gràfic ràpid de pressupost per feina</h2><div class="chart">${rows.slice(0,12).map(r=>`<div class="chart-bar" style="height:${Math.max(4,(r.b/max)*100)}%"><span>${money(r.b)}</span></div>`).join('')}</div><div class="chart-labels">${rows.slice(0,12).map(r=>`<span>${esc(r.j.year)} · ${esc(r.j.title.slice(0,28))}</span>`).join('')}</div></div>
+    <div class="card"><h2>Rendiment per feina</h2>${table(['Any','Feina','Client','Pressupostat base','Factures','Marge','% marge'], rows.map(r=>{
+      const m=r.b-r.i; const p=r.b?m/r.b*100:0;
+      return `<tr><td>${esc(r.j.year)}</td><td>${esc(r.j.title)}</td><td>${esc(clientName(r.j.clientId))}</td><td class="num">${money(r.b)}</td><td class="num">${money(r.i)}</td><td class="num ${m>=0?'status-ok':'status-bad'}">${money(m)}</td><td class="num">${p.toFixed(1)}%</td></tr>`;}))}</div>
   `);
 }
-
-function renderArxius(){
-  viewHeader('Arxius / albarans', 'Annexa albarans, PDFs, fotos i documents vinculats a feina o pressupost.');
-  content(`
-    <div class="card"><h2>Afegir arxiu</h2>
-      <form id="fileForm" class="form-grid">
-        <label>Data<input name="date" type="date" value="${new Date().toISOString().slice(0,10)}"></label>
-        <label class="wide">Feina<select name="jobId">${options(data.jobs,'',x=>x.id,x=>`${x.id} · ${x.title}`)}</select></label>
-        <label>Pressupost<select name="budgetId"><option value="">—</option>${options(data.budgets,'',x=>x.id,x=>x.id)}</select></label>
-        <label>Tipus<select name="type"><option>Albarà</option><option>Factura</option><option>Pressupost</option><option>Foto</option><option>PDF tècnic</option><option>Altres</option></select></label>
-        <label>Proveïdor / origen<input name="provider"></label>
-        <label>Núm. doc.<input name="docNumber"></label>
-        <label>Import<input name="amount" type="number" step="0.01" value="0"></label>
-        <label class="full dropzone">Selecciona arxiu<input name="file" type="file"></label>
+function renderAttachments(){
+  setHeader('Arxius / albarans','Annexar PDF, imatges, albarans o factures escanejades a clients, feines o pressupostos.');
+  setContent(`
+    <div class="card"><h2>Nou arxiu</h2>
+      <form id="attachmentForm" class="form-grid">
+        <label class="wide">Arxiu<input name="file" type="file" required></label>
+        <label>Categoria<select name="category"><option>Albarà</option><option>Factura</option><option>Pressupost original</option><option>Foto</option><option>Altres</option></select></label>
+        <label>Incloure al JSON<select name="includeInJson"><option value="true">Sí, còpia transferible</option><option value="false">No, només referència</option></select></label>
+        <label class="wide">Client<select name="clientId"><option value="">Sense client</option>${options(data.clients,'')}</select></label>
+        <label class="wide">Feina<select name="jobId"><option value="">Sense feina</option>${options(data.jobs,'',x=>`${x.year} · ${x.title}`)}</select></label>
+        <label class="wide">Pressupost<select name="budgetId"><option value="">Sense pressupost</option>${options(data.budgets,'',x=>`${x.number || x.id} · ${x.title || ''}`)}</select></label>
         <label class="full">Notes<textarea name="notes"></textarea></label>
         <div class="actions full"><button class="primary">Guardar arxiu</button></div>
       </form>
     </div>
-    <div class="card"><h2>Documents guardats</h2><div id="attachmentsTable">${attachmentsTable()}</div></div>
+    <div class="card"><h2>Arxius guardats</h2>${attachmentsTable()}</div>
   `);
 }
-function attachmentsTable(){ if(!data.attachments.length) return empty(); return `<div class="table-wrap"><table><thead><tr><th>Data</th><th>Feina</th><th>Pressupost</th><th>Tipus</th><th>Origen</th><th>Fitxer</th><th>Import</th><th>Accions</th></tr></thead><tbody>${data.attachments.map(a=>`<tr><td>${esc(a.date)}</td><td>${esc(a.jobId)}</td><td>${esc(a.budgetId||'')}</td><td><span class="pill">${esc(a.type)}</span></td><td>${esc(a.provider||'')}</td><td>${esc(a.fileName||'')}</td><td class="num">${money(a.amount)}</td><td>${a.fileId?`<button class="ghost small" data-download-file="${esc(a.fileId)}">Descarregar</button>`:''} <button class="ghost small danger" data-delete-attachment="${esc(a.id)}">Eliminar</button></td></tr>`).join('')}</tbody></table></div>`; }
+function attachmentsTable(){
+  return table(['Nom','Categoria','Client','Feina','Pressupost','Mida','JSON','Data','Accions'], data.attachments.map(a=>`
+    <tr><td><strong>${esc(a.name)}</strong><br><span class="muted">${esc(a.type||'')}</span></td><td>${esc(a.category||'')}</td><td>${esc(clientName(a.clientId))}</td><td>${esc(jobName(a.jobId))}</td><td>${esc(budgetName(a.budgetId))}</td><td class="num">${((a.size||0)/1024).toFixed(1)} KB</td><td>${a.includeInJson?statusPill('Sí'):statusPill('No')}</td><td>${esc(a.createdAt||'')}</td><td><button class="ghost small" data-download-attachment="${esc(a.id)}">Obrir</button> <button class="danger small" data-delete-attachment="${esc(a.id)}">Eliminar</button></td></tr>`));
+}
+function renderImporter(){
+  setHeader('Importar Excels / ZIP','Importació massiva local: clients del requadre, feines, pressupostos, partides i llibreria.');
+  const ready = typeof XLSX !== 'undefined';
+  setContent(`
+    ${!ready?'<div class="card notice-red"><strong>Llibreria Excel no carregada.</strong> Comprova connexió o inclou SheetJS localment. Sense aquesta llibreria no es poden llegir .xls/.xlsx.</div>':''}
+    <div class="card notice-blue"><strong>Criteri d’importació:</strong> el client guardat és el del requadre/destinatari del pressupost, no TEIMOR. NIF/DNI/CIF, telèfon i email es conserven perquè després els necessites per pressupostos i factures.</div>
+    <div class="card"><div id="dropzone" class="dropzone">
+      <h2>Importació massiva</h2><p>Arrossega aquí Excels o un ZIP, o fes servir els botons.</p>
+      <div class="actions" style="justify-content:center">
+        <label class="primary file-label">Seleccionar molts Excels<input id="excelInput" type="file" multiple accept=".xls,.xlsx,.xlsm,.csv" hidden></label>
+        <label class="ghost file-label">Seleccionar carpeta<input id="folderInput" type="file" webkitdirectory directory multiple hidden></label>
+        <label class="ghost file-label">Importar ZIP<input id="zipInput" type="file" accept=".zip" hidden></label>
+      </div>
+    </div></div>
+    <div id="importPreview">${state.importDraft ? importPreviewHtml(state.importDraft) : '<div class="empty">Encara no has importat cap fitxer en aquesta sessió.</div>'}</div>
+  `);
+}
+function importPreviewHtml(d){
+  return `<div class="card"><h2>Previsualització abans de confirmar</h2>
+    <div class="import-summary">
+      <div class="import-card"><span>Fitxers llegits</span><strong>${d.files.length}</strong></div>
+      <div class="import-card"><span>Clients detectats</span><strong>${d.clients.length}</strong></div>
+      <div class="import-card"><span>Feines</span><strong>${d.jobs.length}</strong></div>
+      <div class="import-card"><span>Pressupostos</span><strong>${d.budgets.length}</strong></div>
+      <div class="import-card"><span>Partides</span><strong>${d.items.length}</strong></div>
+    </div>
+    <div class="actions"><button class="primary" id="confirmImport">Confirmar importació</button><button class="ghost" id="discardImport">Descartar</button></div>
+    <h3>Clients detectats</h3>${table(['Client','NIF/CIF','Telèfon','Email','Adreça obra','Origen'], d.clients.slice(0,30).map(c=>`<tr><td>${esc(c.name)}</td><td>${esc(c.nif)}</td><td>${esc(c.phone)}</td><td>${esc(c.email)}</td><td>${esc(c.workAddress)}</td><td>${esc(c.source)}</td></tr>`))}
+    <h3>Partides detectades</h3>${table(['Codi','Ut','Concepte','Quantitat','PU','Total','Estat','Origen'], d.items.slice(0,120).map(i=>`<tr><td>${esc(i.code)}</td><td>${esc(i.unit)}</td><td><strong>${esc(i.concept)}</strong><div class="long muted">${esc(i.longDesc)}</div></td><td class="num">${i.qty?num(i.qty).toFixed(3):''}</td><td class="num">${i.unitPrice?money(i.unitPrice):''}</td><td class="num">${i.total?money(i.total):''}</td><td>${statusPill(i.status)}</td><td>${esc(i.origin)}</td></tr>`))}
+    <h3>Registre d’importació</h3><div class="log">${esc(d.log.join('\n'))}</div>
+  </div>`;
+}
+function renderSettings(){
+  setHeader('Configuració','Dades de TEIMOR, percentatges per defecte, usuari/contrasenya i manteniment local.');
+  const s=data.settings;
+  setContent(`
+    <div class="card"><h2>Configuració general</h2>
+      <form id="settingsForm" class="form-grid">
+        <label class="wide">Nom app<input name="appName" value="${esc(s.appName||'')}"></label>
+        <label>CI defecte %<input name="defaultCI" type="number" step="0.01" value="${esc(s.defaultCI)}"></label>
+        <label>DGE defecte %<input name="defaultDGE" type="number" step="0.01" value="${esc(s.defaultDGE)}"></label>
+        <label>BI defecte %<input name="defaultBI" type="number" step="0.01" value="${esc(s.defaultBI)}"></label>
+        <label>IVA defecte %<input name="defaultIVA" type="number" step="0.01" value="${esc(s.defaultIVA)}"></label>
+        <label class="wide">Empresa contractista<input name="contractista_name" value="${esc(s.contractista?.name||'')}"></label>
+        <label>NIF TEIMOR<input name="contractista_nif" value="${esc(s.contractista?.nif||'')}"></label>
+        <label>Telèfon TEIMOR<input name="contractista_phone" value="${esc(s.contractista?.phone||'')}"></label>
+        <label class="wide">Email TEIMOR<input name="contractista_email" value="${esc(s.contractista?.email||'')}"></label>
+        <label class="wide">Adreça TEIMOR<input name="contractista_address" value="${esc(s.contractista?.address||'')}"></label>
+        <label>Municipi<input name="contractista_city" value="${esc(s.contractista?.city||'')}"></label>
+        <div class="actions full"><button class="primary">Guardar configuració</button></div>
+      </form>
+    </div>
+    <div class="card"><h2>Accés local</h2>
+      <form id="passwordForm" class="form-grid">
+        <label>Usuari<input name="loginUser" value="${esc(s.loginUser||DEFAULT_USER)}"></label>
+        <label>Nova contrasenya<input name="newPass" type="password" placeholder="Deixa buit per no canviar"></label>
+        <div class="actions full"><button class="primary">Guardar usuari / contrasenya</button></div>
+      </form>
+      <p class="muted">Aquesta protecció és d’accés visual local. Les dades reals viatgen quan exportes un JSON complet.</p>
+    </div>
+    <div class="card notice-red"><h2>Manteniment</h2><p>Esborrarà les dades locals d’aquest navegador.</p><button class="danger" id="hardReset">Restaurar demo / esborrar dades locals</button></div>
+  `);
+}
+function bindViewEvents(){
+  document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>{ state.view=b.dataset.go; render(); });
+  const dashExport=document.getElementById('dashExport'); if(dashExport) dashExport.onclick=()=>exportJson(true);
+  const clientForm=document.getElementById('clientForm'); if(clientForm) clientForm.onsubmit=saveClient;
+  const clientSearch=document.getElementById('clientSearch'); if(clientSearch) clientSearch.oninput=e=>{ const q=strip(e.target.value); const rows=data.clients.filter(c=>strip(Object.values(c).join(' ')).includes(q)); document.getElementById('clientsTable').innerHTML=clientsTable(rows); bindViewEvents(); };
+  document.querySelectorAll('[data-edit-client]').forEach(b=>b.onclick=()=>renderClients(b.dataset.editClient));
+  document.querySelectorAll('[data-render-clients]').forEach(b=>b.onclick=()=>renderClients());
 
-function empty(){ return document.getElementById('emptyState').innerHTML; }
+  const jobForm=document.getElementById('jobForm'); if(jobForm) jobForm.onsubmit=saveJob;
+  const yearFilter=document.getElementById('yearFilter'); if(yearFilter) yearFilter.onchange=e=>{ state.yearFilter=e.target.value; renderJobs(); };
+  document.querySelectorAll('[data-edit-job]').forEach(b=>b.onclick=()=>renderJobs(b.dataset.editJob));
+  document.querySelectorAll('[data-render-jobs]').forEach(b=>b.onclick=()=>renderJobs());
 
-async function openFileDb(){
+  const libSearch=document.getElementById('libSearch'); if(libSearch) libSearch.oninput=e=>{ state.libSearch=e.target.value; renderLibrary(); };
+  const newLib=document.getElementById('newLibItem'); if(newLib) newLib.onclick=()=>openLibModal('');
+  document.querySelectorAll('[data-view-lib]').forEach(b=>b.onclick=()=>openLibModal(b.dataset.viewLib));
+
+  const budgetSelect=document.getElementById('budgetSelect'); if(budgetSelect) budgetSelect.onchange=e=>{ state.selectedBudgetId=e.target.value; renderBudgets(); };
+  const newBudget=document.getElementById('newBudgetBtn'); if(newBudget) newBudget.onclick=()=>{ state.selectedBudgetId=''; renderBudgets(); };
+  const budgetForm=document.getElementById('budgetForm'); if(budgetForm) budgetForm.onsubmit=saveBudget;
+  const addLib=document.getElementById('addLineFromLibrary'); if(addLib) addLib.onclick=openAddLineFromLibrary;
+  const addManual=document.getElementById('addManualLine'); if(addManual) addManual.onclick=()=>addManualLine();
+  const exportBudgetCsv=document.getElementById('exportBudgetCsv'); if(exportBudgetCsv) exportBudgetCsv.onclick=downloadBudgetCsv;
+  document.querySelectorAll('[data-line-field]').forEach(inp=>inp.onchange=updateBudgetLine);
+  document.querySelectorAll('[data-delete-line]').forEach(b=>b.onclick=()=>deleteBudgetLine(b.dataset.deleteLine));
+
+  const invoiceForm=document.getElementById('invoiceForm'); if(invoiceForm) invoiceForm.onsubmit=saveInvoice;
+  document.querySelectorAll('[data-edit-invoice]').forEach(b=>b.onclick=()=>renderInvoices(b.dataset.editInvoice));
+  document.querySelectorAll('[data-render-invoices]').forEach(b=>b.onclick=()=>renderInvoices());
+
+  const attachForm=document.getElementById('attachmentForm'); if(attachForm) attachForm.onsubmit=saveAttachment;
+  document.querySelectorAll('[data-download-attachment]').forEach(b=>b.onclick=()=>downloadAttachment(b.dataset.downloadAttachment));
+  document.querySelectorAll('[data-delete-attachment]').forEach(b=>b.onclick=()=>deleteAttachment(b.dataset.deleteAttachment));
+
+  const dz=document.getElementById('dropzone');
+  if(dz){
+    ['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault(); dz.classList.add('drag');}));
+    ['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault(); dz.classList.remove('drag');}));
+    dz.addEventListener('drop',e=>handleImportFiles([...e.dataTransfer.files]));
+  }
+  const excelInput=document.getElementById('excelInput'); if(excelInput) excelInput.onchange=e=>handleImportFiles([...e.target.files]);
+  const folderInput=document.getElementById('folderInput'); if(folderInput) folderInput.onchange=e=>handleImportFiles([...e.target.files]);
+  const zipInput=document.getElementById('zipInput'); if(zipInput) zipInput.onchange=e=>handleImportFiles([...e.target.files]);
+  const confirmImport=document.getElementById('confirmImport'); if(confirmImport) confirmImport.onclick=confirmDraftImport;
+  const discardImport=document.getElementById('discardImport'); if(discardImport) discardImport.onclick=()=>{ state.importDraft=null; renderImporter(); };
+
+  const settingsForm=document.getElementById('settingsForm'); if(settingsForm) settingsForm.onsubmit=saveSettings;
+  const passwordForm=document.getElementById('passwordForm'); if(passwordForm) passwordForm.onsubmit=savePassword;
+  const reset=document.getElementById('hardReset'); if(reset) reset.onclick=hardReset;
+}
+function formObj(form){ return Object.fromEntries(new FormData(form).entries()); }
+function saveClient(e){ e.preventDefault(); const f=formObj(e.target); const c={id:f.id,name:f.name,nif:f.nif,phone:f.phone,email:f.email,contact:f.contact,fiscalAddress:f.fiscalAddress,workAddress:f.workAddress,city:f.city,status:f.status,notes:f.notes}; const idx=data.clients.findIndex(x=>x.id===f.editId || x.id===c.id); if(idx>=0) data.clients[idx]=c; else data.clients.push(c); saveData(); renderClients(); }
+function saveJob(e){ e.preventDefault(); const f=formObj(e.target); const j={id:f.id,year:Number(f.year)||new Date().getFullYear(),clientId:f.clientId,title:f.title,address:f.address,city:f.city,status:f.status,notes:f.notes,mainBudgetId:byId(data.jobs,f.editId)?.mainBudgetId||''}; const idx=data.jobs.findIndex(x=>x.id===f.editId || x.id===j.id); if(idx>=0) data.jobs[idx]=j; else data.jobs.push(j); saveData(); renderJobs(); }
+function saveBudget(e){ e.preventDefault(); const f=formObj(e.target); const old=byId(data.budgets,f.id); const b={...(old||{}), id:f.id, number:f.number, date:f.date, clientId:f.clientId, jobId:f.jobId, title:f.title, status:f.status, ci:num(f.ci), dge:num(f.dge), bi:num(f.bi), iva:num(f.iva), notes:f.notes, lines:old?.lines||[]}; const idx=data.budgets.findIndex(x=>x.id===b.id); if(idx>=0) data.budgets[idx]=b; else data.budgets.push(b); state.selectedBudgetId=b.id; const job=byId(data.jobs,b.jobId); if(job && !job.mainBudgetId) job.mainBudgetId=b.id; saveData(); renderBudgets(); }
+function updateBudgetLine(e){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; const l=(b.lines||[]).find(x=>x.id===e.target.dataset.lineId); if(!l) return; const field=e.target.dataset.lineField; l[field]=['qty','unitPrice'].includes(field)?num(e.target.value):e.target.value; l.total=num(l.qty)*num(l.unitPrice); saveData(); renderBudgets(); }
+function deleteBudgetLine(id){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; b.lines=(b.lines||[]).filter(x=>x.id!==id); saveData(); renderBudgets(); }
+function addManualLine(){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; b.lines=b.lines||[]; b.lines.push({id:uid('LIN'),code:'',chapter:'',unit:'',concept:'Nova partida',longDesc:'',qty:1,unitPrice:0,total:0,status:'Manual pendent revisar',origin:'Manual'}); saveData(); renderBudgets(); }
+function openAddLineFromLibrary(){
+  const b=byId(data.budgets,state.selectedBudgetId); if(!b) return;
+  openModal(`<h2>Afegir partida de llibreria</h2><div class="toolbar"><input id="addLibSearch" placeholder="Cercar partida..." style="max-width:420px"></div><div id="addLibResults">${addLibResultsHtml(data.library.slice(0,60), b)}</div>`);
+  document.getElementById('addLibSearch').oninput=e=>{ const q=strip(e.target.value); const rows=data.library.filter(x=>strip([x.code,x.chapter,x.unit,x.concept,x.longDesc].join(' ')).includes(q)).slice(0,80); document.getElementById('addLibResults').innerHTML=addLibResultsHtml(rows,b); bindAddLibButtons(b); };
+  bindAddLibButtons(b);
+}
+function addLibResultsHtml(rows,b){ return table(['Codi','Ut','Concepte','PU segons pressupost','Estat','Acció'], rows.map(x=>`<tr><td>${esc(x.code||'')}</td><td>${esc(x.unit||'')}</td><td><strong>${esc(x.concept||'')}</strong><div class="long muted">${esc(x.longDesc||'')}</div></td><td class="num">${money(x.unitPrice || libFinal(x,b))}</td><td>${statusPill(x.status||'')}</td><td><button class="primary small" data-add-lib-to-budget="${esc(x.id)}">Afegir</button></td></tr>`)); }
+function bindAddLibButtons(b){ document.querySelectorAll('[data-add-lib-to-budget]').forEach(btn=>btn.onclick=()=>{ const x=byId(data.library,btn.dataset.addLibToBudget); b.lines=b.lines||[]; const pu=x.unitPrice || libFinal(x,b); b.lines.push({id:uid('LIN'),libraryId:x.id,code:x.code,chapter:x.chapter,unit:x.unit,concept:x.concept,longDesc:x.longDesc,qty:1,unitPrice:Number(pu.toFixed(2)),total:Number(pu.toFixed(2)),status:x.status||'De llibreria',origin:'Llibreria'}); saveData(); closeModal(); renderBudgets(); }); }
+function downloadBudgetCsv(){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return alert('Selecciona un pressupost.'); const rows=[['Codi','Ut','Concepte','Descripcio llarga','Quantitat','Preu unitari','Total']].concat((b.lines||[]).map(l=>[l.code,l.unit,l.concept,l.longDesc,l.qty,l.unitPrice,lineTotal(l)])); downloadText(rows.map(r=>r.map(x=>`"${String(x??'').replace(/"/g,'""')}"`).join(';')).join('\n'), `pressupost_${b.number||b.id}.csv`, 'text/csv;charset=utf-8'); }
+function saveInvoice(e){ e.preventDefault(); const f=formObj(e.target); const i={id:f.id,number:f.number,date:f.date,jobId:f.jobId,budgetId:f.budgetId,type:f.type,concept:f.concept,base:num(f.base),iva:num(f.iva),paid:f.paid==='true',notes:f.notes}; const idx=data.invoices.findIndex(x=>x.id===f.editId || x.id===i.id); if(idx>=0) data.invoices[idx]=i; else data.invoices.push(i); saveData(); renderInvoices(); }
+async function saveSettings(e){ e.preventDefault(); const f=formObj(e.target); data.settings.appName=f.appName; data.settings.defaultCI=num(f.defaultCI); data.settings.defaultDGE=num(f.defaultDGE); data.settings.defaultBI=num(f.defaultBI); data.settings.defaultIVA=num(f.defaultIVA); data.settings.contractista={name:f.contractista_name,nif:f.contractista_nif,phone:f.contractista_phone,email:f.contractista_email,address:f.contractista_address,city:f.contractista_city}; saveData(); alert('Configuració guardada.'); renderSettings(); }
+async function savePassword(e){ e.preventDefault(); const f=formObj(e.target); data.settings.loginUser=f.loginUser || DEFAULT_USER; if(f.newPass) data.settings.passwordHash=await sha256(f.newPass); saveData(); alert('Usuari/contrasenya guardats.'); renderSettings(); }
+function openModal(html){ document.getElementById('modalContent').innerHTML=html; document.getElementById('modal').classList.remove('hidden'); bindModalEvents(); }
+function closeModal(){ document.getElementById('modal').classList.add('hidden'); document.getElementById('modalContent').innerHTML=''; }
+function bindModalEvents(){
+  const close=document.getElementById('closeModalBtn'); if(close) close.onclick=closeModal;
+  const libForm=document.getElementById('libForm'); if(libForm) libForm.onsubmit=saveLibraryItem;
+  const add=document.getElementById('addDecompLine'); if(add) add.onclick=()=>{ const tbody=document.querySelector('#decompTable tbody'); const i=tbody.querySelectorAll('[data-decomp-row]').length; tbody.insertAdjacentHTML('beforeend', decompRow({},i)); bindModalEvents(); };
+  document.querySelectorAll('[data-remove-decomp]').forEach(b=>b.onclick=()=>b.closest('tr').remove());
+}
+function saveLibraryItem(e){
+  e.preventDefault(); const f=formObj(e.target);
+  const rows=[...document.querySelectorAll('#decompTable tbody tr')];
+  const decomp=rows.map((tr,i)=>({type:tr.querySelector(`[name="type_${i}"]`)?.value||tr.querySelector('select')?.value||'Material', name:tr.querySelector(`[name="name_${i}"]`)?.value||tr.children[1]?.querySelector('input')?.value||'', unit:tr.querySelector(`[name="unit_${i}"]`)?.value||tr.children[2]?.querySelector('input')?.value||'', yield:num(tr.querySelector(`[name="yield_${i}"]`)?.value||tr.children[3]?.querySelector('input')?.value), price:num(tr.querySelector(`[name="price_${i}"]`)?.value||tr.children[4]?.querySelector('input')?.value)})).filter(x=>x.name || x.yield || x.price);
+  const direct = num(f.directCost) || decomp.reduce((s,l)=>s+num(l.yield)*num(l.price),0);
+  const final = num(f.unitPrice) || direct * factor(f.ci,f.dge,f.bi);
+  const item={id:f.id,code:f.code,chapter:f.chapter,unit:f.unit,concept:f.concept,longDesc:f.longDesc,directCost:direct,unitPrice:final,ci:num(f.ci),dge:num(f.dge),bi:num(f.bi),origin:f.origin,status:f.status,decomp};
+  const idx=data.library.findIndex(x=>x.id===f.editId || x.id===item.id);
+  if(idx>=0) data.library[idx]=item; else data.library.push(item);
+  saveData(); closeModal(); renderLibrary();
+}
+
+function openIdb(){
   return new Promise((resolve,reject)=>{
     const req=indexedDB.open(DB_NAME,1);
-    req.onupgradeneeded=()=>req.result.createObjectStore(DB_STORE,{keyPath:'id'});
-    req.onsuccess=()=>resolve(req.result);
-    req.onerror=()=>reject(req.error);
+    req.onupgradeneeded=e=>{ e.target.result.createObjectStore(DB_STORE,{keyPath:'id'}); };
+    req.onsuccess=e=>resolve(e.target.result); req.onerror=e=>reject(e.target.error);
   });
 }
-async function putFile(id,file){ const db=await openFileDb(); return new Promise((resolve,reject)=>{ const tx=db.transaction(DB_STORE,'readwrite'); tx.objectStore(DB_STORE).put({id,name:file.name,type:file.type,blob:file}); tx.oncomplete=resolve; tx.onerror=()=>reject(tx.error); }); }
-async function getFile(id){ const db=await openFileDb(); return new Promise((resolve,reject)=>{ const tx=db.transaction(DB_STORE,'readonly'); const req=tx.objectStore(DB_STORE).get(id); req.onsuccess=()=>resolve(req.result); req.onerror=()=>reject(req.error); }); }
-async function deleteFile(id){ const db=await openFileDb(); return new Promise((resolve,reject)=>{ const tx=db.transaction(DB_STORE,'readwrite'); tx.objectStore(DB_STORE).delete(id); tx.oncomplete=resolve; tx.onerror=()=>reject(tx.error); }); }
-
-function bindAfterRender(){
-  document.querySelector('[data-action="cancelEdit"]')?.addEventListener('click',()=>{ editing={client:null,job:null,library:null,invoice:null}; render(); });
-
-  document.getElementById('clientForm')?.addEventListener('submit',e=>{ e.preventDefault(); const f=new FormData(e.target); const obj=Object.fromEntries(f); const idx=data.clients.findIndex(x=>x.id===obj.id); if(idx>=0) data.clients[idx]=obj; else data.clients.push(obj); editing.client=null; saveData(); render(); });
-  document.querySelectorAll('[data-edit-client]').forEach(b=>b.onclick=()=>{editing.client=b.dataset.editClient; render();});
-  document.querySelectorAll('[data-delete-client]').forEach(b=>b.onclick=()=>{ if(confirm('Eliminar client?')){ data.clients=data.clients.filter(x=>x.id!==b.dataset.deleteClient); saveData(); render(); }});
-
-  document.getElementById('jobForm')?.addEventListener('submit',e=>{ e.preventDefault(); const f=new FormData(e.target); const obj=Object.fromEntries(f); obj.year=n(obj.year); const idx=data.jobs.findIndex(x=>x.id===obj.id); if(idx>=0) data.jobs[idx]=obj; else data.jobs.push(obj); editing.job=null; saveData(); render(); });
-  document.querySelectorAll('[data-edit-job]').forEach(b=>b.onclick=()=>{editing.job=b.dataset.editJob; render();});
-  document.querySelectorAll('[data-delete-job]').forEach(b=>b.onclick=()=>{ if(confirm('Eliminar feina?')){ data.jobs=data.jobs.filter(x=>x.id!==b.dataset.deleteJob); saveData(); render(); }});
-  document.getElementById('yearFilter')?.addEventListener('change',e=>{ const year=e.target.value; const rows=year?data.jobs.filter(j=>String(j.year)===year):data.jobs; document.getElementById('jobsTableWrap').innerHTML=jobsTable(rows); bindAfterRender(); });
-
-  document.getElementById('libraryForm')?.addEventListener('submit',e=>{ e.preventDefault(); const f=new FormData(e.target); const obj=Object.fromEntries(f); obj.unitPrice=n(obj.unitPrice); const idx=data.library.findIndex(x=>x.code===obj.code); if(idx>=0) data.library[idx]=obj; else data.library.push(obj); editing.library=null; saveData(); render(); });
-  document.querySelectorAll('[data-edit-library]').forEach(b=>b.onclick=()=>{editing.library=b.dataset.editLibrary; render();});
-  document.querySelectorAll('[data-delete-library]').forEach(b=>b.onclick=()=>{ if(confirm('Eliminar partida de la llibreria?')){ data.library=data.library.filter(x=>x.code!==b.dataset.deleteLibrary); saveData(); render(); }});
-  document.getElementById('librarySearch')?.addEventListener('input',e=>{ const q=e.target.value.toLowerCase(); const rows=data.library.filter(p=>[p.code,p.chapter,p.concept,p.desc].join(' ').toLowerCase().includes(q)); document.getElementById('libraryTableWrap').innerHTML=libraryTable(rows); bindAfterRender(); });
-  document.querySelectorAll('[data-add-lib-line]').forEach(b=>b.onclick=()=>{ currentView='pressupostos'; render(); setTimeout(()=>{ const sel=document.querySelector('#addLibraryLineForm select[name="code"]'); if(sel) sel.value=b.dataset.addLibLine; },0); });
-
-  document.getElementById('budgetForm')?.addEventListener('submit',e=>{ e.preventDefault(); const f=new FormData(e.target); const obj=Object.fromEntries(f); const job=byId(data.jobs,obj.jobId); obj.clientId=job?.clientId||''; obj.vat=n(obj.vat); obj.lines=[]; data.budgets.push(obj); if(job) job.mainBudgetId=obj.id; selectedBudgetId=obj.id; saveData(); render(); });
-  document.getElementById('budgetSelect')?.addEventListener('change',e=>{ selectedBudgetId=e.target.value; render(); });
-  document.querySelector('[data-action="deleteBudget"]')?.addEventListener('click',()=>{ if(confirm('Eliminar pressupost actiu?')){ data.budgets=data.budgets.filter(b=>b.id!==selectedBudgetId); selectedBudgetId=data.budgets[0]?.id||''; saveData(); render(); }});
-  document.getElementById('addLibraryLineForm')?.addEventListener('submit',e=>{ e.preventDefault(); const f=new FormData(e.target); const p=data.library.find(x=>x.code===f.get('code')); const b=byId(data.budgets,selectedBudgetId); if(p&&b){ b.lines.push({id:uid('LIN'), code:p.code, chapter:p.chapter, unit:p.unit, concept:p.concept, desc:p.desc, qty:n(f.get('qty')), unitPrice:n(p.unitPrice), origin:'Llibreria'}); saveData(); render(); }});
-  document.getElementById('addManualLineForm')?.addEventListener('submit',e=>{ e.preventDefault(); const f=new FormData(e.target); const b=byId(data.budgets,selectedBudgetId); if(b){ b.lines.push({id:uid('LIN'), code:f.get('code'), chapter:f.get('chapter'), unit:f.get('unit'), concept:f.get('concept'), desc:f.get('desc'), qty:n(f.get('qty')), unitPrice:n(f.get('unitPrice')), origin:'Manual'}); saveData(); render(); }});
-  document.querySelectorAll('[data-line-field]').forEach(inp=>inp.addEventListener('change',e=>{ const b=byId(data.budgets,selectedBudgetId); const line=b?.lines.find(l=>l.id===e.target.dataset.lineId); if(line){ const field=e.target.dataset.lineField; line[field]=['qty','unitPrice'].includes(field)?n(e.target.value):e.target.value; saveData(); render(); }}));
-  document.querySelectorAll('[data-delete-line]').forEach(btn=>btn.onclick=()=>{ const b=byId(data.budgets,selectedBudgetId); if(b){ b.lines=b.lines.filter(l=>l.id!==btn.dataset.deleteLine); saveData(); render(); }});
-
-  document.getElementById('invoiceForm')?.addEventListener('submit',e=>{ e.preventDefault(); const f=new FormData(e.target); const obj=Object.fromEntries(f); const bud=byId(data.budgets,obj.budgetId); obj.jobId=bud?.jobId||''; obj.base=n(obj.base); obj.vat=n(obj.vat); obj.paid=obj.paid==='true'; const idx=data.invoices.findIndex(x=>x.id===obj.id); if(idx>=0) data.invoices[idx]=obj; else data.invoices.push(obj); editing.invoice=null; saveData(); render(); });
-  document.querySelectorAll('[data-edit-invoice]').forEach(b=>b.onclick=()=>{editing.invoice=b.dataset.editInvoice; render();});
-  document.querySelectorAll('[data-delete-invoice]').forEach(b=>b.onclick=()=>{ if(confirm('Eliminar factura?')){ data.invoices=data.invoices.filter(x=>x.id!==b.dataset.deleteInvoice); saveData(); render(); }});
-
-  document.getElementById('fileForm')?.addEventListener('submit',async e=>{ e.preventDefault(); const f=new FormData(e.target); const file=f.get('file'); let fileId=''; if(file && file.name){ fileId=uid('FILE'); await putFile(fileId,file); } const obj={id:uid('ARX'), date:f.get('date'), jobId:f.get('jobId'), budgetId:f.get('budgetId'), type:f.get('type'), provider:f.get('provider'), docNumber:f.get('docNumber'), amount:n(f.get('amount')), notes:f.get('notes'), fileName:file?.name||'', fileId}; data.attachments.push(obj); saveData(); render(); });
-  document.querySelectorAll('[data-download-file]').forEach(b=>b.onclick=async()=>{ const rec=await getFile(b.dataset.downloadFile); if(!rec){alert('No s’ha trobat el fitxer al navegador.'); return;} const a=document.createElement('a'); a.href=URL.createObjectURL(rec.blob); a.download=rec.name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); });
-  document.querySelectorAll('[data-delete-attachment]').forEach(b=>b.onclick=async()=>{ if(confirm('Eliminar arxiu del registre?')){ const a=data.attachments.find(x=>x.id===b.dataset.deleteAttachment); if(a?.fileId) await deleteFile(a.fileId); data.attachments=data.attachments.filter(x=>x.id!==b.dataset.deleteAttachment); saveData(); render(); }});
+async function idbPut(record){ const db=await openIdb(); return new Promise((res,rej)=>{ const tx=db.transaction(DB_STORE,'readwrite'); tx.objectStore(DB_STORE).put(record); tx.oncomplete=()=>res(); tx.onerror=e=>rej(e.target.error); }); }
+async function idbGet(id){ const db=await openIdb(); return new Promise((res,rej)=>{ const req=db.transaction(DB_STORE,'readonly').objectStore(DB_STORE).get(id); req.onsuccess=()=>res(req.result); req.onerror=e=>rej(e.target.error); }); }
+async function idbDelete(id){ const db=await openIdb(); return new Promise((res,rej)=>{ const tx=db.transaction(DB_STORE,'readwrite'); tx.objectStore(DB_STORE).delete(id); tx.oncomplete=()=>res(); tx.onerror=e=>rej(e.target.error); }); }
+async function idbAll(){ const db=await openIdb(); return new Promise((res,rej)=>{ const req=db.transaction(DB_STORE,'readonly').objectStore(DB_STORE).getAll(); req.onsuccess=()=>res(req.result||[]); req.onerror=e=>rej(e.target.error); }); }
+async function saveAttachment(e){
+  e.preventDefault(); const f=formObj(e.target); const file=e.target.file.files[0]; if(!file) return;
+  const id=uid('ARX'); const include=f.includeInJson==='true'; const meta={id,name:file.name,type:file.type,size:file.size,category:f.category,clientId:f.clientId,jobId:f.jobId,budgetId:f.budgetId,includeInJson:include,notes:f.notes,createdAt:new Date().toISOString()};
+  const dataUrl=include ? await fileToDataUrl(file) : '';
+  await idbPut({id,blob:file,dataUrl,meta}); data.attachments.push(meta); saveData(); renderAttachments();
 }
-
-render();
+function fileToDataUrl(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); }); }
+async function downloadAttachment(id){ const rec=await idbGet(id); if(!rec){ alert('No s’ha trobat el fitxer local. Potser s’ha importat només la referència.'); return; } const url=URL.createObjectURL(rec.blob); const a=document.createElement('a'); a.href=url; a.download=rec.meta?.name || 'arxiu'; a.click(); URL.revokeObjectURL(url); }
+async function deleteAttachment(id){ if(!confirm('Eliminar arxiu local?')) return; data.attachments=data.attachments.filter(a=>a.id!==id); await idbDelete(id); saveData(); renderAttachments(); }
+async function exportJson(full){
+  const copy=JSON.parse(JSON.stringify(data));
+  copy.exportedAt=new Date().toISOString(); copy.exportMode=full?'complete':'demo_net';
+  if(full){
+    const all=await idbAll();
+    copy.attachmentPayloads=all.filter(x=>x.meta?.includeInJson && x.dataUrl).map(x=>({id:x.id,dataUrl:x.dataUrl,meta:x.meta}));
+  } else {
+    copy.clients=copy.clients.map((c,i)=>({...c,name:`Client demo ${String(i+1).padStart(3,'0')}`,nif:'',phone:'',email:'',contact:'',fiscalAddress:'',workAddress:c.workAddress||'',notes:''}));
+    copy.attachmentPayloads=[];
+  }
+  downloadText(JSON.stringify(copy,null,2), `TEIMOR_${full?'copia_completa':'demo_net'}_${today()}.json`, 'application/json');
+}
+async function importJson(e){
+  const file=e.target.files[0]; if(!file) return; try{
+    const obj=JSON.parse(await file.text());
+    const payloads=obj.attachmentPayloads || [];
+    delete obj.attachmentPayloads; delete obj.exportedAt; delete obj.exportMode;
+    data=obj; saveData();
+    for(const p of payloads){ if(p.dataUrl){ const blob=await (await fetch(p.dataUrl)).blob(); await idbPut({id:p.id,blob,dataUrl:p.dataUrl,meta:p.meta}); } }
+    alert(`JSON importat correctament. Arxius incrustats restaurats: ${payloads.length}`); render();
+  }catch(err){ console.error(err); alert('No s’ha pogut importar el JSON.'); }
+  e.target.value='';
+}
+function downloadText(text, filename, type='text/plain'){ const blob=new Blob([text],{type}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename; a.click(); URL.revokeObjectURL(a.href); }
+async function handleImportFiles(files){
+  if(typeof XLSX === 'undefined'){ alert('No s’ha carregat la llibreria per llegir Excel. Revisa connexió o instal·la SheetJS localment.'); return; }
+  state.draftLog=[];
+  const excelFiles=[];
+  for(const file of files){
+    const name=(file.webkitRelativePath || file.name || '').toLowerCase();
+    if(name.endsWith('.zip')){
+      if(typeof JSZip === 'undefined'){ state.draftLog.push(`ZIP ignorat perquè JSZip no està carregat: ${file.name}`); continue; }
+      const zip=await JSZip.loadAsync(file);
+      const entries=Object.values(zip.files).filter(x=>!x.dir && /\.(xls|xlsx|xlsm|csv)$/i.test(x.name));
+      state.draftLog.push(`ZIP ${file.name}: ${entries.length} Excels detectats.`);
+      for(const entry of entries){ excelFiles.push({name:entry.name, arrayBuffer:await entry.async('arraybuffer')}); }
+    } else if(/\.(xls|xlsx|xlsm|csv)$/i.test(name)) {
+      excelFiles.push({name:file.webkitRelativePath || file.name, arrayBuffer:await file.arrayBuffer()});
+    }
+  }
+  const draft={files:[],clients:[],jobs:[],budgets:[],items:[],log:state.draftLog};
+  for(const f of excelFiles){
+    try{
+      const parsed=parseWorkbook(f.name, f.arrayBuffer);
+      draft.files.push(f.name);
+      draft.clients.push(parsed.client);
+      draft.jobs.push(parsed.job);
+      draft.budgets.push(parsed.budget);
+      draft.items.push(...parsed.items);
+      draft.log.push(...parsed.warnings);
+    }catch(err){ console.error(err); draft.log.push(`ERROR llegint ${f.name}: ${err.message}`); }
+  }
+  // Deduplicació lleugera de clients només per previsualització
+  draft.clients = mergePreviewClients(draft.clients);
+  state.importDraft=draft;
+  renderImporter();
+}
+function parseWorkbook(fileName, arrayBuffer){
+  const warnings=[];
+  const wb = XLSX.read(arrayBuffer, {type:'array', cellDates:true, raw:false});
+  const sheets = wb.SheetNames.map(name => ({name, aoa:XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, defval:'', raw:false, blankrows:false})}));
+  const flat=[];
+  sheets.forEach(sh => sh.aoa.forEach((row,ri)=>flat.push({sheet:sh.name, rowIndex:ri, cells:row.map(v=>cleanText(v)).filter(v=>v!==''), raw:row})));
+  warnings.push(`${fileName}: ${sheets.length} pestanya/es llegides.`);
+  const client = detectClient(fileName, flat);
+  const year = detectYear(fileName, flat);
+  const job = {id:uid('F'), year, clientTempKey:client.tempKey, title:detectJobTitle(fileName, flat), address:client.workAddress || detectAddress(flat), city:detectCity(flat), status:'Històrica', source:fileName, notes:'Importada automàticament des d’Excel antic.'};
+  const parsedItems=[];
+  sheets.forEach(sh => parsedItems.push(...detectItemsFromSheet(fileName, sh.name, sh.aoa)));
+  const budget = {id:uid('P'), number:detectBudgetNumber(fileName, flat), date:detectDate(flat) || `${year}-01-01`, clientTempKey:client.tempKey, jobTempKey:job.id, title:job.title, status:'Històric importat', ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, iva:data.settings.defaultIVA, source:fileName, notes:'Pressupost importat. Revisa partides sense amidament.', lines:[]};
+  budget.lines = parsedItems.map(it=>({...it,id:uid('LIN')}));
+  const items = parsedItems.map(it=>({...it, origin:fileName, sourceBudget:budget.number || fileName}));
+  if(!parsedItems.length) warnings.push(`${fileName}: no s’han detectat partides tabulades. Es guardarà només client/feina/pressupost si confirmes.`);
+  return {client, job, budget, items, warnings};
+}
+function mergePreviewClients(clients){
+  const map=new Map();
+  for(const c of clients){
+    const k=c.nif ? `nif:${normKey(c.nif)}` : c.email ? `email:${normKey(c.email)}` : c.phone ? `phone:${normKey(c.phone)}` : `name:${normKey(c.name)}|${normKey(c.workAddress)}`;
+    if(!map.has(k)) map.set(k,c);
+    else { const old=map.get(k); old.source=[old.source,c.source].filter(Boolean).join(' | '); old.notes=[old.notes,c.notes].filter(Boolean).join('\n'); }
+  }
+  return [...map.values()];
+}
+function detectClient(fileName, flat){
+  const all = flat.map(r=>r.cells.join(' | ')).join('\n');
+  const nif = firstRegex(all, /\b(?!B55271159\b)([A-HJNP-SUVW][0-9]{7}[0-9A-J]|[0-9]{8}[A-Z]|[XYZ][0-9]{7}[A-Z])\b/i) || '';
+  const email = firstRegex(all, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || '';
+  const phone = detectPhone(all);
+  const name = findValueByLabels(flat, ['client','cliente','destinatari','destinatario','senyors','sres','promotor','propietari','propiedad','comunitat','comunidad']) || guessNameFromFile(fileName);
+  const workAddress = findValueByLabels(flat, ['obra','direccion obra','direcció obra','adreça obra','situada','situat','emplaçament','emplazamiento']) || detectAddress(flat);
+  return {id:uid('CLI'), tempKey:uid('TMPCLI'), name:cleanClientName(name), nif, phone, email, contact:'', fiscalAddress:'', workAddress, city:detectCity(flat), status:'Actiu', source:fileName, notes:'Client detectat automàticament del requadre/destinatari. Revisar si cal.'};
+}
+function cleanClientName(s){
+  s=cleanText(s);
+  if(!s || isTeimorText(s) || s.length<3) return 'Client pendent de revisar';
+  return s.replace(/^(client|cliente|destinatari|destinatario|senyors|sres|promotor)\s*[:\-]?\s*/i,'').trim();
+}
+function guessNameFromFile(file){
+  let base=file.split('/').pop().replace(/\.(xls|xlsx|xlsm|csv)$/i,'').replace(/[_-]+/g,' ');
+  base=base.replace(/^\d+\s*/,'').replace(/pressupost|presupuesto|obra/ig,'').trim();
+  return base || 'Client pendent de revisar';
+}
+function isTeimorText(s){ return /teimor|teixidor|mora|marçal|trinxeria|b55271159|palafrugell/i.test(s); }
+function findValueByLabels(flat, labels){
+  const labs=labels.map(strip);
+  for(const r of flat){
+    const cells=r.raw.map(v=>cleanText(v));
+    for(let i=0;i<cells.length;i++){
+      const c=cells[i]; const sc=strip(c);
+      if(!c) continue;
+      if(labs.some(l=>sc === l || sc.startsWith(l+':') || sc.includes(l+':'))){
+        let v='';
+        if(c.includes(':')) v=c.split(':').slice(1).join(':').trim();
+        if(!v) v=cells.slice(i+1).find(x=>x && !isTeimorText(x) && strip(x)!==sc) || '';
+        if(v && !isTeimorText(v) && v.length>2) return v;
+      }
+    }
+  }
+  return '';
+}
+function firstRegex(text, regex){ const m=String(text).match(regex); return m ? (m[1]||m[0]).trim() : ''; }
+function detectPhone(text){
+  const matches=String(text).match(/(?:\+34\s*)?(?:[679]\d[\s.-]?\d{3}[\s.-]?\d{3}|[679]\d{8})/g) || [];
+  const filtered=matches.map(x=>x.trim()).filter(x=>!x.includes('620988264') && !x.includes('675520117') && !x.includes('609036162'));
+  return filtered[0] || '';
+}
+function detectAddress(flat){
+  const v=findValueByLabels(flat,['adreça','dirección','domicilio','domicili','direccio','direccion']);
+  if(v && !isTeimorText(v)) return v;
+  const row=flat.find(r=>r.cells.some(c=>/c\/|carrer|calle|avinguda|avenida|avda|passeig|plaza|plaça/i.test(c)) && !r.cells.some(isTeimorText));
+  return row ? row.cells.join(' ') : '';
+}
+function detectCity(flat){ const text=flat.map(r=>r.cells.join(' ')).join('\n'); const m=text.match(/\b(Barcelona|Girona|Palafrugell|Palam[oó]s|Calonge|Sant Antoni|Begur|Pals|Sant Feliu de Gu[ií]xols)\b/i); return m?m[0]:''; }
+function detectYear(fileName, flat){ const text=[fileName, ...flat.slice(0,40).map(r=>r.cells.join(' '))].join(' '); const m=text.match(/\b(20\d{2}|19\d{2})\b/); return m?Number(m[1]):new Date().getFullYear(); }
+function detectDate(flat){
+  const text=flat.slice(0,80).map(r=>r.cells.join(' ')).join('\n');
+  let m=text.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](20\d{2}|19\d{2})\b/);
+  if(m) return `${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
+  return '';
+}
+function detectBudgetNumber(fileName, flat){ return findValueByLabels(flat,['pressupost','presupuesto','num','nº','numero','número']) || fileName.split('/').pop().replace(/\.(xls|xlsx|xlsm|csv)$/i,''); }
+function detectJobTitle(fileName, flat){ return findValueByLabels(flat,['obra','treball','trabajo','feina','concepto','concepte']) || guessNameFromFile(fileName); }
+function detectItemsFromSheet(fileName, sheetName, aoa){
+  const rows=aoa.map(row=>row.map(v=>cleanText(v)));
+  const mapped = parseWithHeader(rows, fileName, sheetName);
+  if(mapped.length) return mapped;
+  return parseFallback(rows, fileName, sheetName);
+}
+function headerMap(row){
+  const map={};
+  row.forEach((c,i)=>{ const s=strip(c); if(!s) return;
+    if(/^(codi|codigo|cod|partida|item)$/.test(s)) map.code=i;
+    if(/(concepte|concepto|descripcio|descripcion|partida|detalle)/.test(s)) map.desc=i;
+    if(/^(ut|ud|uds|unitat|unidad|u\.?m\.?)$/.test(s)) map.unit=i;
+    if(/(quantitat|cantidad|amidament|medicio|medicion|med\.?) /.test(s) || /^(quantitat|cantidad|amidament|medicio|medicion)$/.test(s)) map.qty=i;
+    if(/(preu|precio).*(ut|unit|unitari|unitario)|p\.u\.|pu|preu\/ut|precio\/ud/.test(s)) map.pu=i;
+    if(/^(import|importe|total|subtotal)$/.test(s) || /(import|importe|total)/.test(s)) map.total=i;
+    if(/capitol|capitulo|chapter/.test(s)) map.chapter=i;
+  });
+  return map;
+}
+function parseWithHeader(rows,fileName,sheetName){
+  let start=-1, map={};
+  for(let i=0;i<Math.min(rows.length,80);i++){
+    const m=headerMap(rows[i]);
+    const score=['desc','unit','qty','pu','total'].filter(k=>m[k]!==undefined).length;
+    if(score>=3 && (m.desc!==undefined || m.total!==undefined)){ start=i+1; map=m; break; }
+  }
+  if(start<0) return [];
+  const items=[]; let chapter='';
+  for(let i=start;i<rows.length;i++){
+    const row=rows[i]; if(!row.some(Boolean)) continue;
+    const lineText=row.join(' '); const sline=strip(lineText);
+    if(/total\s+(pressupost|presupuesto|general)|iva|base imposable|base imponible/.test(sline)) continue;
+    const numbers=row.map(num).filter(x=>x!==0);
+    if(numbers.length===0 && lineText.length>3){ chapter=cleanText(lineText); continue; }
+    const desc=cell(row,map.desc) || longestText(row);
+    if(!desc || desc.length<3) continue;
+    const unit=cell(row,map.unit) || detectUnit(row);
+    const qty=num(cell(row,map.qty)); let pu=num(cell(row,map.pu)); let total=num(cell(row,map.total));
+    const code=cell(row,map.code) || '';
+    const status = classifyItem(unit, qty, pu, total, desc);
+    if(!pu && qty && total){ pu=total/qty; }
+    if(!total && qty && pu){ total=qty*pu; }
+    if(total || pu || qty || desc.length>10) items.push(makeItem({code,chapter:cell(row,map.chapter)||chapter,unit,desc,qty,pu,total,status,fileName,sheetName}));
+  }
+  return items;
+}
+function parseFallback(rows,fileName,sheetName){
+  const items=[]; let chapter='';
+  for(let i=0;i<rows.length;i++){
+    const row=rows[i].filter(Boolean); if(!row.length) continue;
+    const line=row.join(' '); const sl=strip(line);
+    if(/teimor|teixidor|total\s+(pressupost|presupuesto)|base imposable|iva|forma de pago|condicions/.test(sl)) continue;
+    const numericCells=row.map((c,idx)=>({idx,value:num(c),raw:c})).filter(x=>x.value!==0 && !/[a-zA-ZÀ-ÿ]{3,}/.test(String(x.raw)));
+    const textCells=row.filter(c=>strip(c) && num(c)===0);
+    if(numericCells.length===0 && textCells.length && line.length<80 && line===line.toUpperCase()){ chapter=line; continue; }
+    if(!textCells.length && numericCells.length<1) continue;
+    let desc=longestText(row); if(!desc || desc.length<6) continue;
+    const unit=detectUnit(row);
+    let qty=0, pu=0, total=0;
+    const nums=numericCells.map(x=>x.value);
+    if(nums.length>=3){ qty=nums[nums.length-3]; pu=nums[nums.length-2]; total=nums[nums.length-1]; }
+    else if(nums.length===2 && unit){ qty=nums[0]; total=nums[1]; pu=qty?total/qty:0; }
+    else if(nums.length===2){ pu=nums[0]; total=nums[1]; }
+    else if(nums.length===1){ total=nums[0]; }
+    const code = /^[0-9]{1,3}(\.[0-9]{1,3})*$/.test(row[0]) ? row[0] : '';
+    const status=classifyItem(unit,qty,pu,total,desc);
+    if(total || pu || qty) items.push(makeItem({code,chapter,unit,desc,qty,pu,total,status,fileName,sheetName}));
+  }
+  return items;
+}
+function cell(row,idx){ return idx===undefined ? '' : cleanText(row[idx]); }
+function longestText(row){ return row.filter(c=>cleanText(c) && num(c)===0 && !/^(ut|ud|m2|m²|ml|kg|pa)$/i.test(c)).sort((a,b)=>String(b).length-String(a).length)[0] || ''; }
+function detectUnit(row){ const u=row.map(c=>cleanText(c)).find(c=>/^(m2|m²|m²\.|m2\.|m3|m³|ml|m|ut|ud|uds|kg|pa|h|dia|dies|jornal)$/i.test(c)); return u || ''; }
+function classifyItem(unit,qty,pu,total,desc){
+  if(unit && qty && pu) return 'Importada amb amidament i PU pendent validar';
+  if(unit && qty && total && !pu) return 'PU calculat pendent validar';
+  if(total && (!unit || !qty)) return 'Històrica sense amidament';
+  if(/preu alçat|precio alzado|pa\b/i.test(desc)) return 'PA pendent amidament';
+  return 'Importada pendent de revisar';
+}
+function makeItem({code,chapter,unit,desc,qty,pu,total,status,fileName,sheetName}){
+  const longDesc=cleanText(desc);
+  const concept=longDesc.length>140 ? longDesc.slice(0,137)+'...' : longDesc;
+  return {code:code||'',chapter:chapter||'',unit:unit||'',concept,longDesc,qty:qty||'',unitPrice:pu||'',total:total||'',status,origin:`${fileName} · ${sheetName}`,source:fileName,decomp:[]};
+}
+function confirmDraftImport(){
+  const d=state.importDraft; if(!d) return;
+  const clientIdByTemp=new Map();
+  for(const c of d.clients){ const existing=findExistingClient(c); const id=existing?.id || c.id || uid('CLI'); clientIdByTemp.set(c.tempKey,id); if(existing){ Object.assign(existing, mergeClient(existing,c)); } else data.clients.push({...c,id}); }
+  for(const b of d.budgets){ const c=d.clients.find(x=>x.tempKey===b.clientTempKey); const clientId=c ? (clientIdByTemp.get(c.tempKey) || findExistingClient(c)?.id) : ''; const job=d.jobs.find(j=>j.id===b.jobTempKey) || d.jobs.find(j=>j.clientTempKey===b.clientTempKey); let jobId=''; if(job){ job.clientId=clientId; const existingJob=findExistingJob(job,clientId); jobId=existingJob?.id || job.id; if(existingJob) Object.assign(existingJob, {...job,id:existingJob.id,clientId}); else data.jobs.push({...job,id:jobId,clientId}); }
+    const budget={...b, clientId, jobId}; delete budget.clientTempKey; delete budget.jobTempKey; budget.lines=(budget.lines||[]).map(l=>({...l,id:l.id||uid('LIN')})); data.budgets.push(budget); if(jobId){ const j=byId(data.jobs,jobId); if(j && !j.mainBudgetId) j.mainBudgetId=budget.id; }
+  }
+  let added=0, skipped=0;
+  for(const item of d.items){ const existing=findExistingLibraryItem(item); if(existing){ existing.history=existing.history||[]; existing.history.push({origin:item.origin,unitPrice:item.unitPrice,total:item.total,qty:item.qty,status:item.status,date:today()}); skipped++; }
+    else { data.library.push({id:uid('LIB'),code:item.code || makeAutoCode(item),chapter:item.chapter,unit:item.unit,concept:item.concept,longDesc:item.longDesc,directCost:'',unitPrice:item.unitPrice || '',ci:data.settings.defaultCI,dge:data.settings.defaultDGE,bi:data.settings.defaultBI,origin:item.origin,status:item.status,decomp:[],history:[{origin:item.origin,unitPrice:item.unitPrice,total:item.total,qty:item.qty,status:item.status,date:today()}]}); added++; }
+  }
+  data.importLogs.push({id:uid('IMP'),date:new Date().toISOString(),files:d.files,countClients:d.clients.length,countBudgets:d.budgets.length,countItems:d.items.length,libraryAdded:added,libraryDuplicated:skipped});
+  state.importDraft=null; saveData(); alert(`Importació confirmada. Partides noves a llibreria: ${added}. Possibles repetides agrupades: ${skipped}.`); state.view='dashboard'; render();
+}
+function findExistingClient(c){ const keyN=normKey(c.nif); if(keyN) return data.clients.find(x=>normKey(x.nif)===keyN); const keyE=normKey(c.email); if(keyE) return data.clients.find(x=>normKey(x.email)===keyE); const keyP=normKey(c.phone); if(keyP) return data.clients.find(x=>normKey(x.phone)===keyP); const k=normKey(c.name), a=normKey(c.workAddress); return data.clients.find(x=>normKey(x.name)===k && (!a || normKey(x.workAddress)===a)); }
+function mergeClient(old,c){ return {...old, name:old.name||c.name, nif:old.nif||c.nif, phone:old.phone||c.phone, email:old.email||c.email, contact:old.contact||c.contact, fiscalAddress:old.fiscalAddress||c.fiscalAddress, workAddress:old.workAddress||c.workAddress, city:old.city||c.city, notes:[old.notes,c.notes].filter(Boolean).join('\n')}; }
+function findExistingJob(j,clientId){ return data.jobs.find(x=>x.clientId===clientId && normKey(x.title)===normKey(j.title) && String(x.year)===String(j.year)); }
+function findExistingLibraryItem(item){ const k=normKey(item.concept || item.longDesc); const u=normKey(item.unit); if(!k) return null; return data.library.find(x=>normKey(x.unit)===u && similarity(normKey(x.concept),k)>0.92); }
+function similarity(a,b){ if(!a||!b) return 0; if(a===b) return 1; const shorter=a.length<b.length?a:b, longer=a.length>=b.length?a:b; return longer.includes(shorter) ? shorter.length/longer.length : 0; }
+function makeAutoCode(item){ const base=(strip(item.chapter||'PART').slice(0,3)||'PAR').toUpperCase(); return `${base}-${String(data.library.length+1).padStart(4,'0')}`; }

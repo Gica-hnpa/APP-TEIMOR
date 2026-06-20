@@ -3,11 +3,35 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>TEIMOR · Gestor de pressupostos</title>
+  <title>TEIMOR · Base de dades de pressupostos</title>
   <link rel="stylesheet" href="styles.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script defer src="app.js"></script>
 </head>
 <body>
-  <div class="app-shell">
+  <section id="loginScreen" class="login-screen">
+    <div class="login-card">
+      <div class="brand big">
+        <div class="logo">T</div>
+        <div>
+          <strong>TEIMOR</strong>
+          <span>Base de dades de pressupostos</span>
+        </div>
+      </div>
+      <h1>Accés privat</h1>
+      <p>Les dades importades queden guardades localment al navegador d’aquest ordinador. GitHub i Render només publiquen el codi de l’app.</p>
+      <form id="loginForm" class="login-form">
+        <label>Usuari<input id="loginUser" autocomplete="username" required value="admin" /></label>
+        <label>Contrasenya<input id="loginPass" type="password" autocomplete="current-password" required /></label>
+        <button class="primary full" type="submit">Entrar</button>
+      </form>
+      <div id="loginMsg" class="form-msg"></div>
+      <small>Usuari inicial: <strong>admin</strong> · Contrasenya inicial: <strong>teimor2026</strong>. Es pot canviar a Configuració.</small>
+    </div>
+  </section>
+
+  <div id="appShell" class="app-shell hidden">
     <aside class="sidebar">
       <div class="brand">
         <div class="logo">T</div>
@@ -17,18 +41,22 @@
         </div>
       </div>
       <nav id="tabs" class="tabs">
-        <button data-view="inici" class="active">Inici</button>
+        <button data-view="dashboard" class="active">Inici</button>
         <button data-view="clients">Clients</button>
-        <button data-view="feines">Feines / anys</button>
-        <button data-view="llibreria">Llibreria partides</button>
-        <button data-view="pressupostos">Pressupostos</button>
-        <button data-view="factures">Factures</button>
-        <button data-view="rendiment">Rendiment</button>
-        <button data-view="arxius">Arxius / albarans</button>
+        <button data-view="jobs">Feines / anys</button>
+        <button data-view="library">Llibreria partides</button>
+        <button data-view="budgets">Pressupostos</button>
+        <button data-view="invoices">Factures</button>
+        <button data-view="performance">Rendiment</button>
+        <button data-view="attachments">Arxius / albarans</button>
+        <button data-view="importer">Importar Excels</button>
+        <button data-view="settings">Configuració</button>
       </nav>
       <div class="sidebar-actions">
-        <button id="exportData" class="secondary">Exportar còpia JSON</button>
-        <label class="secondary file-label">Importar JSON<input id="importData" type="file" accept="application/json" hidden /></label>
+        <button id="exportJson" class="secondary">Exportar JSON complet</button>
+        <button id="exportJsonClean" class="secondary ghost-dark">Exportar demo/net</button>
+        <label class="secondary file-label">Importar JSON<input id="importJson" type="file" accept="application/json" hidden /></label>
+        <button id="logout" class="secondary danger-dark">Sortir</button>
       </div>
     </aside>
 
@@ -36,20 +64,21 @@
       <header class="topbar">
         <div>
           <h1 id="viewTitle">Inici</h1>
-          <p id="viewSubtitle">Base local per pressupostos, factures, rendiment i documentació.</p>
+          <p id="viewSubtitle">Base local per clients, pressupostos, llibreria, factures, rendiment i documentació.</p>
         </div>
         <div class="top-actions">
-          <button id="resetDemo" class="danger ghost">Restaurar demo</button>
+          <span id="syncBadge" class="pill soft">Mode local</span>
         </div>
       </header>
       <section id="content" class="content"></section>
     </main>
   </div>
 
-  <template id="emptyState">
-    <div class="empty">Encara no hi ha dades en aquest apartat.</div>
-  </template>
-
-  <script src="app.js"></script>
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-box">
+      <button id="modalClose" class="modal-close" aria-label="Tancar">×</button>
+      <div id="modalContent"></div>
+    </div>
+  </div>
 </body>
 </html>
