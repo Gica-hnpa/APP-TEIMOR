@@ -1,9 +1,9 @@
-/* TEIMOR · Gestor de pressupostos v02
+/* TEIMOR · Gestor de pressupostos v03
    App estàtica: les dades importades d'Excel/ZIP es llegeixen al navegador i es guarden localment.
 */
-const STORE_KEY = 'teimor_gestor_pressupostos_v02';
-const AUTH_KEY = 'teimor_auth_v02';
-const DB_NAME = 'teimor_attachments_v02';
+const STORE_KEY = 'teimor_gestor_pressupostos_v03';
+const AUTH_KEY = 'teimor_auth_v03';
+const DB_NAME = 'teimor_attachments_v03';
 const DB_STORE = 'files';
 const DEFAULT_USER = 'admin';
 const DEFAULT_PASS = 'teimor2026';
@@ -36,7 +36,7 @@ const normKey = s => strip(s).replace(/[^a-z0-9]+/g,' ').trim();
 
 function defaultData(){
   return {
-    meta:{version:'2.0.0',createdAt:today(),updatedAt:today()},
+    meta:{version:'3.0.0',createdAt:today(),updatedAt:today()},
     settings:{
       appName:'TEIMOR · Base de dades de pressupostos',
       loginUser:DEFAULT_USER,
@@ -134,6 +134,7 @@ function init(){
   document.getElementById('modalClose').onclick=closeModal;
   document.getElementById('modal').addEventListener('click', e=>{ if(e.target.id==='modal') closeModal(); });
   document.getElementById('exportJson').onclick=()=>exportJson(true);
+  const exportPackageBtn=document.getElementById('exportPackage'); if(exportPackageBtn) exportPackageBtn.onclick=exportPackageZip;
   document.getElementById('exportJsonClean').onclick=()=>exportJson(false);
   document.getElementById('importJson').onchange=importJson;
   showApp(localStorage.getItem(AUTH_KEY)==='1');
@@ -179,28 +180,71 @@ function clientsTable(rows=data.clients){
     <tr><td><strong>${esc(c.name)}</strong><br><span class="muted">${esc(c.id)}</span></td><td>${esc(c.nif||'')}</td><td>${esc(c.contact||'')}</td><td>${esc(c.phone||'')}</td><td>${esc(c.email||'')}</td><td>${esc(c.workAddress||c.fiscalAddress||'')}</td><td>${statusPill(c.status||'Actiu')}</td><td><button class="ghost small" data-edit-client="${esc(c.id)}">Editar</button></td></tr>`));
 }
 function renderClients(editId=''){
-  setHeader('Clients','Clients finals detectats al requadre del pressupost, amb dades fiscals i de contacte.');
-  const c = editId ? byId(data.clients,editId) : {};
+  setHeader('Clients','Llistat principal de clients finals detectats al requadre del pressupost, amb filtres intel·ligents i fitxa editable.');
+  const isForm = !!editId;
+  const c = editId && editId !== '__new' ? byId(data.clients,editId) : {};
+  if(isForm){
+    setContent(`
+      <div class="card"><div class="toolbar"><h2>${editId==='__new'?'Nou client final':'Editar client final'}</h2><button class="ghost" type="button" data-render-clients>← Tornar al llistat</button></div>
+        <form id="clientForm" class="form-grid">
+          <input type="hidden" name="editId" value="${esc(editId==='__new'?'':editId)}">
+          <label>Codi<input name="id" value="${esc(c.id||uid('CLI'))}" ${editId !== '__new'?'readonly':''}></label>
+          <label class="wide">Nom client / comunitat / empresa<input name="name" value="${esc(c.name||'')}" required autofocus></label>
+          <label>NIF / DNI / CIF<input name="nif" value="${esc(c.nif||'')}"></label>
+          <label>Telèfon<input name="phone" value="${esc(c.phone||'')}"></label>
+          <label>Email<input name="email" value="${esc(c.email||'')}"></label>
+          <label class="wide">Persona de contacte<input name="contact" value="${esc(c.contact||'')}"></label>
+          <label class="wide">Adreça fiscal<input name="fiscalAddress" value="${esc(c.fiscalAddress||'')}"></label>
+          <label class="wide">Adreça de l’obra habitual<input name="workAddress" value="${esc(c.workAddress||'')}"></label>
+          <label>Municipi<input name="city" value="${esc(c.city||'')}"></label>
+          <label>Estat<select name="status"><option ${c.status==='Actiu'?'selected':''}>Actiu</option><option ${c.status==='Històric'?'selected':''}>Històric</option><option ${c.status==='Inactiu'?'selected':''}>Inactiu</option></select></label>
+          <label class="full">Observacions<textarea name="notes">${esc(c.notes||'')}</textarea></label>
+          <div class="actions full"><button class="primary">Guardar client</button><button class="ghost" type="button" data-render-clients>Cancel·lar</button></div>
+        </form>
+      </div>
+    `);
+    return;
+  }
+  const years=[...new Set(data.jobs.map(j=>String(j.year)).filter(Boolean))].sort((a,b)=>Number(b)-Number(a));
+  const cities=[...new Set(data.clients.map(c=>c.city).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   setContent(`
-    <div class="card"><h2>${editId?'Editar client':'Nou client final'}</h2>
-      <form id="clientForm" class="form-grid">
-        <input type="hidden" name="editId" value="${esc(editId)}">
-        <label>Codi<input name="id" value="${esc(c.id||uid('CLI'))}" ${editId?'readonly':''}></label>
-        <label class="wide">Nom client / comunitat / empresa<input name="name" value="${esc(c.name||'')}" required></label>
-        <label>NIF / DNI / CIF<input name="nif" value="${esc(c.nif||'')}"></label>
-        <label>Telèfon<input name="phone" value="${esc(c.phone||'')}"></label>
-        <label>Email<input name="email" value="${esc(c.email||'')}"></label>
-        <label class="wide">Persona de contacte<input name="contact" value="${esc(c.contact||'')}"></label>
-        <label class="wide">Adreça fiscal<input name="fiscalAddress" value="${esc(c.fiscalAddress||'')}"></label>
-        <label class="wide">Adreça de l’obra habitual<input name="workAddress" value="${esc(c.workAddress||'')}"></label>
-        <label>Municipi<input name="city" value="${esc(c.city||'')}"></label>
-        <label>Estat<select name="status"><option ${c.status==='Actiu'?'selected':''}>Actiu</option><option ${c.status==='Històric'?'selected':''}>Històric</option><option ${c.status==='Inactiu'?'selected':''}>Inactiu</option></select></label>
-        <label class="full">Observacions<textarea name="notes">${esc(c.notes||'')}</textarea></label>
-        <div class="actions full"><button class="primary">Guardar client</button>${editId?'<button class="ghost" type="button" data-render-clients>Cancel·lar</button>':''}</div>
-      </form>
+    <div class="grid four">
+      <div class="kpi"><span>Clients finals</span><strong>${data.clients.length}</strong></div>
+      <div class="kpi"><span>Amb NIF/DNI/CIF</span><strong>${data.clients.filter(c=>c.nif).length}</strong></div>
+      <div class="kpi"><span>Amb telèfon/email</span><strong>${data.clients.filter(c=>c.phone||c.email).length}</strong></div>
+      <div class="kpi"><span>Feines vinculades</span><strong>${data.jobs.length}</strong></div>
     </div>
-    <div class="card"><div class="toolbar"><h2>Llistat de clients</h2><input id="clientSearch" placeholder="Cercar client, NIF, telèfon, email..." style="max-width:320px"></div><div id="clientsTable">${clientsTable()}</div></div>
+    <div class="card"><div class="toolbar">
+      <div class="left"><h2>Llistat de clients</h2></div>
+      <div class="right"><button class="primary" id="newClientBtn">+ Nou client</button></div>
+    </div>
+    <div class="filter-grid">
+      <label>Cerca intel·ligent<input id="clientSearch" placeholder="Escriu lletres del nom, NIF, telèfon, email, obra..."></label>
+      <label>Any feina<select id="clientYearFilter"><option value="">Tots els anys</option>${years.map(y=>`<option value="${esc(y)}">${esc(y)}</option>`).join('')}</select></label>
+      <label>Municipi<select id="clientCityFilter"><option value="">Tots els municipis</option>${cities.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select></label>
+      <label>Estat<select id="clientStatusFilter"><option value="">Tots</option><option>Actiu</option><option>Històric</option><option>Inactiu</option></select></label>
+    </div>
+    <div id="clientFilterInfo" class="small-text" style="margin:10px 0">Mostrant ${data.clients.length} clients.</div>
+    <div id="clientsTable">${clientsTable(data.clients)}</div></div>
   `);
+}
+function filterClients(){
+  const q=strip(document.getElementById('clientSearch')?.value||'');
+  const year=document.getElementById('clientYearFilter')?.value||'';
+  const city=strip(document.getElementById('clientCityFilter')?.value||'');
+  const status=strip(document.getElementById('clientStatusFilter')?.value||'');
+  let rows=data.clients.filter(c=>{
+    const clientJobs=data.jobs.filter(j=>j.clientId===c.id);
+    const yearOk=!year || clientJobs.some(j=>String(j.year)===String(year));
+    const cityOk=!city || strip(c.city||c.workAddress||c.fiscalAddress).includes(city);
+    const statusOk=!status || strip(c.status)===status;
+    const blob=[c.id,c.name,c.nif,c.phone,c.email,c.contact,c.fiscalAddress,c.workAddress,c.city,c.notes, clientJobs.map(j=>`${j.year} ${j.title} ${j.address}`).join(' ')].join(' ');
+    const qOk=!q || strip(blob).includes(q);
+    return yearOk && cityOk && statusOk && qOk;
+  });
+  document.getElementById('clientsTable').innerHTML=clientsTable(rows);
+  const info=document.getElementById('clientFilterInfo'); if(info) info.textContent=`Mostrant ${rows.length} de ${data.clients.length} clients.`;
+  bindViewEvents();
 }
 function jobsTable(rows=data.jobs){
   return table(['Any','Feina / obra','Client','Adreça','Estat','Pressupostat','Factures','Accions'], rows.map(j=>`
@@ -396,13 +440,13 @@ function renderImporter(){
   const ready = typeof XLSX !== 'undefined';
   setContent(`
     ${!ready?'<div class="card notice-red"><strong>Llibreria Excel no carregada.</strong> Comprova connexió o inclou SheetJS localment. Sense aquesta llibreria no es poden llegir .xls/.xlsx.</div>':''}
-    <div class="card notice-blue"><strong>Criteri d’importació:</strong> el client guardat és el del requadre/destinatari del pressupost, no TEIMOR. NIF/DNI/CIF, telèfon i email es conserven perquè després els necessites per pressupostos i factures.</div>
+    <div class="card notice-blue"><strong>Criteri d’importació V03:</strong> el client guardat és el del requadre/destinatari del pressupost, no TEIMOR. En pressupostos antics TEIMOR d’una sola partida, l’app crea una partida única amb CONCEPTE + TREBALLS + MEDICIÓ + BASE IMPOSABLE, i no barreja clients dins la llibreria.</div>
     <div class="card"><div id="dropzone" class="dropzone">
       <h2>Importació massiva</h2><p>Arrossega aquí Excels o un ZIP, o fes servir els botons.</p>
       <div class="actions" style="justify-content:center">
         <label class="primary file-label">Seleccionar molts Excels<input id="excelInput" type="file" multiple accept=".xls,.xlsx,.xlsm,.csv" hidden></label>
         <label class="ghost file-label">Seleccionar carpeta<input id="folderInput" type="file" webkitdirectory directory multiple hidden></label>
-        <label class="ghost file-label">Importar ZIP<input id="zipInput" type="file" accept=".zip" hidden></label>
+        <label class="ghost file-label">Importar ZIP / WinRAR ZIP<input id="zipInput" type="file" accept=".zip" hidden></label>
       </div>
     </div></div>
     <div id="importPreview">${state.importDraft ? importPreviewHtml(state.importDraft) : '<div class="empty">Encara no has importat cap fitxer en aquesta sessió.</div>'}</div>
@@ -458,7 +502,8 @@ function bindViewEvents(){
   document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>{ state.view=b.dataset.go; render(); });
   const dashExport=document.getElementById('dashExport'); if(dashExport) dashExport.onclick=()=>exportJson(true);
   const clientForm=document.getElementById('clientForm'); if(clientForm) clientForm.onsubmit=saveClient;
-  const clientSearch=document.getElementById('clientSearch'); if(clientSearch) clientSearch.oninput=e=>{ const q=strip(e.target.value); const rows=data.clients.filter(c=>strip(Object.values(c).join(' ')).includes(q)); document.getElementById('clientsTable').innerHTML=clientsTable(rows); bindViewEvents(); };
+  const newClientBtn=document.getElementById('newClientBtn'); if(newClientBtn) newClientBtn.onclick=()=>renderClients('__new');
+  ['clientSearch','clientYearFilter','clientCityFilter','clientStatusFilter'].forEach(id=>{ const el=document.getElementById(id); if(el) el.oninput=filterClients; if(el) el.onchange=filterClients; });
   document.querySelectorAll('[data-edit-client]').forEach(b=>b.onclick=()=>renderClients(b.dataset.editClient));
   document.querySelectorAll('[data-render-clients]').forEach(b=>b.onclick=()=>renderClients());
 
@@ -563,6 +608,22 @@ async function saveAttachment(e){
 function fileToDataUrl(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); }); }
 async function downloadAttachment(id){ const rec=await idbGet(id); if(!rec){ alert('No s’ha trobat el fitxer local. Potser s’ha importat només la referència.'); return; } const url=URL.createObjectURL(rec.blob); const a=document.createElement('a'); a.href=url; a.download=rec.meta?.name || 'arxiu'; a.click(); URL.revokeObjectURL(url); }
 async function deleteAttachment(id){ if(!confirm('Eliminar arxiu local?')) return; data.attachments=data.attachments.filter(a=>a.id!==id); await idbDelete(id); saveData(); renderAttachments(); }
+async function exportPackageZip(){
+  if(typeof JSZip === 'undefined') return alert('No s’ha carregat JSZip. Prova exportar JSON complet o revisa la connexió.');
+  const zip=new JSZip();
+  const payload={...data, exportedAt:new Date().toISOString(), packageType:'TEIMOR_V03_COMPLET'};
+  zip.file('teimor_dades_completes.json', JSON.stringify(payload,null,2));
+  zip.file('README.txt', 'Paquet exportat des de TEIMOR Gestor. Aquest ZIP és compatible amb WinRAR. Per seguretat, pot contenir dades personals si has exportat la còpia completa.');
+  const folder=zip.folder('arxius_incrustats');
+  for(const a of data.attachments || []){
+    if(a.includeInJson){
+      const rec=await idbGet(a.id);
+      if(rec?.blob) folder.file(a.name || `${a.id}.bin`, rec.blob);
+    }
+  }
+  const blob=await zip.generateAsync({type:'blob'});
+  downloadBlob(blob, `TEIMOR_copia_completa_WinRAR_${today()}.zip`);
+}
 async function exportJson(full){
   const copy=JSON.parse(JSON.stringify(data));
   copy.exportedAt=new Date().toISOString(); copy.exportMode=full?'complete':'demo_net';
@@ -586,6 +647,7 @@ async function importJson(e){
   }catch(err){ console.error(err); alert('No s’ha pogut importar el JSON.'); }
   e.target.value='';
 }
+function downloadBlob(blob, filename){ const a=document.createElement('a'); const url=URL.createObjectURL(blob); a.href=url; a.download=filename; a.click(); URL.revokeObjectURL(url); }
 function downloadText(text, filename, type='text/plain'){ const blob=new Blob([text],{type}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename; a.click(); URL.revokeObjectURL(a.href); }
 async function handleImportFiles(files){
   if(typeof XLSX === 'undefined'){ alert('No s’ha carregat la llibreria per llegir Excel. Revisa connexió o instal·la SheetJS localment.'); return; }
@@ -648,25 +710,50 @@ function mergePreviewClients(clients){
   return [...map.values()];
 }
 function detectClient(fileName, flat){
+  const recipient = detectRecipientBlock(flat);
   const all = flat.map(r=>r.cells.join(' | ')).join('\n');
-  const nif = firstRegex(all, /\b(?!B55271159\b)([A-HJNP-SUVW][0-9]{7}[0-9A-J]|[0-9]{8}[A-Z]|[XYZ][0-9]{7}[A-Z])\b/i) || '';
-  const email = firstRegex(all, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || '';
-  const phone = detectPhone(all);
-  const name = findValueByLabels(flat, ['client','cliente','destinatari','destinatario','senyors','sres','promotor','propietari','propiedad','comunitat','comunidad']) || guessNameFromFile(fileName);
-  const workAddress = findValueByLabels(flat, ['obra','direccion obra','direcció obra','adreça obra','situada','situat','emplaçament','emplazamiento']) || detectAddress(flat);
-  return {id:uid('CLI'), tempKey:uid('TMPCLI'), name:cleanClientName(name), nif, phone, email, contact:'', fiscalAddress:'', workAddress, city:detectCity(flat), status:'Actiu', source:fileName, notes:'Client detectat automàticament del requadre/destinatari. Revisar si cal.'};
+  const candidateText = recipient.text || all;
+  const nif = firstRegex(candidateText, /\b(?!B55271159\b)([A-HJNP-SUVW][0-9]{7}[0-9A-J]|[0-9]{8}[A-Z]|[XYZ][0-9]{7}[A-Z])\b/i) || '';
+  const email = firstRegex(candidateText, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || '';
+  const phone = detectPhone(candidateText);
+  const name = recipient.name || findValueByLabels(flat, ['client','cliente','destinatari','destinatario','senyors','sres','promotor','propietari','propiedad','comunitat','comunidad']) || guessNameFromFile(fileName);
+  const workAddress = recipient.address || findValueByLabels(flat, ['obra','direccion obra','direcció obra','adreça obra','situada','situat','emplaçament','emplazamiento']) || detectAddress(flat);
+  const city = recipient.city || detectCity(flat);
+  return {id:uid('CLI'), tempKey:uid('TMPCLI'), name:cleanClientName(name), nif, phone, email, contact:'', fiscalAddress:'', workAddress, city, status:'Actiu', source:fileName, notes:'Client detectat automàticament del requadre/destinatari. Revisar si cal.'};
 }
+function detectRecipientBlock(flat){
+  const candidates=[];
+  for(const r of flat){
+    const cells=r.raw.map(v=>cleanText(v));
+    cells.forEach((c,ci)=>{
+      if(!c || isTeimorText(c) || isNonRecipientText(c)) return;
+      // En els pressupostos TEIMOR antics, el destinatari acostuma a estar al requadre dret superior.
+      if(r.rowIndex <= 18 && ci >= 3) candidates.push({row:r.rowIndex,col:ci,text:c});
+    });
+  }
+  if(!candidates.length) return {name:'',address:'',city:'',text:''};
+  const lines=[]; const seen=new Set();
+  candidates.sort((a,b)=>a.row-b.row || a.col-b.col).forEach(x=>{ const k=strip(x.text); if(!seen.has(k)){ seen.add(k); lines.push(x.text); }});
+  const name = lines.find(x=>!looksLikeAddress(x) && !looksLikeCityLine(x) && !/^\(?girona\)?$/i.test(x) && strip(x).length>3) || '';
+  const address = lines.find(looksLikeAddress) || '';
+  const cityLine = lines.find(looksLikeCityLine) || '';
+  return {name, address, city:extractCityFromLine(cityLine), text:lines.join('\n')};
+}
+function isNonRecipientText(s){ return /^(data|fecha|pressupost|presupuesto|obra|concepte|concepto|medicio|medición|medicion|treballs|trabajos|base imposable|iva|exclos|excl[oò]s)$/i.test(cleanText(s)); }
+function looksLikeAddress(s){ return /\b(c\/|carrer|calle|avinguda|avenida|avda\.?|passeig|plaza|plaça|rambla|carretera|ctra\.?|n[ºo]|núm|num\.?|bloc|esc\.?|baixos|pis)\b/i.test(String(s)); }
+function looksLikeCityLine(s){ return /\b(17\d{3}|08\d{3}|Girona|Barcelona|Palafrugell|Palam[oó]s|Calonge|Sant Antoni|Begur|Pals|Sant Feliu de Gu[ií]xols|S.?Agar[oó])\b/i.test(String(s)); }
+function extractCityFromLine(s){ const m=String(s||'').match(/(Palafrugell|Palam[oó]s|Calonge(?: i Sant Antoni)?|Sant Antoni|Begur|Pals|Sant Feliu de Gu[ií]xols|S.?Agar[oó]|Girona|Barcelona)/i); return m?m[0]:cleanText(s||''); }
 function cleanClientName(s){
   s=cleanText(s);
   if(!s || isTeimorText(s) || s.length<3) return 'Client pendent de revisar';
-  return s.replace(/^(client|cliente|destinatari|destinatario|senyors|sres|promotor)\s*[:\-]?\s*/i,'').trim();
+  return s.replace(/^(client|cliente|destinatari|destinatario|senyors|sres|promotor|propietari|propiedad)\s*[:\-]?\s*/i,'').trim();
 }
 function guessNameFromFile(file){
   let base=file.split('/').pop().replace(/\.(xls|xlsx|xlsm|csv)$/i,'').replace(/[_-]+/g,' ');
   base=base.replace(/^\d+\s*/,'').replace(/pressupost|presupuesto|obra/ig,'').trim();
   return base || 'Client pendent de revisar';
 }
-function isTeimorText(s){ return /teimor|teixidor|mora|marçal|trinxeria|b55271159|palafrugell/i.test(s); }
+function isTeimorText(s){ return /teimor|teixidor|mora|marçal|trinxeria|b55271159|palafrugell|info@teimor|www\.teimor|620988264|675520117|609036162/i.test(s); }
 function findValueByLabels(flat, labels){
   const labs=labels.map(strip);
   for(const r of flat){
@@ -677,7 +764,7 @@ function findValueByLabels(flat, labels){
       if(labs.some(l=>sc === l || sc.startsWith(l+':') || sc.includes(l+':'))){
         let v='';
         if(c.includes(':')) v=c.split(':').slice(1).join(':').trim();
-        if(!v) v=cells.slice(i+1).find(x=>x && !isTeimorText(x) && strip(x)!==sc) || '';
+        if(!v) v=cells.slice(i+1).find(x=>x && !isTeimorText(x) && strip(x)!==sc && !isNonRecipientText(x)) || '';
         if(v && !isTeimorText(v) && v.length>2) return v;
       }
     }
@@ -693,24 +780,80 @@ function detectPhone(text){
 function detectAddress(flat){
   const v=findValueByLabels(flat,['adreça','dirección','domicilio','domicili','direccio','direccion']);
   if(v && !isTeimorText(v)) return v;
-  const row=flat.find(r=>r.cells.some(c=>/c\/|carrer|calle|avinguda|avenida|avda|passeig|plaza|plaça/i.test(c)) && !r.cells.some(isTeimorText));
-  return row ? row.cells.join(' ') : '';
+  const row=flat.find(r=>r.cells.some(c=>looksLikeAddress(c)) && !r.cells.some(isTeimorText));
+  return row ? row.cells.filter(c=>!isNonRecipientText(c)).join(' ') : '';
 }
-function detectCity(flat){ const text=flat.map(r=>r.cells.join(' ')).join('\n'); const m=text.match(/\b(Barcelona|Girona|Palafrugell|Palam[oó]s|Calonge|Sant Antoni|Begur|Pals|Sant Feliu de Gu[ií]xols)\b/i); return m?m[0]:''; }
-function detectYear(fileName, flat){ const text=[fileName, ...flat.slice(0,40).map(r=>r.cells.join(' '))].join(' '); const m=text.match(/\b(20\d{2}|19\d{2})\b/); return m?Number(m[1]):new Date().getFullYear(); }
+function detectCity(flat){ const text=flat.map(r=>r.cells.join(' ')).join('\n'); const m=text.match(/\b(Palafrugell|Palam[oó]s|Calonge(?: i Sant Antoni)?|Sant Antoni|Begur|Pals|Sant Feliu de Gu[ií]xols|S.?Agar[oó]|Girona|Barcelona)\b/i); return m?m[0]:''; }
+function detectYear(fileName, flat){
+  const d=detectDate(flat); if(d){ const y=Number(d.slice(0,4)); if(y) return y; }
+  const text=[fileName, ...flat.slice(0,80).map(r=>r.cells.join(' '))].join(' ');
+  const m=text.match(/\b(20\d{2}|19\d{2})\b/); return m?Number(m[1]):new Date().getFullYear();
+}
 function detectDate(flat){
-  const text=flat.slice(0,80).map(r=>r.cells.join(' ')).join('\n');
-  let m=text.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](20\d{2}|19\d{2})\b/);
+  const text=flat.slice(0,100).map(r=>r.cells.join(' ')).join('\n');
+  let m=text.match(/\b(20\d{2}|19\d{2})[\/\-.](\d{1,2})[\/\-.](\d{1,2})\b/);
+  if(m) return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;
+  m=text.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](20\d{2}|19\d{2})\b/);
   if(m) return `${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
   return '';
 }
 function detectBudgetNumber(fileName, flat){ return findValueByLabels(flat,['pressupost','presupuesto','num','nº','numero','número']) || fileName.split('/').pop().replace(/\.(xls|xlsx|xlsm|csv)$/i,''); }
-function detectJobTitle(fileName, flat){ return findValueByLabels(flat,['obra','treball','trabajo','feina','concepto','concepte']) || guessNameFromFile(fileName); }
+function detectJobTitle(fileName, flat){ return findValueByLabels(flat,['obra','treball','trabajo','feina']) || guessNameFromFile(fileName); }
 function detectItemsFromSheet(fileName, sheetName, aoa){
   const rows=aoa.map(row=>row.map(v=>cleanText(v)));
+  const single=parseTeimorSingleConcept(rows,fileName,sheetName);
+  if(single.length) return single;
   const mapped = parseWithHeader(rows, fileName, sheetName);
   if(mapped.length) return mapped;
   return parseFallback(rows, fileName, sheetName);
+}
+function findLabelRow(rows, labels){
+  const labs=labels.map(strip);
+  for(let i=0;i<rows.length;i++){
+    const hit=rows[i].find(c=>labs.includes(strip(c).replace(/:$/,'')) || labs.some(l=>strip(c).startsWith(l+':')));
+    if(hit) return i;
+  }
+  return -1;
+}
+function rowValueAfterLabel(row, labels){
+  const labs=labels.map(strip);
+  for(let i=0;i<row.length;i++){
+    const c=row[i]; const sc=strip(c).replace(/:$/,'');
+    if(labs.includes(sc) || labs.some(l=>strip(c).startsWith(l+':'))){
+      if(String(c).includes(':')){ const v=String(c).split(':').slice(1).join(':').trim(); if(v) return v; }
+      return row.slice(i+1).find(x=>cleanText(x)) || '';
+    }
+  }
+  return '';
+}
+function parseMeasurement(text){
+  const s=String(text||'');
+  const m=s.match(/([0-9]+(?:[\.,][0-9]+)?)\s*(m²|m2|m³|m3|ml|m|ut|ud|uds|kg|pa|h|dia|dies)/i);
+  if(!m) return {qty:'', unit:''};
+  return {qty:num(m[1]), unit:m[2].replace('m2','m²').replace('m3','m³')};
+}
+function parseTeimorSingleConcept(rows,fileName,sheetName){
+  const conceptRow=findLabelRow(rows,['concepte','concepto']);
+  const medRow=findLabelRow(rows,['medicio','medición','medicion','medició']);
+  const worksRow=findLabelRow(rows,['treballs','trabajos']);
+  const baseRow=rows.findIndex(r=>strip(r.join(' ')).includes('base imposable') || strip(r.join(' ')).includes('base imponible'));
+  if(conceptRow<0 || (medRow<0 && baseRow<0)) return [];
+  const concept=rowValueAfterLabel(rows[conceptRow],['concepte','concepto']) || longestText(rows[conceptRow]);
+  let medText=medRow>=0 ? rowValueAfterLabel(rows[medRow],['medicio','medición','medicion','medició']) || rows[medRow].join(' ') : '';
+  const {qty,unit}=parseMeasurement(medText);
+  let longParts=[];
+  if(worksRow>=0){
+    const end = baseRow>worksRow ? baseRow : Math.min(rows.length, worksRow+18);
+    for(let i=worksRow;i<end;i++){
+      const row=rows[i].filter(Boolean);
+      const text=row.filter(c=>!isNonRecipientText(c) && !isTeimorText(c)).join(' ').trim();
+      if(text && !/^treballs$/i.test(text)) longParts.push(text);
+    }
+  }
+  const total = baseRow>=0 ? Math.max(...rows[baseRow].map(num),0) : 0;
+  let pu = qty && total ? total/qty : 0;
+  const status = unit && qty && pu ? 'PU calculat des de amidament + total pendent validar' : (total ? 'Històrica sense amidament' : 'Importada pendent de revisar');
+  return [makeItem({code:'',chapter:'',unit,desc:concept||'Partida importada TEIMOR',qty,pu,total,status,fileName,sheetName,longDescOverride:longParts.join('\n') || concept})];
 }
 function headerMap(row){
   const map={};
@@ -718,16 +861,20 @@ function headerMap(row){
     if(/^(codi|codigo|cod|partida|item)$/.test(s)) map.code=i;
     if(/(concepte|concepto|descripcio|descripcion|partida|detalle)/.test(s)) map.desc=i;
     if(/^(ut|ud|uds|unitat|unidad|u\.?m\.?)$/.test(s)) map.unit=i;
-    if(/(quantitat|cantidad|amidament|medicio|medicion|med\.?) /.test(s) || /^(quantitat|cantidad|amidament|medicio|medicion)$/.test(s)) map.qty=i;
-    if(/(preu|precio).*(ut|unit|unitari|unitario)|p\.u\.|pu|preu\/ut|precio\/ud/.test(s)) map.pu=i;
+    if(/(quantitat|cantidad|amidament|medicio|medicion|med\.?)/.test(s) || /^(quantitat|cantidad|amidament|medicio|medicion)$/.test(s)) map.qty=i;
+    if(/(preu|precio).*(ut|unit|unitari|unitario)|p\.?u\.?|pu|preu\/ut|precio\/ud/.test(s)) map.pu=i;
     if(/^(import|importe|total|subtotal)$/.test(s) || /(import|importe|total)/.test(s)) map.total=i;
     if(/capitol|capitulo|chapter/.test(s)) map.chapter=i;
   });
   return map;
 }
+function isNonItemLine(line){
+  const sl=strip(line);
+  return !sl || /teimor|teixidor|mora|marçal|trinxeria|www\.teimor|info@teimor|base imposable|base imponible|iva|exclos|excl[oò]s|forma de pago|condicions|condiciones|data:|fecha:|pressupost$|presupuesto$|obra$|concepte$|concepto$|medicio$|medición$|treballs$|trabajos$/.test(sl);
+}
 function parseWithHeader(rows,fileName,sheetName){
   let start=-1, map={};
-  for(let i=0;i<Math.min(rows.length,80);i++){
+  for(let i=0;i<Math.min(rows.length,100);i++){
     const m=headerMap(rows[i]);
     const score=['desc','unit','qty','pu','total'].filter(k=>m[k]!==undefined).length;
     if(score>=3 && (m.desc!==undefined || m.total!==undefined)){ start=i+1; map=m; break; }
@@ -737,18 +884,18 @@ function parseWithHeader(rows,fileName,sheetName){
   for(let i=start;i<rows.length;i++){
     const row=rows[i]; if(!row.some(Boolean)) continue;
     const lineText=row.join(' '); const sline=strip(lineText);
-    if(/total\s+(pressupost|presupuesto|general)|iva|base imposable|base imponible/.test(sline)) continue;
-    const numbers=row.map(num).filter(x=>x!==0);
-    if(numbers.length===0 && lineText.length>3){ chapter=cleanText(lineText); continue; }
+    if(isNonItemLine(lineText)) continue;
     const desc=cell(row,map.desc) || longestText(row);
-    if(!desc || desc.length<3) continue;
+    if(!desc || desc.length<3 || isTeimorText(desc)) continue;
     const unit=cell(row,map.unit) || detectUnit(row);
     const qty=num(cell(row,map.qty)); let pu=num(cell(row,map.pu)); let total=num(cell(row,map.total));
     const code=cell(row,map.code) || '';
-    const status = classifyItem(unit, qty, pu, total, desc);
+    const numbers=row.map(num).filter(x=>x!==0);
+    if(numbers.length===0 && lineText.length>3){ chapter=cleanText(lineText); continue; }
     if(!pu && qty && total){ pu=total/qty; }
     if(!total && qty && pu){ total=qty*pu; }
-    if(total || pu || qty || desc.length>10) items.push(makeItem({code,chapter:cell(row,map.chapter)||chapter,unit,desc,qty,pu,total,status,fileName,sheetName}));
+    const status = classifyItem(unit, qty, pu, total, desc);
+    if(total || pu || qty || (unit && desc.length>10)) items.push(makeItem({code,chapter:cell(row,map.chapter)||chapter,unit,desc,qty,pu,total,status,fileName,sheetName}));
   }
   return items;
 }
@@ -757,13 +904,15 @@ function parseFallback(rows,fileName,sheetName){
   for(let i=0;i<rows.length;i++){
     const row=rows[i].filter(Boolean); if(!row.length) continue;
     const line=row.join(' '); const sl=strip(line);
-    if(/teimor|teixidor|total\s+(pressupost|presupuesto)|base imposable|iva|forma de pago|condicions/.test(sl)) continue;
-    const numericCells=row.map((c,idx)=>({idx,value:num(c),raw:c})).filter(x=>x.value!==0 && !/[a-zA-ZÀ-ÿ]{3,}/.test(String(x.raw)));
-    const textCells=row.filter(c=>strip(c) && num(c)===0);
+    if(isNonItemLine(line) || row.some(isTeimorText)) continue;
+    const unit=detectUnit(row);
+    const numericCells=row.map((c,idx)=>({idx,value:num(c),raw:c})).filter(x=>x.value!==0 && !/[a-zA-ZÀ-ÿ]{3,}/.test(String(x.raw)) && !/\d{4}[-\/]\d{1,2}[-\/]\d{1,2}/.test(String(x.raw)));
+    const textCells=row.filter(c=>strip(c) && num(c)===0 && !isNonRecipientText(c));
     if(numericCells.length===0 && textCells.length && line.length<80 && line===line.toUpperCase()){ chapter=line; continue; }
     if(!textCells.length && numericCells.length<1) continue;
-    let desc=longestText(row); if(!desc || desc.length<6) continue;
-    const unit=detectUnit(row);
+    let desc=longestText(row); if(!desc || desc.length<8 || looksLikeAddress(desc)) continue;
+    // Només acceptem fallback si hi ha unitat explícita o prou informació econòmica, evitant clients/contactes.
+    if(!unit && numericCells.length<2) continue;
     let qty=0, pu=0, total=0;
     const nums=numericCells.map(x=>x.value);
     if(nums.length>=3){ qty=nums[nums.length-3]; pu=nums[nums.length-2]; total=nums[nums.length-1]; }
@@ -786,8 +935,8 @@ function classifyItem(unit,qty,pu,total,desc){
   if(/preu alçat|precio alzado|pa\b/i.test(desc)) return 'PA pendent amidament';
   return 'Importada pendent de revisar';
 }
-function makeItem({code,chapter,unit,desc,qty,pu,total,status,fileName,sheetName}){
-  const longDesc=cleanText(desc);
+function makeItem({code,chapter,unit,desc,qty,pu,total,status,fileName,sheetName,longDescOverride}){
+  const longDesc=cleanText(longDescOverride || desc);
   const concept=longDesc.length>140 ? longDesc.slice(0,137)+'...' : longDesc;
   return {code:code||'',chapter:chapter||'',unit:unit||'',concept,longDesc,qty:qty||'',unitPrice:pu||'',total:total||'',status,origin:`${fileName} · ${sheetName}`,source:fileName,decomp:[]};
 }
