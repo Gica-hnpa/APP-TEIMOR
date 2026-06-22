@@ -1,11 +1,11 @@
-/* TEIMOR · Gestor de pressupostos v04
+/* TEIMOR · Gestor de pressupostos v05
    App estàtica: les dades importades d'Excel/ZIP es llegeixen al navegador i es guarden localment.
 */
-const STORE_KEY = 'teimor_gestor_pressupostos_v04';
-const LEGACY_STORE_KEY = 'teimor_gestor_pressupostos_v03';
-const AUTH_KEY = 'teimor_auth_v04';
-const LEGACY_AUTH_KEY = 'teimor_auth_v03';
-const DB_NAME = 'teimor_attachments_v04';
+const STORE_KEY = 'teimor_gestor_pressupostos_v05';
+const LEGACY_STORE_KEY = ''; // No carreguem automàticament dades antigues per evitar arrossegar imports bruts de prova.
+const AUTH_KEY = 'teimor_auth_v05';
+const LEGACY_AUTH_KEY = 'teimor_auth_v04';
+const DB_NAME = 'teimor_attachments_v05';
 const DB_STORE = 'files';
 const DEFAULT_USER = 'admin';
 const DEFAULT_PASS = 'teimor2026';
@@ -15,6 +15,7 @@ const uid = (prefix='ID') => `${prefix}-${Date.now().toString(36)}-${Math.random
 const esc = v => String(v ?? '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[s]));
 const strip = s => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
 const cleanText = s => String(s ?? '').replace(/\s+/g,' ').trim();
+const cleanLongText = s => String(s ?? '').replace(/\r/g,'').split(/\n+/).map(x=>cleanText(x)).filter(Boolean).join('\n');
 const money = v => new Intl.NumberFormat('ca-ES',{style:'currency',currency:'EUR'}).format(num(v));
 const num = v => {
   if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
@@ -38,7 +39,7 @@ const normKey = s => strip(s).replace(/[^a-z0-9]+/g,' ').trim();
 
 function defaultData(){
   return {
-    meta:{version:'4.0.0',createdAt:today(),updatedAt:today()},
+    meta:{version:'5.0.0',createdAt:today(),updatedAt:today()},
     settings:{
       appName:'TEIMOR · Base de dades de pressupostos',
       loginUser:DEFAULT_USER,
@@ -82,8 +83,7 @@ let state = {view:'dashboard', selectedBudgetId:data.budgets[0]?.id || '', selec
 function loadData(){
   try {
     const current = localStorage.getItem(STORE_KEY);
-    const legacy = localStorage.getItem(LEGACY_STORE_KEY);
-    const parsed = JSON.parse(current || legacy || 'null');
+    const parsed = JSON.parse(current || 'null');
     if(parsed){ parsed.meta = parsed.meta || {}; parsed.meta.version = parsed.meta.version || 'importada'; return parsed; }
     return defaultData();
   } catch { return defaultData(); }
@@ -159,7 +159,7 @@ function setHeader(title, subtitle){ document.getElementById('viewTitle').textCo
 function setContent(html){ document.getElementById('content').innerHTML=html; bindViewEvents(); }
 function render(){
   document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('active', b.dataset.view===state.view));
-  const views={dashboard:renderDashboard,clients:renderClients,jobs:renderJobs,library:renderLibrary,budgets:renderBudgets,invoices:renderInvoices,performance:renderPerformance,attachments:renderAttachments,importer:renderImporter,settings:renderSettings};
+  const views={dashboard:renderDashboard,clients:renderClients,library:renderLibrary,budgets:renderBudgets,invoices:renderInvoices,performance:renderPerformance,attachments:renderAttachments,importer:renderImporter,settings:renderSettings};
   (views[state.view]||renderDashboard)();
 }
 function empty(msg='Encara no hi ha dades.'){ return `<div class="empty">${esc(msg)}</div>`; }
@@ -168,30 +168,30 @@ function table(headers, rows){
   return `<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
 }
 function renderDashboard(){
-  setHeader('Inici','Resum de clients, feines, pressupostos, factures, rendiment i importació local.');
-  const totalB=data.budgets.reduce((s,b)=>s+budgetBase(b),0), totalI=data.invoices.reduce((s,i)=>s+invoiceTotal(i),0);
+  setHeader('Inici','Resum de clients, pressupostos, llibreria, factures, rendiment i importació local. La pestanya Feines s’ha integrat dins Pressupostos per evitar repeticions.');
+  const totalB=data.budgets.reduce((sum,b)=>sum+budgetBase(b),0), totalI=data.invoices.reduce((sum,i)=>sum+invoiceTotal(i),0);
   const valid=data.library.filter(x=>strip(x.status).includes('valid')).length;
   const hist=data.library.filter(x=>strip(x.status).includes('historic') || strip(x.status).includes('sense')).length;
-  const lastJobs=[...data.jobs].sort((a,b)=>Number(b.year)-Number(a.year)).slice(0,8);
+  const lastBudgets=[...data.budgets].sort((a,b)=>(String(b.date||'').localeCompare(String(a.date||'')) || String(b.number||'').localeCompare(String(a.number||'')))).slice(0,8);
   setContent(`
     <div class="grid four">
       <div class="kpi"><span>Clients finals</span><strong>${data.clients.length}</strong></div>
-      <div class="kpi"><span>Feines / obres</span><strong>${data.jobs.length}</strong></div>
-      <div class="kpi"><span>Pressupostat base</span><strong>${money(totalB)}</strong></div>
-      <div class="kpi ${totalB-totalI>=0?'good':'bad'}"><span>Rendiment base - factures</span><strong>${money(totalB-totalI)}</strong></div>
+      <div class="kpi"><span>Pressupostos</span><strong>${data.budgets.length}</strong></div>
+      <div class="kpi"><span>Partides llibreria</span><strong>${data.library.length}</strong></div>
+      <div class="kpi ${totalB-totalI>=0?'good':'bad'}"><span>Diferència pressupostat s/IVA - facturat</span><strong>${money(totalB-totalI)}</strong></div>
     </div>
-    <div class="card notice-blue"><strong>Funcionament de privacitat:</strong> quan importis Excel o ZIP des d’aquesta app, el navegador els llegeix localment. Els originals no es pugen ni a Render ni a GitHub. Si exportes un JSON complet, aquest JSON sí que contindrà les dades que li vulguis passar a TEIMOR.</div>
+    <div class="card notice-blue"><strong>Funcionament de privacitat:</strong> quan importis Excel, carpeta o ZIP des d’aquesta app, el navegador els llegeix localment. Els originals no es pugen ni a Render ni a GitHub. Si exportes un JSON complet, aquest JSON sí que contindrà les dades que li vulguis passar a TEIMOR.</div>
     <div class="grid three">
+      <div class="card"><h2>Pressupostos</h2><p>Llistat únic per any, client, obra, estat i imports.</p><button class="primary" data-go="budgets">Obrir pressupostos</button></div>
       <div class="card"><h2>Llibreria</h2><p><strong>${data.library.length}</strong> partides totals.</p><p>${valid} validades · ${hist} històriques/pendents.</p><button class="primary" data-go="library">Obrir llibreria</button></div>
       <div class="card"><h2>Importació massiva</h2><p>Pots seleccionar molts Excels, una carpeta o un ZIP amb pressupostos antics.</p><button class="primary" data-go="importer">Importar pressupostos</button></div>
-      <div class="card"><h2>Còpia transferible</h2><p>Exporta un JSON complet perquè TEIMOR vegi la mateixa base que tu.</p><button class="ghost" id="dashExport">Exportar JSON complet</button></div>
     </div>
-    <div class="card"><h2>Últimes feines</h2>${jobsTable(lastJobs)}</div>
+    <div class="card"><h2>Últims pressupostos</h2>${budgetsTable(lastBudgets)}</div>
   `);
 }
 function clientsTable(rows=data.clients){
-  return table(['Client','NIF/DNI/CIF','Contacte','Telèfon','Email','Adreça obra','Estat','Accions'], rows.map(c=>`
-    <tr><td><strong>${esc(c.name)}</strong><br><span class="muted">${esc(c.id)}</span></td><td>${esc(c.nif||'')}</td><td>${esc(c.contact||'')}</td><td>${esc(c.phone||'')}</td><td>${esc(c.email||'')}</td><td>${esc(c.workAddress||c.fiscalAddress||'')}</td><td>${statusPill(c.status||'Actiu')}</td><td class="nowrap"><button class="ghost small" data-edit-client="${esc(c.id)}">Editar</button> <button class="danger small" data-delete-client="${esc(c.id)}">Eliminar</button></td></tr>`));
+  return table(['Sel.','Client','NIF/DNI/CIF','Contacte','Telèfon','Email','Adreça obra','Estat','Accions'], rows.map(c=>`
+    <tr><td><input type="checkbox" class="select-client" value="${esc(c.id)}"></td><td><strong>${esc(c.name)}</strong><br><span class="muted">${esc(c.id)}</span></td><td>${esc(c.nif||'')}</td><td>${esc(c.contact||'')}</td><td>${esc(c.phone||'')}</td><td>${esc(c.email||'')}</td><td>${esc(c.workAddress||c.fiscalAddress||'')}</td><td>${statusPill(c.status||'Actiu')}</td><td class="nowrap"><button class="ghost small" data-edit-client="${esc(c.id)}">Editar</button> <button class="danger small" data-delete-client="${esc(c.id)}">Eliminar</button></td></tr>`));
 }
 function renderClients(editId=''){
   setHeader('Clients','Llistat principal de clients finals detectats al requadre del pressupost, amb filtres intel·ligents i fitxa editable.');
@@ -226,11 +226,11 @@ function renderClients(editId=''){
       <div class="kpi"><span>Clients finals</span><strong>${data.clients.length}</strong></div>
       <div class="kpi"><span>Amb NIF/DNI/CIF</span><strong>${data.clients.filter(c=>c.nif).length}</strong></div>
       <div class="kpi"><span>Amb telèfon/email</span><strong>${data.clients.filter(c=>c.phone||c.email).length}</strong></div>
-      <div class="kpi"><span>Feines vinculades</span><strong>${data.jobs.length}</strong></div>
+      <div class="kpi"><span>Pressupostos vinculats</span><strong>${data.budgets.length}</strong></div>
     </div>
     <div class="card"><div class="toolbar">
       <div class="left"><h2>Llistat de clients</h2></div>
-      <div class="right"><button class="primary" id="newClientBtn">+ Nou client</button></div>
+      <div class="right"><button class="danger" id="deleteSelectedClients">Eliminar seleccionats</button><button class="primary" id="newClientBtn">+ Nou client</button></div>
     </div>
     <div class="filter-grid">
       <label>Cerca intel·ligent<input id="clientSearch" placeholder="Escriu lletres del nom, NIF, telèfon, email, obra..."></label>
@@ -289,63 +289,122 @@ function renderJobs(editId=''){
   `);
 }
 function renderLibrary(){
-  setHeader('Llibreria de partides','Partides tipus BEDEC: codi, unitat, descripció curta/llarga, PU, estat i descompost vinculat.');
+  setHeader('Llibreria de partides','Llibreria tipus BEDEC amb filtre per capítol. El llistat mostra text curt; clicant “Veure / editar” s’obre la fitxa completa i el descompost estructurat.');
   const q=state.libSearch || '';
   const filter=strip(q);
-  const rows=data.library.filter(x=>!filter || strip([x.code,x.chapter,x.unit,x.concept,x.longDesc,x.status,x.origin].join(' ')).includes(filter));
+  const chapters=[...new Set(data.library.map(x=>x.chapter||'Sense capítol').filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const chapter=state.libChapterFilter || '';
+  const rows=data.library.filter(x=>{
+    const chapterOk=!chapter || (x.chapter||'Sense capítol')===chapter;
+    const searchOk=!filter || strip([x.code,x.chapter,x.unit,x.concept,x.longDesc,x.status,x.origin].join(' ')).includes(filter);
+    return chapterOk && searchOk;
+  });
   setContent(`
     <div class="card">
-      <div class="toolbar"><h2>Llibreria</h2><div class="right"><input id="libSearch" placeholder="Cercar partida..." value="${esc(q)}"><button class="primary" id="newLibItem">Nova partida</button></div></div>
-      ${libraryTable(rows)}
+      <div class="toolbar"><h2>Llibreria</h2><div class="right"><button class="danger" id="deleteSelectedLibrary">Eliminar seleccionades</button><button class="primary" id="newLibItem">Nova partida</button></div></div>
+      <div class="filter-grid">
+        <label>Cerca<input id="libSearch" placeholder="Cercar partida, codi, origen..." value="${esc(q)}"></label>
+        <label>Capítol<select id="libChapterFilter"><option value="">Tots els capítols</option>${chapters.map(c=>`<option value="${esc(c)}" ${c===chapter?'selected':''}>${esc(c)}</option>`).join('')}</select></label>
+        <label>Estat<select id="libStatusFilter"><option value="">Tots</option><option>Validada</option><option>Importada pendent de revisar</option><option>Històrica sense amidament</option><option>PA pendent amidament</option></select></label>
+        <label>Resultats<input readonly value="${rows.length} de ${data.library.length}"></label>
+      </div>
+      <div id="libraryTable">${libraryTable(rows)}</div>
     </div>
   `);
 }
 function libraryTable(rows){
-  return table(['Codi','Capítol','Ut','Descripció','PU final','Estat','Origen','Accions'], rows.map(item=>`
+  const statusFilter=strip(document.getElementById('libStatusFilter')?.value || state.libStatusFilter || '');
+  if(statusFilter) rows=rows.filter(x=>strip(x.status||'').includes(statusFilter));
+  return table(['Sel.','Codi','Capítol','Ut','Descripció curta','PU final','Estat','Origen','Accions'], rows.map(item=>`
     <tr>
+      <td><input type="checkbox" class="select-library" value="${esc(item.id)}"></td>
       <td><strong>${esc(item.code||'')}</strong></td>
-      <td>${esc(item.chapter||'')}</td>
+      <td>${esc(item.chapter||'Sense capítol')}</td>
       <td>${esc(item.unit||'')}</td>
-      <td><strong>${esc(item.concept||'')}</strong><div class="long muted">${esc(item.longDesc||'')}</div></td>
+      <td><button class="linklike" data-view-lib="${esc(item.id)}"><strong>${esc(item.concept||'')}</strong></button></td>
       <td class="num">${money(item.unitPrice || libFinal(item))}</td>
       <td>${statusPill(item.status||'Pendent')}</td>
       <td>${esc(item.origin||'')}</td>
       <td class="nowrap"><button class="ghost small" data-view-lib="${esc(item.id)}">Veure / editar</button> <button class="danger small" data-delete-lib="${esc(item.id)}">Eliminar</button></td>
     </tr>`));
 }
+function decompSummary(lines=[]){ return (lines||[]).reduce((s,l)=>s+num(l.yield)*num(l.price),0); }
+function decompBedecRows(lines=[]){
+  const groups=['Mà d’obra','Material','Maquinària','Altres'];
+  let html='';
+  for(const g of groups){
+    const rows=(lines||[]).filter(l=>(l.type||'Altres')===g);
+    if(!rows.length) continue;
+    const subtotal=rows.reduce((s,l)=>s+num(l.yield)*num(l.price),0);
+    html+=`<tr class="group-row"><td colspan="6"><strong>${esc(g)}</strong></td><td class="num"><strong>${money(subtotal)}</strong></td><td></td></tr>`;
+    html+=rows.map((l,idx)=>decompRow(l, `${g}_${idx}`)).join('');
+  }
+  return html;
+}
 function openLibModal(id=''){
   const item = id ? byId(data.library,id) : {id:uid('LIB'), ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, decomp:[], status:'Pendent de revisar'};
   const lines = item.decomp || [];
+  const cd = libDirect(item);
+  const final = item.unitPrice || libFinal(item);
   openModal(`
-    <h2>${id?'Editar partida':'Nova partida de llibreria'}</h2>
-    <form id="libForm" class="form-grid">
+    <h2>${id?'Fitxa de partida':'Nova partida de llibreria'}</h2>
+    <form id="libForm" class="form-grid lib-modal-form">
       <input type="hidden" name="editId" value="${esc(id)}"><input type="hidden" name="id" value="${esc(item.id)}">
-      <label>Codi<input name="code" value="${esc(item.code||'')}"></label>
-      <label>Capítol<input name="chapter" value="${esc(item.chapter||'')}"></label>
-      <label>Unitat<input name="unit" value="${esc(item.unit||'')}"></label>
-      <label>Estat<select name="status">
-        ${['Validada','Validada pendent revisió','Importada pendent de revisar','Històrica sense amidament','PA pendent amidament','Duplicada possible'].map(s=>`<option ${item.status===s?'selected':''}>${s}</option>`).join('')}
-      </select></label>
-      <label class="wide">Descripció curta<input name="concept" value="${esc(item.concept||'')}"></label>
-      <label>Cost directe<input name="directCost" type="number" step="0.01" value="${esc(item.directCost||'')}"></label>
-      <label>PU final històric<input name="unitPrice" type="number" step="0.01" value="${esc(item.unitPrice||'')}"></label>
-      <label class="full">Descripció llarga<textarea name="longDesc">${esc(item.longDesc||'')}</textarea></label>
-      <label>CI %<input name="ci" type="number" step="0.01" value="${esc(item.ci ?? data.settings.defaultCI)}"></label>
-      <label>DGE %<input name="dge" type="number" step="0.01" value="${esc(item.dge ?? data.settings.defaultDGE)}"></label>
-      <label>BI %<input name="bi" type="number" step="0.01" value="${esc(item.bi ?? data.settings.defaultBI)}"></label>
-      <label>Origen<input name="origin" value="${esc(item.origin||'Manual')}"></label>
-      <div class="full detail-box"><h3>Descompost vinculat</h3>
-        <div class="table-wrap"><table id="decompTable"><thead><tr><th>Tipus</th><th>Recurs</th><th>Ut</th><th>Rendiment</th><th>Preu</th><th>Total CD</th><th></th></tr></thead><tbody>
-          ${lines.map((l,i)=>decompRow(l,i)).join('')}
-        </tbody></table></div>
-        <div class="actions"><button class="ghost small" type="button" id="addDecompLine">Afegir línia</button><span class="muted">El cost directe és la suma rendiment × preu.</span></div>
+      <div class="full tabs-small modal-tabs">
+        <button type="button" class="active" data-modal-tab="fitxa">Fitxa</button>
+        <button type="button" data-modal-tab="descripcio">Descripció llarga</button>
+        <button type="button" data-modal-tab="descompost">Descompost BEDEC</button>
+        <button type="button" data-modal-tab="historic">Històric</button>
+      </div>
+      <div class="full modal-panel active" data-modal-panel="fitxa">
+        <div class="form-grid">
+          <label>Codi<input name="code" value="${esc(item.code||'')}"></label>
+          <label>Capítol<input name="chapter" value="${esc(item.chapter||'')}"></label>
+          <label>Unitat<input name="unit" value="${esc(item.unit||'')}"></label>
+          <label>Estat<select name="status">
+            ${['Validada','Validada pendent revisió','Importada pendent de revisar','Històrica sense amidament','PA pendent amidament','Duplicada possible'].map(s=>`<option ${item.status===s?'selected':''}>${s}</option>`).join('')}
+          </select></label>
+          <label class="wide">Descripció curta<input name="concept" value="${esc(item.concept||'')}"></label>
+          <label>Cost directe<input name="directCost" type="number" step="0.01" value="${esc(item.directCost||'')}"></label>
+          <label>PU final històric<input name="unitPrice" type="number" step="0.01" value="${esc(item.unitPrice||'')}"></label>
+          <label>CI %<input name="ci" type="number" step="0.01" value="${esc(item.ci ?? data.settings.defaultCI)}"></label>
+          <label>DGE %<input name="dge" type="number" step="0.01" value="${esc(item.dge ?? data.settings.defaultDGE)}"></label>
+          <label>BI %<input name="bi" type="number" step="0.01" value="${esc(item.bi ?? data.settings.defaultBI)}"></label>
+          <label class="wide">Origen<input name="origin" value="${esc(item.origin||'Manual')}"></label>
+        </div>
+        <div class="grid three" style="margin-top:12px">
+          <div class="kpi"><span>Cost directe calculat</span><strong>${money(cd)}</strong></div>
+          <div class="kpi"><span>PU final / històric</span><strong>${money(final)}</strong></div>
+          <div class="kpi"><span>Línies descompost</span><strong>${lines.length}</strong></div>
+        </div>
+      </div>
+      <div class="full modal-panel" data-modal-panel="descripcio">
+        <label class="full">Descripció llarga<textarea name="longDesc" class="large-textarea">${esc(item.longDesc||'')}</textarea></label>
+        <div class="detail-box"><h3>Vista llegible</h3><pre class="desc-preview">${esc(item.longDesc||'Sense descripció llarga.')}</pre></div>
+      </div>
+      <div class="full modal-panel" data-modal-panel="descompost">
+        <div class="detail-box"><div class="toolbar"><h3>Descompost BEDEC estructurat</h3><button class="ghost small" type="button" id="addDecompLine">Afegir línia</button></div>
+          <div class="table-wrap"><table id="decompTable" class="bedec-table"><thead><tr><th>Tipus</th><th>Recurs</th><th>Ut</th><th>Rendiment</th><th>Preu</th><th>Fórmula</th><th>Total CD</th><th></th></tr></thead><tbody>
+            ${lines.length ? lines.map((l,i)=>decompRow(l,i)).join('') : ''}
+          </tbody><tfoot><tr><td colspan="6" class="num"><strong>Cost directe</strong></td><td class="num"><strong>${money(decompSummary(lines))}</strong></td><td></td></tr></tfoot></table></div>
+          <p class="small-text">El cost directe és rendiment × preu. Els percentatges CI, DGE i BI poden variar per pressupost.</p>
+        </div>
+      </div>
+      <div class="full modal-panel" data-modal-panel="historic">
+        ${libraryHistoryTable(item)}
       </div>
       <div class="actions full"><button class="primary">Guardar partida</button><button class="ghost" type="button" id="closeModalBtn">Cancel·lar</button></div>
     </form>
   `);
 }
+function libraryHistoryTable(item){
+  const rows=item.history||[];
+  if(!rows.length) return empty('Sense històric encara.');
+  return table(['Data','Origen','Quantitat','PU','Total','Estat'], rows.map(h=>`<tr><td>${esc(h.date||'')}</td><td>${esc(h.origin||'')}</td><td class="num">${h.qty?num(h.qty).toFixed(3):''}</td><td class="num">${h.unitPrice?money(h.unitPrice):''}</td><td class="num">${h.total?money(h.total):''}</td><td>${statusPill(h.status||'')}</td></tr>`));
+}
 function decompRow(l={},i=0){
-  return `<tr data-decomp-row><td><select name="type_${i}">${['Mà d’obra','Material','Maquinària','Altres'].map(t=>`<option ${l.type===t?'selected':''}>${t}</option>`).join('')}</select></td><td><input name="name_${i}" value="${esc(l.name||'')}"></td><td><input name="unit_${i}" value="${esc(l.unit||'')}"></td><td><input name="yield_${i}" type="number" step="0.0001" value="${esc(l.yield||'')}"></td><td><input name="price_${i}" type="number" step="0.01" value="${esc(l.price||'')}"></td><td class="num">${money(num(l.yield)*num(l.price))}</td><td><button class="danger small" type="button" data-remove-decomp>×</button></td></tr>`;
+  const rowId=String(i).replace(/[^a-zA-Z0-9_]/g,'_');
+  return `<tr data-decomp-row><td><select name="type_${rowId}">${['Mà d’obra','Material','Maquinària','Altres'].map(t=>`<option ${l.type===t?'selected':''}>${t}</option>`).join('')}</select></td><td><input name="name_${rowId}" value="${esc(l.name||'')}"></td><td><input name="unit_${rowId}" value="${esc(l.unit||'')}"></td><td><input name="yield_${rowId}" type="number" step="0.0001" value="${esc(l.yield||'')}"></td><td><input name="price_${rowId}" type="number" step="0.01" value="${esc(l.price||'')}"></td><td class="small-text">rend. × preu</td><td class="num">${money(num(l.yield)*num(l.price))}</td><td><button class="danger small" type="button" data-remove-decomp>×</button></td></tr>`;
 }
 
 function budgetStatusOptions(current=''){
@@ -371,8 +430,9 @@ function budgetRowsFiltered(){
   }).sort((a,b)=>(String(b.date||'').localeCompare(String(a.date||'')) || String(b.number||'').localeCompare(String(a.number||''))));
 }
 function budgetsTable(rows){
-  return table(['Any','Data','Núm.','Client','Feina / obra','Estat','Base','Total IVA incl.','Partides','Accions'], rows.map(b=>`
+  return table(['Sel.','Any','Data','Núm.','Client','Obra / feina','Estat','Import s/IVA','Total IVA incl.','Partides','Accions'], rows.map(b=>`
     <tr>
+      <td><input type="checkbox" class="select-budget" value="${esc(b.id)}"></td>
       <td>${esc(budgetYear(b)||'')}</td>
       <td>${esc(b.date||'')}</td>
       <td><strong>${esc(b.number||b.id)}</strong><br><span class="muted">${esc(b.source||'')}</span></td>
@@ -395,11 +455,11 @@ function renderBudgets(editId=''){
   setContent(`
     <div class="grid four">
       <div class="kpi"><span>Pressupostos</span><strong>${data.budgets.length}</strong></div>
-      <div class="kpi"><span>Base total</span><strong>${money(data.budgets.reduce((s,b)=>s+budgetBase(b),0))}</strong></div>
+      <div class="kpi"><span>Total pressupostos s/IVA</span><strong>${money(data.budgets.reduce((s,b)=>s+budgetBase(b),0))}</strong></div>
       <div class="kpi"><span>Acceptats / fets</span><strong>${data.budgets.filter(b=>strip(b.status).includes('acceptat')||strip(b.status).includes('fet')).length}</strong></div>
       <div class="kpi"><span>Rebutjats / anul·lats</span><strong>${data.budgets.filter(b=>strip(b.status).includes('rebutjat')||strip(b.status).includes('anul')).length}</strong></div>
     </div>
-    <div class="card"><div class="toolbar"><h2>Tots els pressupostos</h2><div class="right"><button class="primary" id="newBudgetBtn">+ Nou pressupost</button><button class="ghost" id="exportBudgetCsv">Exportar CSV del seleccionat</button></div></div>
+    <div class="card"><div class="toolbar"><h2>Tots els pressupostos</h2><div class="right"><button class="danger" id="deleteSelectedBudgets">Eliminar seleccionats</button><button class="primary" id="newBudgetBtn">+ Nou pressupost</button><button class="ghost" id="exportBudgetCsv">Exportar CSV del seleccionat</button></div></div>
       <div class="filter-grid">
         <label>Cerca<input id="budgetSearch" placeholder="Client, obra, núm., adreça, any..." value="${esc(state.budgetSearch||'')}"></label>
         <label>Any<select id="budgetYearFilter"><option value="">Tots</option>${years.map(y=>`<option value="${y}" ${String(y)===String(state.budgetYearFilter||'')?'selected':''}>${y}</option>`).join('')}</select></label>
@@ -443,9 +503,9 @@ function filterBudgets(){
   bindViewEvents();
 }
 function budgetLinesCard(b){
-  return `<div class="card"><div class="toolbar"><h2>Partides del pressupost</h2><div class="right"><button class="primary" id="addLineFromLibrary">Afegir de llibreria</button><button class="ghost" id="addManualLine">Afegir partida nova</button></div></div>
-    <div class="table-wrap budget-lines"><table><thead><tr><th>Codi</th><th>Ut</th><th>Concepte / descripció</th><th>Quantitat</th><th>Preu/ut</th><th>Total</th><th>Estat</th><th></th></tr></thead><tbody>${(b.lines||[]).map(l=>`
-      <tr><td><input data-line-field="code" data-line-id="${esc(l.id)}" value="${esc(l.code||'')}"></td><td><input data-line-field="unit" data-line-id="${esc(l.id)}" value="${esc(l.unit||'')}"></td><td><input data-line-field="concept" data-line-id="${esc(l.id)}" value="${esc(l.concept||'')}"><div class="long muted">${esc(l.longDesc||'')}</div></td><td><input class="num" data-line-field="qty" data-line-id="${esc(l.id)}" type="number" step="0.0001" value="${esc(l.qty||'')}"></td><td><input class="num" data-line-field="unitPrice" data-line-id="${esc(l.id)}" type="number" step="0.01" value="${esc(l.unitPrice||'')}"></td><td class="num"><strong>${money(lineTotal(l))}</strong></td><td>${statusPill(l.status||'')}</td><td><button class="danger small" data-delete-line="${esc(l.id)}">Eliminar</button></td></tr>`).join('')}</tbody></table></div>
+  return `<div class="card"><div class="toolbar"><h2>Partides del pressupost</h2><div class="right"><button class="danger" id="deleteSelectedBudgetLines">Eliminar línies seleccionades</button><button class="primary" id="addLineFromLibrary">Afegir de llibreria</button><button class="ghost" id="addManualLine">Afegir partida nova</button></div></div>
+    <div class="table-wrap budget-lines"><table><thead><tr><th>Sel.</th><th>Codi</th><th>Ut</th><th>Concepte / descripció</th><th>Quantitat</th><th>Preu/ut</th><th>Total</th><th>Estat</th><th></th></tr></thead><tbody>${(b.lines||[]).map(l=>`
+      <tr><td><input type="checkbox" class="select-budget-line" value="${esc(l.id)}"></td><td><input data-line-field="code" data-line-id="${esc(l.id)}" value="${esc(l.code||'')}"></td><td><input data-line-field="unit" data-line-id="${esc(l.id)}" value="${esc(l.unit||'')}"></td><td><input data-line-field="concept" data-line-id="${esc(l.id)}" value="${esc(l.concept||'')}"><div class="long muted">${esc(l.longDesc||'')}</div></td><td><input class="num" data-line-field="qty" data-line-id="${esc(l.id)}" type="number" step="0.0001" value="${esc(l.qty||'')}"></td><td><input class="num" data-line-field="unitPrice" data-line-id="${esc(l.id)}" type="number" step="0.01" value="${esc(l.unitPrice||'')}"></td><td class="num"><strong>${money(lineTotal(l))}</strong></td><td>${statusPill(l.status||'')}</td><td><button class="danger small" data-delete-line="${esc(l.id)}">Eliminar</button></td></tr>`).join('')}</tbody></table></div>
     <div class="budget-total"><div>Base: <strong>${money(budgetBase(b))}</strong></div><div>IVA: <strong>${money(budgetIVA(b))}</strong></div><div>Total: <strong>${money(budgetTotal(b))}</strong></div></div>
   </div>`;
 }
@@ -520,13 +580,13 @@ function renderImporter(){
   const ready = typeof XLSX !== 'undefined';
   setContent(`
     ${!ready?'<div class="card notice-red"><strong>Llibreria Excel no carregada.</strong> Comprova connexió o inclou SheetJS localment. Sense aquesta llibreria no es poden llegir .xls/.xlsx.</div>':''}
-    <div class="card notice-blue"><strong>Criteri d’importació V04:</strong> el client guardat és el del requadre/destinatari del pressupost, no TEIMOR. En pressupostos antics TEIMOR d’una sola partida, l’app crea una partida única amb CONCEPTE + TREBALLS + MEDICIÓ + BASE IMPOSABLE, i no barreja clients dins la llibreria.</div>
+    <div class="card notice-blue"><strong>Criteri d’importació V05:</strong> el client guardat és el del requadre/destinatari del pressupost, no TEIMOR. Les obres es veuen integrades dins la pestanya Pressupostos. En pressupostos antics TEIMOR d’una sola partida, l’app crea una partida única amb CONCEPTE + TREBALLS + MEDICIÓ + BASE IMPOSABLE, i no barreja clients dins la llibreria.</div>
     <div class="card"><div id="dropzone" class="dropzone">
       <h2>Importació massiva</h2><p>Arrossega aquí Excels o un ZIP, o fes servir els botons.</p>
       <div class="actions" style="justify-content:center">
         <label class="primary file-label">Seleccionar molts Excels<input id="excelInput" type="file" multiple accept=".xls,.xlsx,.xlsm,.csv" hidden></label>
         <label class="ghost file-label">Seleccionar carpeta<input id="folderInput" type="file" webkitdirectory directory multiple hidden></label>
-        <label class="ghost file-label">Importar ZIP / detectar RAR<input id="zipInput" type="file" accept=".zip,.rar" hidden></label>
+        <label class="ghost file-label">Importar ZIP / detectar RAR<input id="zipInput" type="file" accept=".zip,.rar,application/x-rar-compressed,application/vnd.rar" hidden></label>
       </div>
     </div></div>
     <div id="importPreview">${state.importDraft ? importPreviewHtml(state.importDraft) : '<div class="empty">Encara no has importat cap fitxer en aquesta sessió.</div>'}</div>
@@ -537,7 +597,7 @@ function importPreviewHtml(d){
     <div class="import-summary">
       <div class="import-card"><span>Fitxers llegits</span><strong>${d.files.length}</strong></div>
       <div class="import-card"><span>Clients detectats</span><strong>${d.clients.length}</strong></div>
-      <div class="import-card"><span>Feines</span><strong>${d.jobs.length}</strong></div>
+      <div class="import-card"><span>Obres internes</span><strong>${d.jobs.length}</strong></div>
       <div class="import-card"><span>Pressupostos</span><strong>${d.budgets.length}</strong></div>
       <div class="import-card"><span>Partides</span><strong>${d.items.length}</strong></div>
     </div>
@@ -586,6 +646,7 @@ function bindViewEvents(){
   ['clientSearch','clientYearFilter','clientCityFilter','clientStatusFilter'].forEach(id=>{ const el=document.getElementById(id); if(el) el.oninput=filterClients; if(el) el.onchange=filterClients; });
   document.querySelectorAll('[data-edit-client]').forEach(b=>b.onclick=()=>renderClients(b.dataset.editClient));
   document.querySelectorAll('[data-delete-client]').forEach(b=>b.onclick=()=>deleteClient(b.dataset.deleteClient));
+  const delSelClients=document.getElementById('deleteSelectedClients'); if(delSelClients) delSelClients.onclick=deleteSelectedClients;
   document.querySelectorAll('[data-render-clients]').forEach(b=>b.onclick=()=>renderClients());
 
   const jobForm=document.getElementById('jobForm'); if(jobForm) jobForm.onsubmit=saveJob;
@@ -595,6 +656,9 @@ function bindViewEvents(){
   document.querySelectorAll('[data-render-jobs]').forEach(b=>b.onclick=()=>renderJobs());
 
   const libSearch=document.getElementById('libSearch'); if(libSearch) libSearch.oninput=e=>{ state.libSearch=e.target.value; renderLibrary(); };
+  const libChapter=document.getElementById('libChapterFilter'); if(libChapter) libChapter.onchange=e=>{ state.libChapterFilter=e.target.value; renderLibrary(); };
+  const libStatus=document.getElementById('libStatusFilter'); if(libStatus) libStatus.onchange=e=>{ state.libStatusFilter=e.target.value; renderLibrary(); };
+  const delSelLib=document.getElementById('deleteSelectedLibrary'); if(delSelLib) delSelLib.onclick=deleteSelectedLibrary;
   const newLib=document.getElementById('newLibItem'); if(newLib) newLib.onclick=()=>openLibModal('');
   document.querySelectorAll('[data-view-lib]').forEach(b=>b.onclick=()=>openLibModal(b.dataset.viewLib));
   document.querySelectorAll('[data-delete-lib]').forEach(b=>b.onclick=()=>deleteLibraryItem(b.dataset.deleteLib));
@@ -604,6 +668,7 @@ function bindViewEvents(){
   ['budgetSearch','budgetYearFilter','budgetClientFilter','budgetStatusFilter'].forEach(id=>{ const el=document.getElementById(id); if(el) el.oninput=filterBudgets; if(el) el.onchange=filterBudgets; });
   document.querySelectorAll('[data-edit-budget]').forEach(b=>b.onclick=()=>{ state.editBudgetId=b.dataset.editBudget; state.selectedBudgetId=b.dataset.editBudget; renderBudgets(b.dataset.editBudget); });
   document.querySelectorAll('[data-delete-budget]').forEach(b=>b.onclick=()=>deleteBudget(b.dataset.deleteBudget));
+  const delSelBudgets=document.getElementById('deleteSelectedBudgets'); if(delSelBudgets) delSelBudgets.onclick=deleteSelectedBudgets;
   document.querySelectorAll('[data-budget-status]').forEach(sel=>sel.onchange=e=>updateBudgetStatus(e.target.dataset.budgetStatus,e.target.value));
   document.querySelectorAll('[data-render-budgets]').forEach(b=>b.onclick=()=>{ state.editBudgetId=''; renderBudgets(); });
   const addLib=document.getElementById('addLineFromLibrary'); if(addLib) addLib.onclick=openAddLineFromLibrary;
@@ -611,6 +676,7 @@ function bindViewEvents(){
   const exportBudgetCsv=document.getElementById('exportBudgetCsv'); if(exportBudgetCsv) exportBudgetCsv.onclick=downloadBudgetCsv;
   document.querySelectorAll('[data-line-field]').forEach(inp=>inp.onchange=updateBudgetLine);
   document.querySelectorAll('[data-delete-line]').forEach(b=>b.onclick=()=>deleteBudgetLine(b.dataset.deleteLine));
+  const delSelLines=document.getElementById('deleteSelectedBudgetLines'); if(delSelLines) delSelLines.onclick=deleteSelectedBudgetLines;
 
   const invoiceForm=document.getElementById('invoiceForm'); if(invoiceForm) invoiceForm.onsubmit=saveInvoice;
   document.querySelectorAll('[data-edit-invoice]').forEach(b=>b.onclick=()=>renderInvoices(b.dataset.editInvoice));
@@ -640,13 +706,20 @@ function bindViewEvents(){
 function formObj(form){ return Object.fromEntries(new FormData(form).entries()); }
 function saveClient(e){ e.preventDefault(); const f=formObj(e.target); const c={id:f.id,name:f.name,nif:f.nif,phone:f.phone,email:f.email,contact:f.contact,fiscalAddress:f.fiscalAddress,workAddress:f.workAddress,city:f.city,status:f.status,notes:f.notes}; const idx=data.clients.findIndex(x=>x.id===f.editId || x.id===c.id); if(idx>=0) data.clients[idx]=c; else data.clients.push(c); saveData(); renderClients(); }
 function deleteClient(id){ if(!confirm('Eliminar aquest client? Les feines i pressupostos vinculats quedaran sense client.')) return; data.clients=data.clients.filter(x=>x.id!==id); data.jobs.forEach(j=>{ if(j.clientId===id) j.clientId=''; }); data.budgets.forEach(b=>{ if(b.clientId===id) b.clientId=''; }); data.invoices.forEach(i=>{ if(i.clientId===id) i.clientId=''; }); saveData(); renderClients(); }
+function selectedValues(selector){ return [...document.querySelectorAll(selector+':checked')].map(x=>x.value); }
+function deleteSelectedClients(){ const ids=selectedValues('.select-client'); if(!ids.length) return alert('No has seleccionat cap client.'); if(!confirm(`Eliminar ${ids.length} client/s seleccionat/s? Les feines i pressupostos vinculats quedaran sense client.`)) return; data.clients=data.clients.filter(x=>!ids.includes(x.id)); data.jobs.forEach(j=>{ if(ids.includes(j.clientId)) j.clientId=''; }); data.budgets.forEach(b=>{ if(ids.includes(b.clientId)) b.clientId=''; }); data.invoices.forEach(i=>{ if(ids.includes(i.clientId)) i.clientId=''; }); saveData(); renderClients(); }
+
 function saveJob(e){ e.preventDefault(); const f=formObj(e.target); const j={id:f.id,year:Number(f.year)||new Date().getFullYear(),clientId:f.clientId,title:f.title,address:f.address,city:f.city,status:f.status,notes:f.notes,mainBudgetId:byId(data.jobs,f.editId)?.mainBudgetId||''}; const idx=data.jobs.findIndex(x=>x.id===f.editId || x.id===j.id); if(idx>=0) data.jobs[idx]=j; else data.jobs.push(j); saveData(); renderJobs(); }
 function deleteJob(id){ if(!confirm('Eliminar aquesta feina/obra? Els pressupostos vinculats quedaran sense feina.')) return; data.jobs=data.jobs.filter(x=>x.id!==id); data.budgets.forEach(b=>{ if(b.jobId===id) b.jobId=''; }); data.invoices.forEach(i=>{ if(i.jobId===id) i.jobId=''; }); saveData(); renderJobs(); }
 function saveBudget(e){ e.preventDefault(); const f=formObj(e.target); const old=byId(data.budgets,f.id); const b={...(old||{}), id:f.id, number:f.number, date:f.date, clientId:f.clientId, jobId:f.jobId, title:f.title, status:f.status, ci:num(f.ci), dge:num(f.dge), bi:num(f.bi), iva:num(f.iva), notes:f.notes, lines:old?.lines||[]}; const idx=data.budgets.findIndex(x=>x.id===b.id); if(idx>=0) data.budgets[idx]=b; else data.budgets.push(b); state.selectedBudgetId=b.id; state.editBudgetId=b.id; const job=byId(data.jobs,b.jobId); if(job && !job.mainBudgetId) job.mainBudgetId=b.id; saveData(); renderBudgets(b.id); }
 function updateBudgetStatus(id,status){ const b=byId(data.budgets,id); if(!b) return; b.status=status; saveData(); filterBudgets(); }
 function deleteBudget(id){ if(!confirm('Eliminar aquest pressupost i les seves partides?')) return; data.budgets=data.budgets.filter(x=>x.id!==id); data.jobs.forEach(j=>{ if(j.mainBudgetId===id) j.mainBudgetId=''; }); data.invoices.forEach(i=>{ if(i.budgetId===id) i.budgetId=''; }); if(state.selectedBudgetId===id) state.selectedBudgetId=''; if(state.editBudgetId===id) state.editBudgetId=''; saveData(); renderBudgets(); }
+function deleteSelectedBudgets(){ const ids=selectedValues('.select-budget'); if(!ids.length) return alert('No has seleccionat cap pressupost.'); if(!confirm(`Eliminar ${ids.length} pressupost/os seleccionat/s?`)) return; data.budgets=data.budgets.filter(x=>!ids.includes(x.id)); data.jobs.forEach(j=>{ if(ids.includes(j.mainBudgetId)) j.mainBudgetId=''; }); data.invoices.forEach(i=>{ if(ids.includes(i.budgetId)) i.budgetId=''; }); if(ids.includes(state.selectedBudgetId)) state.selectedBudgetId=''; if(ids.includes(state.editBudgetId)) state.editBudgetId=''; saveData(); renderBudgets(); }
+
 function updateBudgetLine(e){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; const l=(b.lines||[]).find(x=>x.id===e.target.dataset.lineId); if(!l) return; const field=e.target.dataset.lineField; l[field]=['qty','unitPrice'].includes(field)?num(e.target.value):e.target.value; l.total=num(l.qty)*num(l.unitPrice); saveData(); renderBudgets(); }
 function deleteBudgetLine(id){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; b.lines=(b.lines||[]).filter(x=>x.id!==id); saveData(); renderBudgets(); }
+function deleteSelectedBudgetLines(){ const ids=selectedValues('.select-budget-line'); if(!ids.length) return alert('No has seleccionat cap línia.'); const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; if(!confirm(`Eliminar ${ids.length} línia/es seleccionada/es del pressupost?`)) return; b.lines=(b.lines||[]).filter(l=>!ids.includes(l.id)); saveData(); renderBudgets(b.id); }
+
 function addManualLine(){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; b.lines=b.lines||[]; b.lines.push({id:uid('LIN'),code:'',chapter:'',unit:'',concept:'Nova partida',longDesc:'',qty:1,unitPrice:0,total:0,status:'Manual pendent revisar',origin:'Manual'}); saveData(); renderBudgets(); }
 function openAddLineFromLibrary(){
   const b=byId(data.budgets,state.selectedBudgetId); if(!b) return;
@@ -665,6 +738,7 @@ function openModal(html){ document.getElementById('modalContent').innerHTML=html
 function closeModal(){ document.getElementById('modal').classList.add('hidden'); document.getElementById('modalContent').innerHTML=''; }
 function bindModalEvents(){
   const close=document.getElementById('closeModalBtn'); if(close) close.onclick=closeModal;
+  document.querySelectorAll('[data-modal-tab]').forEach(btn=>btn.onclick=()=>{ const key=btn.dataset.modalTab; document.querySelectorAll('[data-modal-tab]').forEach(b=>b.classList.toggle('active', b===btn)); document.querySelectorAll('[data-modal-panel]').forEach(p=>p.classList.toggle('active', p.dataset.modalPanel===key)); });
   const libForm=document.getElementById('libForm'); if(libForm) libForm.onsubmit=saveLibraryItem;
   const add=document.getElementById('addDecompLine'); if(add) add.onclick=()=>{ const tbody=document.querySelector('#decompTable tbody'); const i=tbody.querySelectorAll('[data-decomp-row]').length; tbody.insertAdjacentHTML('beforeend', decompRow({},i)); bindModalEvents(); };
   document.querySelectorAll('[data-remove-decomp]').forEach(b=>b.onclick=()=>b.closest('tr').remove());
@@ -681,6 +755,8 @@ function saveLibraryItem(e){
   saveData(); closeModal(); renderLibrary();
 }
 function deleteLibraryItem(id){ if(!confirm('Eliminar aquesta partida de la llibreria? Les línies ja inserides en pressupostos no s’esborraran.')) return; data.library=data.library.filter(x=>x.id!==id); saveData(); renderLibrary(); }
+function deleteSelectedLibrary(){ const ids=selectedValues('.select-library'); if(!ids.length) return alert('No has seleccionat cap partida.'); if(!confirm(`Eliminar ${ids.length} partida/es de la llibreria? Les línies ja inserides en pressupostos no s’esborraran.`)) return; data.library=data.library.filter(x=>!ids.includes(x.id)); saveData(); renderLibrary(); }
+
 
 function openIdb(){
   return new Promise((resolve,reject)=>{
@@ -705,7 +781,7 @@ async function deleteAttachment(id){ if(!confirm('Eliminar arxiu local?')) retur
 async function exportPackageZip(){
   if(typeof JSZip === 'undefined') return alert('No s’ha carregat JSZip. Prova exportar JSON complet o revisa la connexió.');
   const zip=new JSZip();
-  const payload={...data, exportedAt:new Date().toISOString(), packageType:'TEIMOR_V04_COMPLET'};
+  const payload={...data, exportedAt:new Date().toISOString(), packageType:'TEIMOR_V05_COMPLET'};
   zip.file('teimor_dades_completes.json', JSON.stringify(payload,null,2));
   zip.file('README.txt', 'Paquet exportat des de TEIMOR Gestor. Aquest ZIP és compatible amb WinRAR. Per seguretat, pot contenir dades personals si has exportat la còpia completa.');
   const folder=zip.folder('arxius_incrustats');
@@ -816,7 +892,7 @@ function detectClient(fileName, flat){
   const email = firstRegex(candidateText, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || '';
   const phone = detectPhone(candidateText);
   let name = recipient.name || findValueByLabels(flat, ['client','cliente','destinatari','destinatario','senyors','sres','promotor','propietari','propiedad','comunitat','comunidad']) || '';
-  if(badClientName(name)) name = guessNameFromFile(fileName);
+  if(badClientName(name)){ const guessed=guessNameFromFile(fileName); name = badClientName(guessed) ? 'Client pendent de revisar' : guessed; }
   const workAddress = recipient.address || findValueByLabels(flat, ['obra','direccion obra','direcció obra','adreça obra','situada','situat','emplaçament','emplazamiento']) || detectAddress(flat);
   const city = recipient.city || detectCity(flat);
   return {id:uid('CLI'), tempKey:uid('TMPCLI'), name:cleanClientName(name), nif, phone, email, contact:'', fiscalAddress:'', workAddress, city, status:'Actiu', source:fileName, notes:'Client detectat automàticament del requadre/destinatari. Revisar si cal.'};
@@ -859,7 +935,7 @@ function cleanClientName(s){
 function guessNameFromFile(file){
   let base=file.split('/').pop().replace(/\.(xls|xlsx|xlsm|csv)$/i,'').replace(/[_-]+/g,' ');
   base=base.replace(/^\d+\s*/,'').replace(/pressupost|presupuesto|obra/ig,'').trim();
-  return base || 'Client pendent de revisar';
+  return badClientName(base) ? 'Client pendent de revisar' : (base || 'Client pendent de revisar');
 }
 function isTeimorText(s){ return /teimor|teixidor|mora|marçal|trinxeria|b55271159|info@teimor|www\.teimor|620988264|675520117|609036162/i.test(s); }
 function findValueByLabels(flat, labels){
@@ -964,6 +1040,45 @@ function rowValueAfterLabel(row, labels){
   }
   return '';
 }
+function numericValues(row){ return (row||[]).map(num).filter(v=>Number.isFinite(v) && Math.abs(v)>0 && Math.abs(v)!==21 && Math.abs(v)!==10 && Math.abs(v)!==3 && Math.abs(v)!==13); }
+function labelHit(joined, lab){
+  const escLab=lab.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  if(lab==='total') return new RegExp('(^|\\s)total($|\\s|:)', 'i').test(joined);
+  return new RegExp('(^|\\s)'+escLab+'($|\\s|:)', 'i').test(joined) || joined.includes(lab+':');
+}
+function findAmountByLabels(rows, labels){
+  const labs=labels.map(strip);
+  for(let i=0;i<rows.length;i++){
+    const row=rows[i]||[]; const joined=strip(row.join(' '));
+    const hit=labs.some(l=>labelHit(joined,l));
+    if(!hit) continue;
+    // Evitem files només d'IVA o condicions.
+    if(/iva|exclos|exclòs|perm[ií]s|aigua|llum/.test(joined) && !/base|import|importe|total/.test(joined)) continue;
+    let nums=numericValues(row);
+    if(nums.length) return Math.max(...nums.map(Math.abs));
+    for(let j=i+1;j<=Math.min(rows.length-1,i+3);j++){
+      nums=numericValues(rows[j]||[]);
+      if(nums.length) return Math.max(...nums.map(Math.abs));
+    }
+  }
+  return 0;
+}
+function findBestTotal(rows){
+  return findAmountByLabels(rows,['base imposable','base imponible','import total','importe total','total pressupost','total presupuesto','total obra','total']) || 0;
+}
+function nonEmptyAfterLabel(rows, labels){
+  const labs=labels.map(strip);
+  for(const row of rows){
+    for(let i=0;i<row.length;i++){
+      const s=strip(row[i]).replace(/:$/,'');
+      if(labs.includes(s) || labs.some(l=>s.startsWith(l+':'))){
+        const v=rowValueAfterLabel(row, labels);
+        if(v) return v;
+      }
+    }
+  }
+  return '';
+}
 function parseMeasurement(text){
   const s=String(text||'');
   const m=s.match(/([0-9]+(?:[\.,][0-9]+)?)\s*(m²|m2|m³|m3|ml|m|ut|ud|uds|kg|pa|h|dia|dies)/i);
@@ -971,27 +1086,36 @@ function parseMeasurement(text){
   return {qty:num(m[1]), unit:m[2].replace('m2','m²').replace('m3','m³')};
 }
 function parseTeimorSingleConcept(rows,fileName,sheetName){
-  const conceptRow=findLabelRow(rows,['concepte','concepto']);
-  const medRow=findLabelRow(rows,['medicio','medición','medicion','medició']);
-  const worksRow=findLabelRow(rows,['treballs','trabajos']);
-  const baseRow=rows.findIndex(r=>strip(r.join(' ')).includes('base imposable') || strip(r.join(' ')).includes('base imponible'));
-  if(conceptRow<0 || (medRow<0 && baseRow<0)) return [];
-  const concept=rowValueAfterLabel(rows[conceptRow],['concepte','concepto']) || longestText(rows[conceptRow]);
-  let medText=medRow>=0 ? rowValueAfterLabel(rows[medRow],['medicio','medición','medicion','medició']) || rows[medRow].join(' ') : '';
+  const conceptRow=findLabelRow(rows,['concepte','concepto','descripcio','descripción','descripcion']);
+  const medRow=findLabelRow(rows,['medicio','medición','medicion','medició','amidament','medicion total','medició total']);
+  const worksRow=findLabelRow(rows,['treballs','trabajos','descripcio treballs','descripción trabajos','detall','detalle']);
+  const hasOneConceptPattern = conceptRow>=0 || worksRow>=0 || medRow>=0;
+  const totalRow = rows.findIndex(r=>/(base imposable|base imponible|import total|importe total|total pressupost|total presupuesto|total obra|^\s*total\s*$)/i.test(r.join(' ')));
+  const total = findBestTotal(rows);
+  if(!hasOneConceptPattern && !total) return [];
+  if(!hasOneConceptPattern && total && !rows.some(r=>r.join(' ').length>30)) return [];
+  const concept = (conceptRow>=0 ? rowValueAfterLabel(rows[conceptRow],['concepte','concepto','descripcio','descripción','descripcion']) : '') || nonEmptyAfterLabel(rows,['obra','treball','trabajo']) || longestText(rows[conceptRow]||[]) || guessNameFromFile(fileName) || 'Partida importada TEIMOR';
+  let medText=medRow>=0 ? rowValueAfterLabel(rows[medRow],['medicio','medición','medicion','medició','amidament','medicion total','medició total']) || rows[medRow].join(' ') : '';
+  if(!medText && concept) medText=concept;
   const {qty,unit}=parseMeasurement(medText);
   let longParts=[];
   if(worksRow>=0){
-    const end = baseRow>worksRow ? baseRow : Math.min(rows.length, worksRow+18);
+    const end = totalRow>worksRow ? totalRow : Math.min(rows.length, worksRow+40);
     for(let i=worksRow;i<end;i++){
       const row=rows[i].filter(Boolean);
-      const text=row.filter(c=>!isNonRecipientText(c) && !isTeimorText(c)).join(' ').trim();
-      if(text && !/^treballs$/i.test(text)) longParts.push(text);
+      const text=row.filter(c=>!isNonRecipientText(c) && !isTeimorText(c) && !/(base imposable|base imponible|iva|total pressupost|total presupuesto)/i.test(c)).join(' ').trim();
+      if(text && !/^treballs|trabajos$/i.test(text)) longParts.push(text);
+    }
+  } else {
+    // Si no hi ha fila TREBALLS, recollim textos centrals llargs que no siguin capçalera, client o total.
+    for(const row of rows.slice(12, totalRow>0 ? totalRow : 80)){
+      const text=row.filter(Boolean).filter(c=>!isNonItemLine(c) && !isTeimorText(c) && !looksLikeAddress(c) && !looksLikeCityLine(c)).join(' ').trim();
+      if(text.length>25) longParts.push(text);
     }
   }
-  const total = baseRow>=0 ? Math.max(...rows[baseRow].map(num),0) : 0;
   let pu = qty && total ? total/qty : 0;
   const status = unit && qty && pu ? 'PU calculat des de amidament + total pendent validar' : (total ? 'Històrica sense amidament' : 'Importada pendent de revisar');
-  return [makeItem({code:'',chapter:'',unit,desc:concept||'Partida importada TEIMOR',qty,pu,total,status,fileName,sheetName,longDescOverride:longParts.join('\n') || concept})];
+  return [makeItem({code:'',chapter:'Històric importat',unit,desc:concept||'Partida importada TEIMOR',qty,pu,total,status,fileName,sheetName,longDescOverride:longParts.join('\n') || concept})];
 }
 function headerMap(row){
   const map={};
@@ -1075,7 +1199,7 @@ function classifyItem(unit,qty,pu,total,desc){
   return 'Importada pendent de revisar';
 }
 function makeItem({code,chapter,unit,desc,qty,pu,total,status,fileName,sheetName,longDescOverride}){
-  const longDesc=cleanText(longDescOverride || desc);
+  const longDesc=cleanLongText(longDescOverride || desc);
   const shortDesc=cleanText(desc || longDesc);
   const concept=shortDesc.length>140 ? shortDesc.slice(0,137)+'...' : shortDesc;
   return {code:code||'',chapter:chapter||'',unit:unit||'',concept,longDesc,qty:qty||'',unitPrice:pu||'',total:total||'',status,origin:`${fileName} · ${sheetName}`,source:fileName,decomp:[]};
