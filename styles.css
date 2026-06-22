@@ -102,3 +102,8 @@ button,input,select,textarea{font:inherit} button{cursor:pointer}.hidden{display
   background:#fff7ed;
 }
 .preview-desc{font-size:11px;line-height:1.35}
+
+/* V09.7 */
+#smartCleanLibraryV097{background:#0f766e;border-color:#0f766e;color:#fff}
+#finishCleanupVisible{border-color:#0f766e;color:#0f766e;background:#ecfdf5}
+.chapter-group summary{position:sticky;top:0;z-index:2}

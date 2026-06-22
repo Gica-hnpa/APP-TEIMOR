@@ -1,11 +1,1 @@
-App_TEIMOR_gestor_pressupostos_v09_6_DEPURADOR_CONCEPTES_UI
-
-Contingut net:
-- index.html
-- app.js
-- styles.css
-- render.yaml
-- README_TEIMOR_APP_v09_6.md
-- COMPROVACIO_CONTINGUT.txt
-
-Versió: V09.6 depurador per conceptes + UI fitxa/PDF.
+Versió neta V09.7. Fitxers inclosos: index.html, app.js, styles.css, render.yaml, README_TEIMOR_APP_v09_7.md.

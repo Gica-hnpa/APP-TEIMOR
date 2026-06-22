@@ -3232,3 +3232,173 @@ bindViewEvents = function(){
     if(btn){ btn.textContent='Depurar més per conceptes'; btn.onclick=openLibraryCleanupModal; }
   }
 };
+
+/* =========================================================
+   V09.7 · Depuració visible real
+   - El depurador deixa la llibreria visible només amb representants.
+   - Les partides agrupades queden dins l'històric del representant.
+   - S'afegeix botó per finalitzar una depuració anterior si només havia quedat en previsualització.
+   ========================================================= */
+
+function libraryIsTrashV097(item){
+  if(typeof isTrashLibraryConceptV096==='function' && isTrashLibraryConceptV096(item)) return true;
+  const txt=strip([item?.concept,item?.longDesc,item?.origin,item?.chapter,item?.code].join(' '));
+  if(!txt) return true;
+  return /(^|\s)(iva|i\.v\.a|base imposable|subtotal|total pressupost|total factura|retencio|retención)(\s|$)/.test(txt) && !/(pintura|impermeabilitz|lamina|morter|paviment|canal|baixant|geotextil)/.test(txt);
+}
+function libraryVisibleRowsV097(){
+  return (data.library||[]).filter(x=>{
+    if(x.hiddenDuplicate || x.mergedInto || x.discardedAsTrash) return false;
+    if(libraryIsTrashV097(x)) return false;
+    return true;
+  });
+}
+function finishLibraryCleanupV097(mode){
+  mode = mode || document.getElementById('cleanupMode')?.value || 'verystrong';
+  const plan = typeof buildLibraryCleanupPlan==='function' ? buildLibraryCleanupPlan(mode) : null;
+  if(!plan) return alert('No s’ha pogut calcular la depuració.');
+  if(!confirm(`Aplicar depuració visible definitiva?\n\nLa llibreria passarà de ${plan.before} registres a ${plan.after} partides tipus visibles.\nLes duplicades no es veuran al llistat, però quedaran guardades a l’històric de cada partida representant.\n\nTextos descartats com IVA, totals o fórmules: ${plan.trashCount}`)) return;
+
+  data.libraryCleanupBackups = Array.isArray(data.libraryCleanupBackups) ? data.libraryCleanupBackups : [];
+  data.libraryCleanupBackups.push({
+    id:uid('LIBBACK'),
+    date:new Date().toISOString(),
+    mode,
+    before:JSON.parse(JSON.stringify(data.library||[])),
+    note:`V09.7 depuració visible ${plan.before} → ${plan.after}`
+  });
+  if(data.libraryCleanupBackups.length>5) data.libraryCleanupBackups=data.libraryCleanupBackups.slice(-5);
+
+  const idMap={};
+  const next=[];
+  for(const g of plan.rows){
+    const rep=JSON.parse(JSON.stringify(g.representative||{}));
+    rep.chapter=g.cls?.chapter || rep.chapter || 'Altres / revisar';
+    rep.status=strip(rep.status||'').includes('valid') ? rep.status : 'Partida tipus agrupada';
+    rep.isTypeRepresentative=true;
+    rep.hiddenDuplicate=false;
+    rep.mergedInto='';
+    rep.discardedAsTrash=false;
+    rep.groupKey=g.key;
+    rep.groupSubtype=g.cls?.subtype || '';
+    rep.groupedCount=g.items?.length || 1;
+    const origins=[rep.origin, ...(g.duplicates||[]).map(x=>x.origin)].filter(Boolean);
+    rep.origin=[...new Set(origins)].slice(0,10).join(' · ');
+    rep.aliases=[...new Set((g.items||[]).map(x=>cleanText(x.concept||'')).filter(Boolean))].slice(0,120);
+    rep.history=[...(rep.history||[])];
+    for(const dup of (g.duplicates||[])){
+      idMap[dup.id]=rep.id;
+      rep.history.push({
+        origin:dup.origin||'Agrupada',
+        concept:dup.concept,
+        longDesc:dup.longDesc,
+        unit:dup.unit,
+        unitPrice:dup.unitPrice,
+        total:dup.total,
+        status:dup.status,
+        chapterBefore:dup.chapter,
+        date:today(),
+        mergedInto:rep.id
+      });
+    }
+    next.push(rep);
+  }
+
+  for(const b of data.budgets||[]){
+    for(const l of (b.lines||[])){
+      if(l.libraryId && idMap[l.libraryId]) l.libraryId=idMap[l.libraryId];
+      const cls=typeof classifyLibraryFamily==='function' ? classifyLibraryFamily(l) : null;
+      if(cls && !cls.trash) l.chapter=cls.chapter;
+    }
+  }
+
+  data.library=next.sort((a,b)=>String(a.chapter||'').localeCompare(String(b.chapter||''),'ca',{numeric:true}) || String(a.concept||'').localeCompare(String(b.concept||''),'ca',{numeric:true}));
+  data.importLogs=data.importLogs||[];
+  data.importLogs.push({id:uid('CLEAN'),date:new Date().toISOString(),type:'Depuració visible V09.7',before:plan.before,after:plan.after,duplicates:plan.duplicates,trash:plan.trashCount,mode});
+  state.libChapterFilter=''; state.libSearch=''; state.libStatusFilter=''; state.libShowAllOriginals=false;
+  saveData(); closeModal(); renderLibrary();
+}
+
+function openLibraryCleanupModal(){
+  const plan=buildLibraryCleanupPlan('verystrong');
+  openModal(`<h2>Depurar llibreria i deixar només partides tipus visibles</h2>
+    <div class="card">
+      <p>Amb aquesta versió, quan apliques la depuració, el llistat visible queda només amb les partides tipus. Les partides originals agrupades no apareixen com a files repetides: queden dins l’històric de la partida representant.</p>
+      <div class="form-grid">
+        <label>Mode de depuració<select id="cleanupMode"><option value="verystrong" selected>Molt fort recomanat · objectiu 50-100 partides tipus</option><option value="ultra">Ultra · una partida tipus per família principal</option><option value="strong">Fort · conserva més subtipus i unitats</option><option value="conservative">Conservador · separa més variants</option></select></label>
+        <label>Resultat estimat<input id="cleanupEstimate" readonly value="${plan.before} → ${plan.after} partides tipus visibles"></label>
+      </div>
+      <div id="cleanupPreview">${cleanupPlanSummaryHtml(plan)}</div>
+      <div class="actions"><button class="primary" id="applyLibraryCleanup">Aplicar i deixar només partides tipus visibles</button><button class="ghost" id="refreshCleanupPreview">Recalcular previsualització</button>${(data.libraryCleanupBackups||[]).length?'<button class="ghost" id="restoreLibraryCleanup">Restaurar última depuració</button>':''}</div>
+    </div>`);
+}
+function applyLibraryCleanup(){ finishLibraryCleanupV097(); }
+function refreshCleanupPreview(){
+  const mode=document.getElementById('cleanupMode')?.value || 'verystrong';
+  const plan=buildLibraryCleanupPlan(mode);
+  const est=document.getElementById('cleanupEstimate'); if(est) est.value=`${plan.before} → ${plan.after} partides tipus visibles`;
+  const prev=document.getElementById('cleanupPreview'); if(prev) prev.innerHTML=cleanupPlanSummaryHtml(plan);
+}
+
+function cleanupPendingNoticeV097(){
+  const logs=(data.importLogs||[]).filter(x=>String(x.type||'').includes('Depuració') && num(x.after)>0).slice(-1)[0];
+  if(logs && (data.library||[]).length > num(logs.after)+3){
+    return `<div class="card notice-red"><strong>Depuració pendent d’aplicar al llistat:</strong> l’última depuració indicava ${esc(logs.after)} partides tipus, però encara hi ha ${esc((data.library||[]).length)} files visibles/importades. Clica <strong>Finalitzar depuració visible</strong> per conservar només les partides tipus.</div>`;
+  }
+  return '';
+}
+
+function renderLibrary(){
+  setHeader('Llibreria de partides · V09.7','Vista neta per capítols. La depuració visible conserva només una partida tipus per concepte i guarda les originals agrupades dins l’històric.');
+  const q=state.libSearch || '';
+  const filter=strip(q);
+  const showAll=!!state.libShowAllOriginals;
+  const baseRows=showAll ? (data.library||[]) : libraryVisibleRowsV097();
+  const chapters=[...new Set(baseRows.map(x=>x.chapter||'Sense capítol').filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ca',{numeric:true}));
+  const chapter=state.libChapterFilter || '';
+  const statusFilter=strip(state.libStatusFilter || '');
+  let rows=baseRows.filter(x=>{
+    const chapterOk=!chapter || (x.chapter||'Sense capítol')===chapter;
+    const statusOk=!statusFilter || strip(x.status||'').includes(statusFilter);
+    const searchOk=!filter || strip([x.code,x.chapter,x.unit,x.concept,x.longDesc,x.status,x.origin,(x.aliases||[]).join(' ')].join(' ')).includes(filter);
+    return chapterOk && statusOk && searchOk;
+  });
+  rows=sortByLibraryField(rows);
+  setContent(`
+    ${cleanupPendingNoticeV097()}
+    <div class="card">
+      <div class="toolbar"><h2>Llibreria per capítols</h2><div class="right"><button class="primary" id="smartCleanLibraryV097">Depurar / finalitzar vista</button><button class="ghost" id="finishCleanupVisible">Finalitzar depuració visible</button><button class="ghost" id="selectAllLibrary">Seleccionar tot</button><button class="ghost" id="clearSelectedLibrary">Desmarcar</button><button class="danger" id="deleteSelectedLibrary">Eliminar seleccionades</button><button class="ghost" id="exportLibraryJson">Exportar llibreria</button><label class="ghost file-label">Importar llibreria<input id="importLibraryJson" type="file" accept="application/json" hidden></label><button class="primary" id="newLibItem">Nova partida</button></div></div>
+      <div class="grid four">
+        <div class="kpi"><span>Partides visibles</span><strong>${rows.length}</strong></div>
+        <div class="kpi"><span>Total guardades</span><strong>${(data.library||[]).length}</strong></div>
+        <div class="kpi good"><span>Capítols visibles</span><strong>${chapters.length}</strong></div>
+        <div class="kpi"><span>Vista</span><strong>${showAll?'Totes':'Neta'}</strong></div>
+      </div>
+      <div class="filter-grid" style="margin-top:12px">
+        <label>Cerca<input id="libSearch" placeholder="Cercar partida, codi, origen..." value="${esc(q)}"></label>
+        <label>Capítol<select id="libChapterFilter"><option value="">Tots els capítols</option>${chapters.map(c=>`<option value="${esc(c)}" ${c===chapter?'selected':''}>${esc(c)}</option>`).join('')}</select></label>
+        <label>Estat<select id="libStatusFilter"><option value="">Tots</option>${['Validada','Validada pendent revisió','Partida tipus agrupada','Importada pendent de revisar','Històrica sense amidament','PA pendent amidament','Duplicada possible'].map(s=>`<option ${strip(s)===statusFilter?'selected':''}>${esc(s)}</option>`).join('')}</select></label>
+        <label>Vista<select id="libShowAllOriginals"><option value="0" ${!showAll?'selected':''}>Neta: només partides tipus</option><option value="1" ${showAll?'selected':''}>Totes les guardades</option></select></label>
+      </div>
+      <div class="sort-bar small-text">Ordenar llibreria: ${sortableInline('Codi','library','code')} ${sortableInline('Capítol','library','chapter')} ${sortableInline('Concepte','library','concept')} ${sortableInline('PU','library','pu')} ${sortableInline('Estat','library','status')}</div>
+      <div id="libraryTable">${libraryGroupedTable(rows)}</div>
+    </div>
+  `);
+}
+
+const __teimorBindViewEvents_V097 = bindViewEvents;
+bindViewEvents = function(){
+  __teimorBindViewEvents_V097();
+  if(state.view==='library'){
+    const btn=document.getElementById('smartCleanLibraryV097'); if(btn) btn.onclick=openLibraryCleanupModal;
+    const fin=document.getElementById('finishCleanupVisible'); if(fin) fin.onclick=()=>finishLibraryCleanupV097('verystrong');
+    const show=document.getElementById('libShowAllOriginals'); if(show) show.onchange=e=>{ state.libShowAllOriginals=e.target.value==='1'; renderLibrary(); };
+  }
+};
+const __teimorBindModalEvents_V097 = bindModalEvents;
+bindModalEvents = function(){
+  __teimorBindModalEvents_V097();
+  const refresh=document.getElementById('refreshCleanupPreview'); if(refresh) refresh.onclick=refreshCleanupPreview;
+  const apply=document.getElementById('applyLibraryCleanup'); if(apply) apply.onclick=applyLibraryCleanup;
+  const restore=document.getElementById('restoreLibraryCleanup'); if(restore) restore.onclick=restoreLibraryCleanup;
+};
