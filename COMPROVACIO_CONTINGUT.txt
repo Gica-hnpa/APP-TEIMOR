@@ -1,0 +1,2 @@
+Aquest paquet és net. No inclou README antics ni carpetes de versions anteriors.
+Conté només: index.html, app.js, styles.css, render.yaml, README_TEIMOR_APP_v09_1_NETA.md i aquest fitxer de comprovació.

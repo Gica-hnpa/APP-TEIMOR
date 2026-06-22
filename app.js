@@ -1,11 +1,11 @@
-/* TEIMOR · Gestor de pressupostos v08
+/* TEIMOR · Gestor de pressupostos v09.1 NETA
    App estàtica: les dades importades d'Excel/ZIP es llegeixen al navegador i es guarden localment.
 */
-const STORE_KEY = 'teimor_gestor_pressupostos_v08';
+const STORE_KEY = 'teimor_gestor_pressupostos_v09_1_neta';
 const LEGACY_STORE_KEY = ''; // No carreguem automàticament dades antigues per evitar arrossegar imports bruts de prova.
-const AUTH_KEY = 'teimor_auth_v08';
+const AUTH_KEY = 'teimor_auth_v09_1_neta';
 const LEGACY_AUTH_KEY = ''; // V08 força login en cada càrrega
-const DB_NAME = 'teimor_attachments_v08';
+const DB_NAME = 'teimor_attachments_v09_1_neta';
 const DB_STORE = 'files';
 const DEFAULT_USER = 'admin';
 const DEFAULT_PASS = 'teimor2026';
@@ -45,7 +45,7 @@ const normKey = s => strip(s).replace(/[^a-z0-9]+/g,' ').trim();
 
 function defaultData(){
   return {
-    meta:{version:'8.0.0',createdAt:today(),updatedAt:today()},
+    meta:{version:'9.1.0-neta',createdAt:today(),updatedAt:today()},
     settings:{
       appName:'TEIMOR · Base de dades de pressupostos',
       loginUser:DEFAULT_USER,
@@ -151,7 +151,7 @@ function init(){
     else document.getElementById('loginMsg').textContent='Usuari o contrasenya incorrectes.';
   });
   document.getElementById('logout').onclick=()=>{ localStorage.removeItem(AUTH_KEY); showApp(false); };
-  document.querySelectorAll('#tabs button').forEach(btn=>btn.addEventListener('click',()=>{ state.view=btn.dataset.view; render(); }));
+  document.querySelectorAll('[data-view]').forEach(btn=>btn.addEventListener('click',()=>{ state.view=btn.dataset.view; render(); }));
   document.getElementById('modalClose').onclick=closeModal;
   document.getElementById('modal').addEventListener('click', e=>{ if(e.target.id==='modal') closeModal(); });
   document.getElementById('exportJson').onclick=()=>exportJson(true);
@@ -1432,3 +1432,415 @@ function findExistingJob(j,clientId){ return data.jobs.find(x=>x.clientId===clie
 function findExistingLibraryItem(item){ const k=normKey(item.concept || item.longDesc); const u=normKey(item.unit); if(!k) return null; return data.library.find(x=>normKey(x.unit)===u && similarity(normKey(x.concept),k)>0.92); }
 function similarity(a,b){ if(!a||!b) return 0; if(a===b) return 1; const shorter=a.length<b.length?a:b, longer=a.length>=b.length?a:b; return longer.includes(shorter) ? shorter.length/longer.length : 0; }
 function makeAutoCode(item){ const base=(strip(item.chapter||'PART').slice(0,3)||'PAR').toUpperCase(); return `${base}-${String(data.library.length+1).padStart(4,'0')}`; }
+
+
+/* =========================
+   V09.1 NETA overrides: lectura TEIMOR més estricta, UI neta i previsualització A4
+   ========================= */
+
+function init(){
+  document.getElementById('loginForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const ok = await checkLogin(document.getElementById('loginUser').value.trim(), document.getElementById('loginPass').value);
+    if(ok){ localStorage.setItem(AUTH_KEY,'1'); showApp(true); }
+    else document.getElementById('loginMsg').textContent='Usuari o contrasenya incorrectes.';
+  });
+  document.getElementById('logout').onclick=()=>{ localStorage.removeItem(AUTH_KEY); showApp(false); };
+  document.querySelectorAll('[data-view]').forEach(btn=>btn.addEventListener('click',()=>{ state.view=btn.dataset.view; render(); }));
+  document.getElementById('modalClose').onclick=closeModal;
+  document.getElementById('modal').addEventListener('click', e=>{ if(e.target.id==='modal') closeModal(); });
+  localStorage.removeItem(AUTH_KEY);
+  showApp(false);
+}
+
+function render(){
+  document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('active', b.dataset.view===state.view));
+  const views={dashboard:renderDashboard,clients:renderClients,library:renderLibrary,budgets:renderBudgets,invoices:renderInvoices,performance:renderPerformance,attachments:renderAttachments,importer:renderImporter,backup:renderBackup,settings:renderSettings};
+  (views[state.view]||renderDashboard)();
+}
+
+function renderBackup(){
+  setHeader('Còpies / JSON','Exportació, importació i manteniment de còpies. L’app continua guardant les dades localment al navegador.');
+  setContent(`
+    <div class="grid two">
+      <div class="card notice-blue"><h2>Còpia completa transferible</h2><p>Inclou clients, NIF/DNI/CIF, telèfons, emails, pressupostos, partides, factures i arxius incrustats si els has marcat per incloure al JSON.</p><div class="actions"><button class="primary" id="exportJsonFullPage">Exportar JSON complet</button><button class="ghost" id="exportPackagePage">Exportar paquet ZIP compatible WinRAR</button></div></div>
+      <div class="card"><h2>Importar còpia</h2><p>Carrega un JSON exportat des d’aquesta app per veure la mateixa base de dades en un altre ordinador.</p><label class="primary file-label">Importar JSON<input id="importJsonPage" type="file" accept="application/json" hidden></label></div>
+    </div>
+    <div class="grid two">
+      <div class="card"><h2>Versió demo/neta</h2><p>Exporta una còpia sense dades personals per fer proves o passar una demo.</p><button class="ghost" id="exportJsonCleanPage">Exportar demo/net</button></div>
+      <div class="card notice-red"><h2>Depuració de proves</h2><p>Marca com a “Client pendent de revisar” els clients que clarament són imports, fórmules o carrers detectats per error, sense eliminar pressupostos.</p><button class="danger" id="cleanBadClients">Depurar clients no vàlids</button></div>
+    </div>
+  `);
+}
+
+function bindViewEvents(){
+  document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>{ state.view=b.dataset.go; render(); });
+  const dashExport=document.getElementById('dashExport'); if(dashExport) dashExport.onclick=()=>exportJson(true);
+
+  const clientForm=document.getElementById('clientForm'); if(clientForm) clientForm.onsubmit=saveClient;
+  const newClientBtn=document.getElementById('newClientBtn'); if(newClientBtn) newClientBtn.onclick=()=>renderClients('__new');
+  ['clientSearch','clientYearFilter','clientCityFilter','clientStatusFilter'].forEach(id=>{ const el=document.getElementById(id); if(el) el.oninput=filterClients; if(el) el.onchange=filterClients; });
+  document.querySelectorAll('[data-edit-client]').forEach(b=>b.onclick=()=>renderClients(b.dataset.editClient));
+  document.querySelectorAll('[data-delete-client]').forEach(b=>b.onclick=()=>deleteClient(b.dataset.deleteClient));
+  const selAllClients=document.getElementById('selectAllClients'); if(selAllClients) selAllClients.onclick=()=>setChecked('.select-client',true);
+  const clearClients=document.getElementById('clearSelectedClients'); if(clearClients) clearClients.onclick=()=>setChecked('.select-client',false);
+  const delSelClients=document.getElementById('deleteSelectedClients'); if(delSelClients) delSelClients.onclick=deleteSelectedClients;
+  document.querySelectorAll('[data-render-clients]').forEach(b=>b.onclick=()=>renderClients());
+
+  const libSearch=document.getElementById('libSearch'); if(libSearch) libSearch.oninput=e=>{ state.libSearch=e.target.value; renderLibrary(); };
+  const libChapter=document.getElementById('libChapterFilter'); if(libChapter) libChapter.onchange=e=>{ state.libChapterFilter=e.target.value; renderLibrary(); };
+  const libStatus=document.getElementById('libStatusFilter'); if(libStatus) libStatus.onchange=e=>{ state.libStatusFilter=e.target.value; renderLibrary(); };
+  const selAllLibrary=document.getElementById('selectAllLibrary'); if(selAllLibrary) selAllLibrary.onclick=()=>setChecked('.select-library',true);
+  const clearLibrary=document.getElementById('clearSelectedLibrary'); if(clearLibrary) clearLibrary.onclick=()=>setChecked('.select-library',false);
+  const delSelLib=document.getElementById('deleteSelectedLibrary'); if(delSelLib) delSelLib.onclick=deleteSelectedLibrary;
+  const exportLib=document.getElementById('exportLibraryJson'); if(exportLib) exportLib.onclick=exportLibraryJson;
+  const importLib=document.getElementById('importLibraryJson'); if(importLib) importLib.onchange=importLibraryJson;
+  const newLib=document.getElementById('newLibItem'); if(newLib) newLib.onclick=()=>openLibModal('');
+  document.querySelectorAll('[data-view-lib]').forEach(b=>b.onclick=()=>openLibModal(b.dataset.viewLib));
+  document.querySelectorAll('[data-delete-lib]').forEach(b=>b.onclick=()=>deleteLibraryItem(b.dataset.deleteLib));
+
+  const newBudget=document.getElementById('newBudgetBtn'); if(newBudget) newBudget.onclick=()=>openBudgetModal('__new');
+  const budgetForm=document.getElementById('budgetForm'); if(budgetForm) budgetForm.onsubmit=saveBudget;
+  document.querySelectorAll('[data-render-budgets]').forEach(b=>b.onclick=()=>{ closeModal(); state.editBudgetId=''; renderBudgets(); });
+  ['budgetSearch','budgetYearFilter','budgetClientFilter','budgetStatusFilter'].forEach(id=>{ const el=document.getElementById(id); if(el) el.oninput=filterBudgets; if(el) el.onchange=filterBudgets; });
+  document.querySelectorAll('[data-edit-budget]').forEach(b=>b.onclick=()=>openBudgetModal(b.dataset.editBudget));
+  document.querySelectorAll('[data-preview-budget]').forEach(b=>b.onclick=()=>openBudgetPreview(b.dataset.previewBudget));
+  document.querySelectorAll('[data-open-budget]').forEach(row=>row.onclick=e=>{ if(e.target.closest('[data-no-row-open]') || e.target.closest('button') || e.target.closest('select') || e.target.closest('input')) return; openBudgetModal(row.dataset.openBudget); });
+  document.querySelectorAll('[data-delete-budget]').forEach(b=>b.onclick=()=>deleteBudget(b.dataset.deleteBudget));
+  const selAllBudgets=document.getElementById('selectAllBudgets'); if(selAllBudgets) selAllBudgets.onclick=()=>setChecked('.select-budget',true);
+  const clearBudgets=document.getElementById('clearSelectedBudgets'); if(clearBudgets) clearBudgets.onclick=()=>setChecked('.select-budget',false);
+  const delSelBudgets=document.getElementById('deleteSelectedBudgets'); if(delSelBudgets) delSelBudgets.onclick=deleteSelectedBudgets;
+  document.querySelectorAll('[data-budget-status]').forEach(sel=>sel.onchange=e=>updateBudgetStatus(e.target.dataset.budgetStatus,e.target.value));
+  const exportBudgetCsv=document.getElementById('exportBudgetCsv'); if(exportBudgetCsv) exportBudgetCsv.onclick=downloadBudgetCsv;
+
+  const invoiceForm=document.getElementById('invoiceForm'); if(invoiceForm) invoiceForm.onsubmit=saveInvoice;
+  document.querySelectorAll('[data-edit-invoice]').forEach(b=>b.onclick=()=>renderInvoices(b.dataset.editInvoice));
+  document.querySelectorAll('[data-delete-invoice]').forEach(b=>b.onclick=()=>deleteInvoice(b.dataset.deleteInvoice));
+  document.querySelectorAll('[data-render-invoices]').forEach(b=>b.onclick=()=>renderInvoices());
+
+  const attachmentForm=document.getElementById('attachmentForm'); if(attachmentForm) attachmentForm.onsubmit=saveAttachment;
+  document.querySelectorAll('[data-download-attachment]').forEach(b=>b.onclick=()=>downloadAttachment(b.dataset.downloadAttachment));
+  document.querySelectorAll('[data-delete-attachment]').forEach(b=>b.onclick=()=>deleteAttachment(b.dataset.deleteAttachment));
+
+  const settingsForm=document.getElementById('settingsForm'); if(settingsForm) settingsForm.onsubmit=saveSettings;
+  const passwordForm=document.getElementById('passwordForm'); if(passwordForm) passwordForm.onsubmit=savePassword;
+  const hard=document.getElementById('hardReset'); if(hard) hard.onclick=hardReset;
+
+  const ex1=document.getElementById('exportJsonFullPage'); if(ex1) ex1.onclick=()=>exportJson(true);
+  const ex2=document.getElementById('exportPackagePage'); if(ex2) ex2.onclick=exportPackageZip;
+  const ex3=document.getElementById('exportJsonCleanPage'); if(ex3) ex3.onclick=()=>exportJson(false);
+  const im1=document.getElementById('importJsonPage'); if(im1) im1.onchange=importJson;
+  const clean=document.getElementById('cleanBadClients'); if(clean) clean.onclick=cleanBadClients;
+
+  const dz=document.getElementById('dropzone');
+  const excel=document.getElementById('excelInput'); if(excel) excel.onchange=e=>handleImportFiles(e.target.files);
+  const folder=document.getElementById('folderInput'); if(folder) folder.onchange=e=>handleImportFiles(e.target.files);
+  const zip=document.getElementById('zipInput'); if(zip) zip.onchange=e=>handleImportFiles(e.target.files);
+  if(dz){ dz.ondragover=e=>{e.preventDefault(); dz.classList.add('drag')}; dz.ondragleave=()=>dz.classList.remove('drag'); dz.ondrop=e=>{e.preventDefault(); dz.classList.remove('drag'); handleImportFiles(e.dataTransfer.files);}; }
+  const confirmImport=document.getElementById('confirmImport'); if(confirmImport) confirmImport.onclick=confirmDraftImport;
+  const discardImport=document.getElementById('discardImport'); if(discardImport) discardImport.onclick=()=>{ state.importDraft=null; renderImporter(); };
+}
+
+function cleanBadClients(){
+  let n=0;
+  for(const c of data.clients){
+    if(c.name && (looksLikeCalculationLine(c.name) || looksLikeAddress(c.name) || isNonRecipientText(c.name) || /^[0-9\s.,€=x×m²mmlutudkg-]+$/i.test(c.name))){
+      c.notes=[c.notes,`Nom depurat automàticament el ${today()}: ${c.name}`].filter(Boolean).join('\n');
+      c.name='Client pendent de revisar';
+      n++;
+    }
+  }
+  saveData(); alert(`Clients depurats: ${n}.`); renderClients();
+}
+
+function clientsTable(rows){
+  return table(['Sel.','Client','NIF/DNI/CIF','Contacte','Telèfon','Email','Adreça obra','Estat','Accions'], rows.map(c=>`
+    <tr><td><input type="checkbox" class="select-client" value="${esc(c.id)}"></td><td><strong>${esc(c.name)}</strong></td><td>${esc(c.nif||'')}</td><td>${esc(c.contact||'')}</td><td>${esc(c.phone||'')}</td><td>${esc(c.email||'')}</td><td>${esc(c.workAddress||'')}</td><td>${statusPill(c.status||'')}</td><td class="nowrap"><button class="ghost small" data-edit-client="${esc(c.id)}">Editar</button> <button class="danger small" data-delete-client="${esc(c.id)}">Eliminar</button></td></tr>`));
+}
+
+function parseDateValue(v){
+  if(v == null || v === '') return '';
+  if(v instanceof Date) return dateIso(v);
+  if(typeof v === 'number' && v > 20000 && v < 70000){ return dateIso(new Date(Math.round((v - 25569) * 86400 * 1000))); }
+  let s=cleanText(v).replace(/^[A-Za-zÀ-ÿ]+:\s*/,'').trim();
+  if(!s) return '';
+  let m=s.match(/\b(20\d{2}|19\d{2})[\/\-.](\d{1,2})[\/\-.](\d{1,2})\b/);
+  if(m) return validIso(Number(m[1]),Number(m[2]),Number(m[3]));
+  m=s.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2}|20\d{2}|19\d{2})\b/);
+  if(m){
+    let a=Number(m[1]), b=Number(m[2]), y=Number(m[3]); if(y<100) y+=2000;
+    // Si el segon camp és >12, segur que el format és mm/dd/yyyy.
+    if(b>12 && a<=12) return validIso(y,a,b);
+    // Si el primer camp és >12, segur que és dd/mm/yyyy.
+    if(a>12 && b<=12) return validIso(y,b,a);
+    // En els .xls TEIMOR importats per SheetJS sovint les dates d'Excel surten com mm/dd/yyyy.
+    return validIso(y,a,b) || validIso(y,b,a);
+  }
+  const d=new Date(s); if(!isNaN(d) && /\d{4}/.test(s)) return dateIso(d);
+  return '';
+}
+function validIso(y,m,d){
+  if(!y || !m || !d || m<1 || m>12 || d<1 || d>31) return '';
+  const dt=new Date(Date.UTC(y,m-1,d));
+  if(dt.getUTCFullYear()!==y || dt.getUTCMonth()!==m-1 || dt.getUTCDate()!==d) return '';
+  return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+}
+
+function parseWorkbook(fileName, arrayBuffer){
+  const warnings=[];
+  const wb = XLSX.read(arrayBuffer, {type:'array', cellDates:true, raw:true});
+  const sheets = wb.SheetNames.map(name => ({name, aoa:XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, defval:'', raw:true, blankrows:false})}));
+  const flat=[];
+  sheets.forEach(sh => sh.aoa.forEach((row,ri)=>flat.push({sheet:sh.name, rowIndex:ri, cells:row.map(v=>cleanText(v)).filter(v=>v!==''), raw:row})));
+  warnings.push(`${fileName}: ${sheets.length} pestanya/es llegides.`);
+  const client = detectClient(fileName, flat);
+  const detectedDate = detectDate(flat);
+  const year = detectedDate ? Number(detectedDate.slice(0,4)) : detectYear(fileName, flat);
+  const parsedItems=[];
+  const sheetTotals=[];
+  sheets.forEach(sh => {
+    const rows=sh.aoa.map(row=>row.map(v=>cleanText(v)));
+    const t=findBestTotal(rows);
+    if(t) sheetTotals.push(t);
+    parsedItems.push(...detectItemsFromSheet(fileName, sh.name, sh.aoa));
+  });
+  const importedBase = sheetTotals.length ? Math.max(...sheetTotals) : 0;
+  if(importedBase) warnings.push(`${fileName}: total/base imposable detectat: ${money(importedBase)}.`);
+  const number = detectBudgetNumber(fileName, flat);
+  const title = detectBudgetConcept(fileName, flat) || detectJobTitle(fileName, flat);
+  const job = {id:uid('F'), year, clientTempKey:client.tempKey, title, address:client.workAddress || detectAddress(flat), city:client.city || detectCity(flat), status:'Històrica', source:fileName, notes:'Importada automàticament des d’Excel antic.'};
+  const budget = {id:uid('P'), number, date:detectedDate || `${year}-01-01`, clientTempKey:client.tempKey, jobTempKey:job.id, title, status:'Històric importat', ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, iva:data.settings.defaultIVA, importedBase, source:fileName, notes:'Pressupost importat. Revisa partides sense amidament/preu.', lines:[]};
+  budget.lines = parsedItems.map(it=>({...it,id:uid('LIN')}));
+  const items = parsedItems.map(it=>({...it, origin:fileName, sourceBudget:budget.number || fileName}));
+  if(!parsedItems.length) warnings.push(`${fileName}: no s’han detectat partides separades. Es guardarà només client/pressupost si confirmes.`);
+  if(client.name==='Client pendent de revisar') warnings.push(`${fileName}: no s’ha trobat un nom de client segur al requadre; revisa el client abans de confirmar.`);
+  return {client, job, budget, items, warnings};
+}
+
+function detectRecipientBlock(flat){
+  const blocks=[];
+  const bySheet={};
+  for(const r of flat){ (bySheet[r.sheet]=bySheet[r.sheet]||[]).push(r); }
+  Object.values(bySheet).forEach(rows=>{
+    const dataRows=rows.filter(r=>(r.raw||[]).some(c=>/^\s*(data|fecha)\s*:?\s*$/i.test(cleanText(c)))).map(r=>r.rowIndex);
+    const pressupostRows=rows.filter(r=>(r.raw||[]).some(c=>/^\s*(pressupost|presupuesto)\s*:?\s*$/i.test(cleanText(c)))).map(r=>r.rowIndex);
+    const firstBody = rows.filter(r=>r.rowIndex>5 && (r.raw||[]).some(c=>/^\s*(obra|concepte|concepto|medici[oó]n?|treballs|trabajos)\s*:?\s*$/i.test(cleanText(c)))).map(r=>r.rowIndex)[0] || 30;
+    const anchorStart = dataRows.length ? Math.max(0, Math.min(...dataRows)-3) : 6;
+    const anchorEnd = pressupostRows.length ? Math.min(firstBody, Math.max(...pressupostRows)+2) : Math.min(firstBody, anchorStart+8);
+    for(let col=2; col<=16; col++){
+      const lines=[];
+      for(const r of rows){
+        if(r.rowIndex<anchorStart || r.rowIndex>anchorEnd || r.rowIndex>=firstBody) continue;
+        const val=cleanText((r.raw||[])[col]||'');
+        if(!val) continue;
+        if(isTeimorText(val) || isNonRecipientText(val) || looksLikeCalculationLine(val) || /[€=]/.test(val)) continue;
+        if(/^\*|materials?\s*i\s*m\.?o\.?|base imposable|iva|total|concepte|treballs/i.test(val)) continue;
+        if(val.length>100) continue;
+        lines.push({row:r.rowIndex,col,text:val});
+      }
+      if(lines.length){
+        lines.sort((a,b)=>a.row-b.row);
+        const texts=lines.map(x=>x.text);
+        const hasName=texts.some(isProbablyClientName);
+        const hasLocator=texts.some(looksLikeAddress) || texts.some(looksLikeCityLine) || texts.some(x=>/\b([A-HJNP-SUVW][0-9]{7}[0-9A-J]|[0-9]{8}[A-Z]|[XYZ][0-9]{7}[A-Z])\b/i.test(x));
+        if(hasName && (hasLocator || texts.length>=2)) blocks.push({col, lines:texts, rows:lines.map(x=>x.row), anchor:true});
+      }
+    }
+    // Fallback: qualsevol bloc superior abans del cos, però amb penalització.
+    for(let col=2; col<=16; col++){
+      let chunk=[];
+      const flush=()=>{ if(chunk.length){ const texts=chunk.map(x=>x.text); const hasName=texts.some(isProbablyClientName); const hasLocator=texts.some(looksLikeAddress)||texts.some(looksLikeCityLine); if(hasName && (hasLocator || texts.length>=2)) blocks.push({col, lines:texts, rows:chunk.map(x=>x.row), anchor:false}); } chunk=[]; };
+      for(const r of rows){
+        if(r.rowIndex<=5 || r.rowIndex>=firstBody) continue;
+        const val=cleanText((r.raw||[])[col]||'');
+        if(!val || isTeimorText(val) || isNonRecipientText(val) || looksLikeCalculationLine(val) || /[€=]/.test(val) || val.length>100) continue;
+        if(chunk.length && r.rowIndex-chunk[chunk.length-1].row>2) flush();
+        chunk.push({row:r.rowIndex,col,text:val});
+      }
+      flush();
+    }
+  });
+  const labelled=findValueByLabels(flat, ['client','cliente','destinatari','destinatario','senyors','sres','promotor','propietari','propiedad','comunitat','comunidad']);
+  if(labelled && isProbablyClientName(labelled)) blocks.push({col:99, rows:[0], lines:[labelled], anchor:false});
+  if(!blocks.length) return {name:'',address:'',city:'',fiscalAddress:'',text:''};
+  const scored=blocks.map(b=>({...b, score:recipientBlockScore(b.lines) + (b.anchor?80:0) + (b.col>=4?35:0)})).sort((a,b)=>b.score-a.score);
+  const best=scored[0];
+  const lines=best.lines.map(cleanText).filter(Boolean).filter(x=>!looksLikeCalculationLine(x) && !isNonRecipientText(x));
+  let name='';
+  for(const l of lines){ if(isProbablyClientName(l)){ name=l; break; } }
+  const address = lines.find(looksLikeAddress) || '';
+  const cityLine = lines.find(looksLikeCityLine) || '';
+  const fiscalAddress = lines.filter(l=>l && l!==name).join('\n');
+  return {name, address, city:extractCityFromLine(cityLine), fiscalAddress, text:lines.join('\n')};
+}
+
+function detectClient(fileName, flat){
+  const recipient = detectRecipientBlock(flat);
+  const all = flat.map(r=>r.cells.join(' | ')).join('\n');
+  const candidateText = recipient.text || all;
+  const nif = firstRegex(candidateText, /\b(?!B55271159\b)([A-HJNP-SUVW][0-9]{7}[0-9A-J]|[0-9]{8}[A-Z]|[XYZ][0-9]{7}[A-Z])\b/i) || '';
+  const email = firstRegex(candidateText, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || '';
+  const phone = detectPhone(candidateText);
+  let name = recipient.name || findValueByLabels(flat, ['client','cliente','destinatari','destinatario','senyors','sres','promotor','propietari','propiedad','comunitat','comunidad']) || '';
+  name = cleanClientName(name);
+  if(name==='Client pendent de revisar'){
+    const guessed=guessNameFromFile(fileName);
+    if(isProbablyClientName(guessed) && !looksLikeAddress(guessed)) name=cleanClientName(guessed);
+  }
+  const workAddress = recipient.address || findValueByLabels(flat, ['obra','direccion obra','direcció obra','adreça obra','situada','situat','emplaçament','emplazamiento']) || detectAddress(flat);
+  const city = recipient.city || detectCity(flat);
+  return {id:uid('CLI'), tempKey:uid('TMPCLI'), name, nif, phone, email, contact:'', fiscalAddress:recipient.fiscalAddress||'', workAddress, city, status:'Actiu', source:fileName, notes:'Client detectat automàticament del requadre/destinatari. Revisar si cal.'};
+}
+
+function detectDate(flat){
+  const labels=['data','fecha','date'];
+  for(let ri=0; ri<Math.min(flat.length,120); ri++){
+    const r=flat[ri]; const cells=r.raw || [];
+    for(let i=0;i<cells.length;i++){
+      const label=strip(cells[i]).replace(/:$/,'');
+      if(labels.includes(label)){
+        for(let j=i+1;j<Math.min(cells.length,i+5);j++){ const d=parseDateValue(cells[j]); if(d) return d; }
+        const own=parseDateValue(cells[i]); if(own) return own;
+        const next=flat[ri+1]?.raw || [];
+        for(let j=i;j<Math.min(next.length,i+4);j++){ const d=parseDateValue(next[j]); if(d) return d; }
+      }
+    }
+  }
+  for(const r of flat.slice(0,80)) for(const c of (r.raw||[])){ const d=parseDateValue(c); if(d) return d; }
+  return '';
+}
+
+function detectBudgetNumber(fileName, flat){
+  for(const r of flat.slice(0,120)){
+    const cells=r.raw||[];
+    for(let i=0;i<cells.length;i++){
+      const s=strip(cells[i]).replace(/:$/,'');
+      if(s==='pressupost' || s==='presupuesto' || s==='nº pressupost' || s==='n pressupost' || s==='numero pressupost' || s==='número pressupost'){
+        for(let j=i+1;j<Math.min(cells.length,i+5);j++){
+          const v=cleanText(cells[j]);
+          if(v && !parseDateValue(cells[j]) && !isTeimorText(v) && !isNonRecipientText(v)) return v;
+        }
+      }
+    }
+  }
+  const p=fileName.split('/').pop().replace(/\.(xls|xlsx|xlsm|csv)$/i,'');
+  const m=p.match(/^\s*(\d{1,5})\b/);
+  return m ? m[1] : p;
+}
+function detectBudgetConcept(fileName, flat){
+  const concept=findValueStrictLabel(flat,['concepte','concepto','descripcio','descripción','descripcion']);
+  if(concept) return concept;
+  const obra=findValueStrictLabel(flat,['obra','treball','trabajo','feina']);
+  if(obra) return obra;
+  return guessNameFromFile(fileName);
+}
+function detectJobTitle(fileName, flat){ return detectBudgetConcept(fileName, flat); }
+function findValueStrictLabel(flat, labels){
+  const labs=labels.map(strip);
+  for(const r of flat.slice(0,180)){
+    const cells=r.raw.map(v=>cleanText(v));
+    for(let i=0;i<cells.length;i++){
+      const s=strip(cells[i]).replace(/:$/,'');
+      if(labs.includes(s)){
+        const v=cells.slice(i+1).find(x=>x && !isTeimorText(x) && !isNonRecipientText(x) && !looksLikeCalculationLine(x));
+        if(v && !looksLikeAddress(v) && v.length>1) return v;
+      }
+    }
+  }
+  return '';
+}
+
+function budgetRowsFiltered(){
+  const q=strip(document.getElementById('budgetSearch')?.value ?? state.budgetSearch ?? '');
+  const year=document.getElementById('budgetYearFilter')?.value ?? state.budgetYearFilter ?? '';
+  const status=strip(document.getElementById('budgetStatusFilter')?.value ?? state.budgetStatusFilter ?? '');
+  const client=document.getElementById('budgetClientFilter')?.value ?? state.budgetClientFilter ?? '';
+  return data.budgets.filter(b=>{
+    const j=byId(data.jobs,b.jobId);
+    const c=byId(data.clients,b.clientId);
+    const blob=[b.id,b.number,b.date,b.title,b.status,b.source,b.notes,c?.name,c?.nif,c?.phone,c?.email,j?.title,j?.address,j?.city,budgetYear(b)].join(' ');
+    return (!q || strip(blob).includes(q)) && (!year || String(budgetYear(b))===String(year)) && (!status || strip(b.status)===status) && (!client || b.clientId===client);
+  }).sort((a,b)=>{
+    const da=parseDateValue(a.date) || `${budgetYear(a)||0}-01-01`;
+    const db=parseDateValue(b.date) || `${budgetYear(b)||0}-01-01`;
+    return db.localeCompare(da) || String(a.number||'').localeCompare(String(b.number||''), 'ca', {numeric:true});
+  });
+}
+
+function budgetsTable(rows){
+  return table(['Sel.','Any','Data','Núm.','Client','Concepte / obra','Estat','Base s/IVA','Total IVA incl.','Tipus import','Partides','Accions'], rows.map(b=>{
+    const lineSum = budgetLineSum(b);
+    const calcType = lineSum>0 ? 'Suma de partides' : (num(b.importedBase)>0 ? 'Total importat Excel' : 'Sense import');
+    const job=byId(data.jobs,b.jobId);
+    const title=cleanText(b.title || job?.title || '');
+    const addr=cleanText(job?.address || '');
+    return `
+    <tr class="clickable-row" data-open-budget="${esc(b.id)}">
+      <td><input type="checkbox" class="select-budget" value="${esc(b.id)}" data-no-row-open></td>
+      <td>${esc(budgetYear(b)||'')}</td>
+      <td>${dateDisplay(b.date)}</td>
+      <td><strong>${esc(b.number||b.id)}</strong></td>
+      <td>${esc(clientName(b.clientId))}</td>
+      <td><strong>${esc(title)}</strong>${addr && strip(addr)!==strip(title)?`<br><span class="muted">${esc(addr)}</span>`:''}</td>
+      <td><select class="status-select" data-budget-status="${esc(b.id)}" data-no-row-open>${budgetStatusOptions(b.status||'Esborrany')}</select></td>
+      <td class="num">${money(budgetBase(b))}</td>
+      <td class="num"><strong>${money(budgetTotal(b))}</strong></td>
+      <td>${esc(calcType)}</td>
+      <td class="num">${(b.lines||[]).length}</td>
+      <td class="nowrap"><button class="ghost small" data-edit-budget="${esc(b.id)}" data-no-row-open>Veure / editar</button> <button class="ghost small" data-preview-budget="${esc(b.id)}" data-no-row-open>Previsualitzar A4</button> <button class="danger small" data-delete-budget="${esc(b.id)}" data-no-row-open>Eliminar</button></td>
+    </tr>`}));
+}
+
+function openBudgetModal(id=''){
+  const isNew = id === '__new' || !id;
+  const b = isNew ? {id:'', lines:[], date:today(), ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, iva:data.settings.defaultIVA, status:'Esborrany'} : byId(data.budgets,id);
+  if(!b) return alert('No s’ha trobat aquest pressupost.');
+  state.editBudgetId = isNew ? '__new' : b.id;
+  state.selectedBudgetId = isNew ? '' : b.id;
+  openModal(`
+    <h2>${isNew?'Nou pressupost':'Pressupost · '+esc(b.number||b.id)}</h2>
+    <div class="notice-blue card-tight">${isNew?'Primer guarda la capçalera del pressupost. Després podràs afegir partides de la llibreria o crear-ne de noves.':'Pots editar la capçalera, revisar partides i obrir una previsualització A4 per imprimir o guardar en PDF.'}</div>
+    <div class="actions" style="margin:0 0 12px">${!isNew?`<button class="ghost" type="button" data-preview-budget-modal="${esc(b.id)}">Vista preliminar A4 / PDF</button>`:''}</div>
+    ${budgetFormCard(b,isNew)}
+    ${!isNew ? budgetLinesCard(b) : ''}
+  `);
+  document.querySelectorAll('[data-preview-budget-modal]').forEach(btn=>btn.onclick=()=>openBudgetPreview(btn.dataset.previewBudgetModal));
+}
+
+function openBudgetPreview(id){
+  const b=byId(data.budgets,id); if(!b) return alert('No s’ha trobat el pressupost.');
+  const c=byId(data.clients,b.clientId)||{}; const j=byId(data.jobs,b.jobId)||{}; const s=data.settings.contractista||{};
+  const rows=(b.lines||[]).map((l,idx)=>`<tr><td>${idx+1}</td><td>${esc(l.unit||'')}</td><td><strong>${esc(l.concept||'')}</strong>${l.longDesc?`<div class="preview-desc">${esc(l.longDesc)}</div>`:''}</td><td class="num">${l.qty?num(l.qty).toLocaleString('ca-ES'):''}</td><td class="num">${l.unitPrice?money(l.unitPrice):''}</td><td class="num">${money(lineTotal(l))}</td></tr>`).join('');
+  const html=`<div class="preview-toolbar actions"><button class="primary" onclick="window.print()">Imprimir / guardar PDF</button><button class="ghost" onclick="window.close()">Tancar</button></div>
+    <div class="a4-sheet">
+      <div class="preview-header"><div><h1>${esc(s.name||'TEIMOR')}</h1><p>${esc(s.nif||'')}<br>${esc(s.address||'')}<br>${esc(s.city||'')}<br>${esc(s.phone||'')}</p></div><div class="client-box"><strong>${esc(c.name||'Client pendent de revisar')}</strong><br>${esc(c.nif||'')}<br>${esc(c.workAddress||j.address||'')}<br>${esc(c.city||'')}</div></div>
+      <div class="preview-meta"><div><strong>Data:</strong> ${dateDisplay(b.date)}</div><div><strong>Pressupost núm.:</strong> ${esc(b.number||'')}</div></div>
+      <h2>${esc(b.title||j.title||'Pressupost')}</h2>
+      ${j.address?`<p><strong>Obra:</strong> ${esc(j.address)}</p>`:''}
+      <table class="preview-table"><thead><tr><th>Part.</th><th>Ut</th><th>Concepte / descripció</th><th>Quantitat</th><th>Preu/ut</th><th>Total</th></tr></thead><tbody>${rows || `<tr><td colspan="6">Sense línies detallades. Import detectat de l’Excel original.</td></tr>`}</tbody></table>
+      <div class="preview-totals"><div>Base s/IVA: <strong>${money(budgetBase(b))}</strong></div><div>IVA ${num(b.iva)}%: <strong>${money(budgetIVA(b))}</strong></div><div>Total: <strong>${money(budgetTotal(b))}</strong></div></div>
+      <div class="preview-notes">${esc(b.notes||'')}</div>
+    </div>`;
+  const w=window.open('', '_blank');
+  if(!w) return alert('El navegador ha bloquejat la finestra de previsualització. Permet pop-ups per aquesta app.');
+  w.document.write(`<!doctype html><html lang="ca"><head><meta charset="utf-8"><title>Pressupost ${esc(b.number||'')}</title><style>${previewCss()}</style></head><body>${html}</body></html>`);
+  w.document.close();
+}
+function previewCss(){ return `body{font-family:Arial,sans-serif;background:#e5e7eb;margin:0;padding:18px;color:#111827}.preview-toolbar{max-width:210mm;margin:0 auto 12px}.preview-toolbar button{border:1px solid #ddd;border-radius:8px;padding:8px 12px;margin-right:8px}.preview-toolbar .primary{background:#c2410c;color:white}.a4-sheet{width:210mm;min-height:297mm;margin:auto;background:white;padding:16mm;box-shadow:0 8px 30px rgba(0,0,0,.18)}.preview-header{display:grid;grid-template-columns:1fr 75mm;gap:12mm;align-items:start}.preview-header h1{font-size:22px;margin:0 0 5px}.preview-header p{font-size:12px;line-height:1.35}.client-box{border:1px solid #222;padding:8px;min-height:34mm;font-size:12px;line-height:1.45}.preview-meta{display:flex;gap:30mm;border-top:1px solid #222;border-bottom:1px solid #222;padding:7px 0;margin:8mm 0;font-size:13px}h2{font-size:16px;margin:0 0 5mm}.preview-table{width:100%;border-collapse:collapse;font-size:11px}.preview-table th,.preview-table td{border:1px solid #333;padding:5px;vertical-align:top}.preview-table th{background:#f3f4f6}.num{text-align:right;white-space:nowrap}.preview-desc{font-size:10px;margin-top:3px;white-space:pre-wrap;line-height:1.25;color:#374151}.preview-totals{margin-top:8mm;margin-left:auto;width:80mm;font-size:13px}.preview-totals div{display:flex;justify-content:space-between;border-bottom:1px solid #ddd;padding:4px}.preview-notes{margin-top:10mm;font-size:10px;color:#555}@media print{body{background:white;padding:0}.preview-toolbar{display:none}.a4-sheet{box-shadow:none;margin:0;width:auto;min-height:auto;padding:12mm}@page{size:A4;margin:0}}`; }
+
+function importPreviewHtml(d){
+  return `<div class="card"><h2>Previsualització abans de confirmar</h2>
+    <div class="import-summary">
+      <div class="import-card"><span>Fitxers llegits</span><strong>${d.files.length}</strong></div>
+      <div class="import-card"><span>Clients detectats</span><strong>${d.clients.length}</strong></div>
+      <div class="import-card"><span>Obres internes</span><strong>${d.jobs.length}</strong></div>
+      <div class="import-card"><span>Pressupostos</span><strong>${d.budgets.length}</strong></div>
+      <div class="import-card"><span>Partides</span><strong>${d.items.length}</strong></div>
+    </div>
+    <div class="actions"><button class="primary" id="confirmImport">Confirmar importació</button><button class="ghost" id="discardImport">Descartar</button></div>
+    <h3>Pressupostos detectats</h3>${table(['Data','Núm.','Client','Concepte/obra','Base detectada','Partides','Origen'], d.budgets.slice(0,80).map(b=>{const c=d.clients.find(x=>x.tempKey===b.clientTempKey)||{};return `<tr><td>${dateDisplay(b.date)}</td><td>${esc(b.number||'')}</td><td>${esc(c.name||'')}</td><td>${esc(b.title||'')}</td><td class="num">${money(b.importedBase||0)}</td><td class="num">${(b.lines||[]).length}</td><td>${esc(b.source||'')}</td></tr>`}))}
+    <h3>Clients detectats</h3>${table(['Client','NIF/CIF','Telèfon','Email','Adreça obra','Origen'], d.clients.slice(0,30).map(c=>`<tr><td>${esc(c.name)}</td><td>${esc(c.nif)}</td><td>${esc(c.phone)}</td><td>${esc(c.email)}</td><td>${esc(c.workAddress)}</td><td>${esc(c.source)}</td></tr>`))}
+    <h3>Partides detectades</h3>${table(['Codi','Ut','Concepte','Quantitat','PU','Total','Estat','Origen'], d.items.slice(0,120).map(i=>`<tr><td>${esc(i.code)}</td><td>${esc(i.unit)}</td><td><strong>${esc(i.concept)}</strong><div class="long muted">${esc(i.longDesc)}</div></td><td class="num">${i.qty?num(i.qty).toFixed(3):''}</td><td class="num">${i.unitPrice?money(i.unitPrice):''}</td><td class="num">${i.total?money(i.total):''}</td><td>${statusPill(i.status)}</td><td>${esc(i.origin)}</td></tr>`))}
+    <h3>Registre d’importació</h3><div class="log">${esc(d.log.join('\n'))}</div>
+  </div>`;
+}

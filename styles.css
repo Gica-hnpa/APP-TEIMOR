@@ -27,3 +27,8 @@ button,input,select,textarea{font:inherit} button{cursor:pointer}.hidden{display
 .clickable-row:hover{background:#f8fafc}
 .card-tight{padding:12px 14px;margin-bottom:12px}
 .modal-box{max-width:min(1200px,94vw)}
+
+/* V09 */
+.sidebar-actions [data-view="backup"]{text-align:center}
+.preview-desc{white-space:pre-wrap}
+@media(max-width:1200px){.table-wrap table{min-width:1050px}}
