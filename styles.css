@@ -107,3 +107,9 @@ button,input,select,textarea{font:inherit} button{cursor:pointer}.hidden{display
 #smartCleanLibraryV097{background:#0f766e;border-color:#0f766e;color:#fff}
 #finishCleanupVisible{border-color:#0f766e;color:#0f766e;background:#ecfdf5}
 .chapter-group summary{position:sticky;top:0;z-index:2}
+
+/* V09.9 · capítols TEIMOR i llibreria més neta */
+.lib-modal-v099 select[name="chapter"]{font-weight:800;color:#7c2d12;background:#fff7ed;border-color:#fed7aa}
+.large-textarea.desc-big-v099{font-size:15.5px;line-height:1.55;min-height:260px}
+.library-mini-table th:nth-child(7),.library-mini-table td:nth-child(7){min-width:150px}
+#smartCleanLibraryV097{background:#0f766e!important;border-color:#0f766e!important;color:#fff!important}

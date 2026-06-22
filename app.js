@@ -3746,3 +3746,691 @@ bindModalEvents = function(){
     dateInput.addEventListener('change',()=>{ if(numberInput.dataset.autoNumber==='1') numberInput.value=nextBudgetNumber(dateInput.value); });
   }
 };
+
+/* ============================================================
+   TEIMOR V09.9 · capítols TEIMOR + llibreria sense origen visible
+   - S'elimina la columna Origen del llistat de llibreria.
+   - Capítols tècnics prioritaris segons el treball habitual de TEIMOR.
+   - Depurador més orientat a conceptes tipus: pendents, mitges canyes,
+     làmines, paviments, sòcols, grava, poliestirè, runes, etc.
+   ============================================================ */
+(function(){
+  data.meta = data.meta || {};
+  data.meta.version = '9.9.0-capitols-teimor';
+  try{ saveData?.(); }catch(e){}
+})();
+
+const TEIMOR_CHAPTERS_V099 = [
+  'Formació de pendents',
+  'Mitges canyes',
+  'Geotèxtil',
+  'Làmines asfàltiques',
+  'Làmines polimèriques',
+  'Làmines autoprotegides',
+  'Imprimacions',
+  'Proves d’estanqueïtat',
+  'Regates i obertures',
+  'Remats i peces especials',
+  'Col·locació de paviment',
+  'Col·locació de sòcol',
+  'Repicar paviment',
+  'Grava solta',
+  'Aïllament de poliestirè',
+  'Residus i runes',
+  'Proteccions d’obra',
+  'Mitjans auxiliars i lloguers',
+  'Neteja i sanejat',
+  'Pintura i revestiments',
+  'Reparació de formigó',
+  'Morters i regularitzacions',
+  'Canalons i baixants',
+  'Baranes i inox',
+  'Altres / revisar'
+];
+const TEIMOR_CHAPTER_SET_V099 = new Set(TEIMOR_CHAPTERS_V099.map(strip));
+
+function textV099(item){ return cleanText([item?.concept,item?.longDesc,item?.unit,item?.code].filter(Boolean).join(' ')); }
+function normV099(v){ return strip(v).replace(/[·']/g,' ').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim(); }
+function rxV099(t, r){ return r.test(t); }
+function isTrashLibraryConceptV096(item){ return isTrashLibraryConceptV099(item); }
+function isProbablyNotPartida(item){ return isTrashLibraryConceptV099(item); }
+function isTrashLibraryConceptV099(item){
+  const raw=textV099(item);
+  const t=normV099([raw,item?.chapter,item?.origin].join(' '));
+  if(!t || t.length<3) return true;
+  const positive=/geotextil|lamina|asfalt|bitumin|epdm|pvc|tpo|butil|autoproteg|pendents?|pendiente|mitja canya|media cana|paviment|socol|zocalo|rodapie|repicar|arrencar|grava|poliestir|xps|eps|aillament|aislamiento|runa|residu|imprim|estanqueitat|estanqueidad|regata|remat|morter|netej|pintur|barana|canalo|baixant|formigo|hormigon/.test(t);
+  if(positive) return false;
+  if(/^\d+[,.]?\d*\s*(eur|€)?$/.test(t)) return true;
+  if(/\b(iva|i v a|base imposable|base imponible|subtotal|total|total pressupost|total presupuesto|import total|pressupost total|presupuesto total|retencio|retencion)\b/.test(t)) return true;
+  if(/\b(client|cliente|nif|dni|cif|telefon|telefono|email|mail|data|fecha|pressupost|presupuesto|concepte|concepto|treballs|trabajos|medicio|medicion|provincia)\b/.test(t) && t.length<80) return true;
+  if(/\b(carrer|calle|avda|avinguda|plaza|plaça|passatge|passeig|ctra|carretera)\b/.test(t) && !positive) return true;
+  if(/[=×]/.test(raw) || /\b\d+[,.]?\d*\s*(m2|m²|ml|m|ut|ud)\s*x\s*\d+[,.]?\d*/i.test(raw)) return true;
+  return false;
+}
+function subtypeV099(t, family){
+  const out=[];
+  if(family==='lamines-asfaltiques'){
+    const kg=(t.match(/\b([345])\s*kg\b/)||t.match(/\blbm\s*([345])0\b/)||[])[1];
+    if(kg) out.push(`${kg}kg`);
+    if(/doble|dues capes|dos capes|2 capes|bicapa/.test(t)) out.push('doble');
+    if(/sbs/.test(t)) out.push('sbs');
+    if(/app/.test(t)) out.push('app');
+  }
+  if(family==='lamines-polimeriques'){
+    if(/epdm/.test(t)) out.push('epdm');
+    else if(/\bpvc\b/.test(t)) out.push('pvc');
+    else if(/\btpo\b/.test(t)) out.push('tpo');
+    else if(/butil|cautxu|caucho/.test(t)) out.push('butil-cautxu');
+  }
+  if(family==='lamines-autoprotegides'){
+    if(/mineral|pissarra|pizarra/.test(t)) out.push('mineral');
+    if(/alumini|aluminio/.test(t)) out.push('alumini');
+  }
+  if(family==='geotextil'){
+    const gr=(t.match(/\b(100|125|150|180|200|250|300|500)\s*(g|gr)\b/)||[])[1];
+    if(gr) out.push(`${gr}g`);
+  }
+  if(family==='aillament-poliestire'){
+    if(/\bxps\b|extrusion/.test(t)) out.push('xps');
+    else if(/\beps\b|expandit|expandido/.test(t)) out.push('eps');
+  }
+  if(family==='colocacio-paviment'){
+    if(/ceramic|ceramica|gres|rajol|baldosa/.test(t)) out.push('ceramic');
+    if(/flotant|tarima|parquet/.test(t)) out.push('flotant');
+  }
+  return [...new Set(out)].join('-') || 'general';
+}
+function classifyLibraryFamily(item){
+  const raw=textV099(item);
+  const t=normV099(raw);
+  if(isTrashLibraryConceptV099(item)) return {chapter:'Descartades / no partides', family:'no-partida', label:'No partida evident', subtype:'trash', key:'trash:'+t.slice(0,60), trash:true};
+  const rules=[
+    ['Formació de pendents','formacio-pendents',/formaci[oó] de pendent|formacion de pendiente|pendent(s)?|pendiente(s)?|capa de pendents|capa de pendientes|morter de pendent|mortero de pendiente|regularitzaci[oó] de pendent|recreixement.*pendent/],
+    ['Mitges canyes','mitges-canyes',/mitja canya|mitges canyes|media cana|medias canas|cantonera arrodonida|escocia|esc[oó]cia|rodonament/],
+    ['Geotèxtil','geotextil',/geot[eè]xtil|geotextil|geotex/],
+    ['Làmines autoprotegides','lamines-autoprotegides',/autoproteg|mineral|pissarra|pizarra|alumini|aluminio|lbm.*fp|fp.*autoproteg/],
+    ['Làmines polimèriques','lamines-polimeriques',/epdm|\bpvc\b|\btpo\b|butil|cautx[uú]|caucho|lamina sintetica|l[aà]mina sint[eè]tica|polimeric|polim[eè]ric|polimerica|polim[eè]rica/],
+    ['Làmines asfàltiques','lamines-asfaltiques',/l[aà]mina|lamina|asfalt|asf[aà]ltic|bitumin|sbs|\bapp\b|lbm|tela asfaltica|tela asf[aà]ltica|oxiasfalt|betun|bet[uú]n/],
+    ['Imprimacions','imprimacions',/imprimaci[oó]|imprimacion|primer|emulsi[oó]|emulsion|pont d uni[oó]|puente de union|fixador|fijador/],
+    ['Proves d’estanqueïtat','proves-estanqueitat',/prova d estanqueitat|prueba de estanqueidad|estanqueitat|estanqueidad|prova d aigua|prueba de agua|inundaci[oó]|inundacion/],
+    ['Regates i obertures','regates-obertures',/regata|roza|cala|obertura|apertura|perforaci[oó]|perforacion|forat|agujero|picat de regata/],
+    ['Remats i peces especials','remats-peces',/remat|remate|minvell|babero|solape|solapament|entrega|cantonera|perfil|xapa|chapa|pe[cç]a especial|pieza especial/],
+    ['Col·locació de sòcol','colocacio-socol',/col locaci[oó].*(s[oò]col|zocalo|rodapie)|s[oò]col|zocalo|rodapie/],
+    ['Col·locació de paviment','colocacio-paviment',/col locaci[oó].*paviment|colocaci[oó]n.*pavimento|pavimentaci[oó]|pavimento|paviment|gres|rajola|baldosa|ceramic|cer[aà]mic|panot|enrajolat|alicatado/],
+    ['Repicar paviment','repicar-paviment',/repicar.*paviment|picar.*paviment|arrencar.*paviment|arranque.*pavimento|retirar.*paviment|demolici[oó].*paviment|demolicion.*pavimento|treure.*paviment|levantado.*pavimento/],
+    ['Grava solta','grava-solta',/grava solta|grava|grava rodada|graveta|canto rodado|àrids|aridos|capa de grava/],
+    ['Aïllament de poliestirè','aillament-poliestire',/poliestir|poliestireno|\bxps\b|\beps\b|a[iï]llament.*poliestir|aislamiento.*poliestir|extrusionat|extruido|expandit|expandido/],
+    ['Residus i runes','residus-runes',/residu|run[aà]|runa|escombro|escombr|contenidor|container|sac|big bag|abocador|vertedero|retirada.*runa|transport.*runa/],
+    ['Proteccions d’obra','proteccions-obra',/protecci[oó]|proteccion|protegir|proteger|cart[oó]|carton|pl[aà]stic|plastico|tapar|cobrir|cubrir/],
+    ['Mitjans auxiliars i lloguers','mitjans-auxiliars',/lloguer|alquiler|grua|camio|cami[oó] grua|andami|bastida|bastides|mitjans auxiliars|medios auxiliares|elevador|plataforma/],
+    ['Neteja i sanejat','neteja-sanejat',/neteja|limpieza|sanejat|saneado|sanejar|hidro|pressi[oó]|presion|raspat|rascado|decapat|decapado/],
+    ['Pintura i revestiments','pintura-revestiments',/pintur|pintat|pintado|revestiment|revestimiento|jotashield|webertene|acrilic|acrilico|esmalt|esmalte/],
+    ['Reparació de formigó','reparacio-formigo',/reparaci[oó].*formig[oó]|reparacion.*hormigon|formig[oó]|hormigon|armadur|oxid|passiv|monotop|weberrep|r3|r4|cantell|canto forjat|canto de forjado/],
+    ['Morters i regularitzacions','morters-regularitzacions',/morter|mortero|regularitz|regulariz|arreboss|enfosc|rebossat|remolinat|maestrejat|capa base|recreixement|nivellaci[oó]|nivelacion/],
+    ['Canalons i baixants','canalons-baixants',/canal[oó]|canalon|baixant|bajante|pluvial|g[uü]atera|canaleta|desgu[aà]s|desague/],
+    ['Baranes i inox','baranes-inox',/barana|barandilla|passam[aà]|pasamano|inox|acer inoxidable|acero inoxidable|aisi|316/]
+  ];
+  for(const [chapter,family,rx] of rules){
+    if(rx.test(t)){
+      const subtype=subtypeV099(t,family);
+      let keySubtype=subtype;
+      if(['formacio-pendents','mitges-canyes','imprimacions','proves-estanqueitat','regates-obertures','remats-peces','colocacio-paviment','colocacio-socol','repicar-paviment','grava-solta','residus-runes','proteccions-obra','mitjans-auxiliars','neteja-sanejat'].includes(family)) keySubtype='general';
+      return {chapter,family,label:chapter,subtype:keySubtype,key:`${family}:${keySubtype}:${unitBucket(item.unit)}`};
+    }
+  }
+  const tokens=t.split(' ').filter(w=>w.length>4 && !/^\d+$/.test(w) && !/^(partida|treballs|trabajos|materials|material|unitat|unidad)$/.test(w));
+  const key=[...new Set(tokens)].slice(0,3).join('-') || 'altres';
+  return {chapter:'Altres / revisar', family:'altres', label:'Altres / revisar', subtype:key, key:`altres:${key}:${unitBucket(item.unit)}`};
+}
+function cleanupKeyV099(item, mode){
+  const cls=classifyLibraryFamily(item);
+  if(cls.trash) return cls.key;
+  if(mode==='ultra') return `${cls.family}:general`;
+  if(mode==='verystrong'){
+    // Una partida tipus per concepte principal. Només conserva subtipus on aporten valor real.
+    if(['lamines-asfaltiques','lamines-polimeriques','lamines-autoprotegides','geotextil','aillament-poliestire'].includes(cls.family)) return `${cls.family}:${cls.subtype||'general'}`;
+    return `${cls.family}:general`;
+  }
+  if(mode==='strong') return `${cls.family}:${cls.subtype||'general'}:${unitBucket(item.unit)}`;
+  return `${cls.family}:${cls.subtype||'general'}:${unitBucket(item.unit)}:${normV099(item.concept||'').split(' ').slice(0,3).join('-')}`;
+}
+function libraryRepresentativeScore(item){
+  let score=0;
+  if(num(item.unitPrice)>0) score+=45;
+  if(num(item.directCost)>0) score+=15;
+  if(Array.isArray(item.decomp) && item.decomp.length) score+=35;
+  const st=strip(item.status||'');
+  if(st.includes('valid')) score+=35;
+  if(st.includes('pendent')) score-=5;
+  if(st.includes('historic') || st.includes('històric')) score-=10;
+  const conceptLen=cleanText(item.concept||'').length;
+  const longLen=cleanText(item.longDesc||'').length;
+  if(conceptLen>12 && conceptLen<180) score+=20;
+  if(longLen>30) score+=10;
+  if(isTrashLibraryConceptV099(item)) score-=1000;
+  return score;
+}
+function buildLibraryCleanupPlan(mode='verystrong'){
+  const groups=new Map();
+  const trash=[];
+  for(const item of data.library||[]){
+    const cls=classifyLibraryFamily(item);
+    if(cls.trash){ trash.push({item,cls}); continue; }
+    const key=cleanupKeyV099(item,mode);
+    if(!groups.has(key)) groups.set(key,{key, cls:{...cls,key}, items:[]});
+    groups.get(key).items.push(item);
+  }
+  const rows=[...groups.values()].map(g=>{
+    const sorted=[...g.items].sort((a,b)=>libraryRepresentativeScore(b)-libraryRepresentativeScore(a));
+    return {...g, representative:sorted[0], duplicates:sorted.slice(1)};
+  }).sort((a,b)=>TEIMOR_CHAPTERS_V099.indexOf(a.cls.chapter)-TEIMOR_CHAPTERS_V099.indexOf(b.cls.chapter) || String(a.cls.chapter).localeCompare(String(b.cls.chapter),'ca',{numeric:true}) || String(a.cls.subtype||'').localeCompare(String(b.cls.subtype||''),'ca',{numeric:true}));
+  const duplicates=rows.reduce((s,g)=>s+g.duplicates.length,0);
+  return {mode, rows, trash, before:(data.library||[]).length, after:rows.length, duplicates, trashCount:trash.length};
+}
+function cleanupPlanSummaryHtml(plan){
+  const byChapter={}; plan.rows.forEach(g=>{ const ch=g.cls.chapter||'Altres / revisar'; (byChapter[ch] ||= []).push(g); });
+  const chapterSummary=TEIMOR_CHAPTERS_V099.filter(ch=>byChapter[ch]?.length).map(ch=>`<tr><td><strong>${esc(ch)}</strong></td><td>${byChapter[ch].length}</td><td>${byChapter[ch].reduce((s,g)=>s+g.items.length,0)}</td></tr>`).join('');
+  const preview=plan.rows.filter(g=>g.items.length>1).slice(0,120);
+  return `
+    <div class="grid four">
+      <div class="kpi"><span>Partides actuals</span><strong>${plan.before}</strong></div>
+      <div class="kpi good"><span>Partides tipus resultants</span><strong>${plan.after}</strong></div>
+      <div class="kpi"><span>Duplicades agrupables</span><strong>${plan.duplicates}</strong></div>
+      <div class="kpi ${plan.trashCount?'bad':'good'}"><span>No partides / descartades</span><strong>${plan.trashCount}</strong></div>
+    </div>
+    <div class="card notice-blue"><strong>V09.9:</strong> depuració orientada als capítols reals de TEIMOR: formació de pendents, mitges canyes, geotèxtil, làmines asfàltiques, polimèriques i autoprotegides, paviments, sòcols, repicats, grava, poliestirè i runes.</div>
+    <details class="chapter-group" open><summary><strong>Capítols proposats</strong><span>${Object.keys(byChapter).length}</span></summary><div class="table-wrap"><table><thead><tr><th>Capítol</th><th>Partides tipus</th><th>Originals agrupades</th></tr></thead><tbody>${chapterSummary}</tbody></table></div></details>
+    ${preview.length?`<div class="table-wrap"><table><thead><tr><th>Capítol</th><th>Grup</th><th>Es conserva</th><th>S’agrupen</th><th>Representant</th></tr></thead><tbody>${preview.map(g=>`<tr><td>${esc(g.cls.chapter)}</td><td>${esc(g.cls.subtype||g.key)}</td><td>1</td><td>${g.duplicates.length}</td><td><strong>${esc(g.representative.concept||'')}</strong><br><span class="muted">${esc(g.representative.unit||'')} · ${money(g.representative.unitPrice||libFinal(g.representative))}</span></td></tr>`).join('')}</tbody></table></div>`:`<div class="empty">No hi ha grups duplicats segons el criteri actual.</div>`}
+    ${plan.trashCount?`<details class="chapter-group"><summary><strong>Textos descartables com a no partida</strong><span>${plan.trashCount}</span></summary><div class="small-text">${plan.trash.slice(0,160).map(x=>esc(x.item.concept||x.item.longDesc||x.item.code||'')).join('<br>')}</div></details>`:''}
+  `;
+}
+function openLibraryCleanupModal(){
+  const plan=buildLibraryCleanupPlan('verystrong');
+  openModal(`<h2>Depurar llibreria per capítols TEIMOR</h2>
+    <div class="card">
+      <p>Redueix les partides importades a partides tipus representatives i descarta textos que no són partides, com IVA, bases, totals, fórmules, dades de client o adreces.</p>
+      <div class="form-grid">
+        <label>Mode de depuració<select id="cleanupMode"><option value="verystrong" selected>Molt fort recomanat · capítols TEIMOR</option><option value="ultra">Ultra · una partida per capítol principal</option><option value="strong">Fort · conserva més subtipus/unitats</option><option value="conservative">Conservador · separa més variants</option></select></label>
+        <label>Resultat estimat<input id="cleanupEstimate" readonly value="${plan.before} → ${plan.after} partides tipus visibles"></label>
+      </div>
+      <div id="cleanupPreview">${cleanupPlanSummaryHtml(plan)}</div>
+      <div class="actions"><button class="primary" id="applyLibraryCleanup">Aplicar depuració TEIMOR</button><button class="ghost" id="refreshCleanupPreview">Recalcular previsualització</button>${(data.libraryCleanupBackups||[]).length?'<button class="ghost" id="restoreLibraryCleanup">Restaurar última depuració</button>':''}</div>
+    </div>`);
+}
+function refreshCleanupPreview(){
+  const mode=document.getElementById('cleanupMode')?.value || 'verystrong';
+  const plan=buildLibraryCleanupPlan(mode);
+  const est=document.getElementById('cleanupEstimate'); if(est) est.value=`${plan.before} → ${plan.after} partides tipus visibles`;
+  const prev=document.getElementById('cleanupPreview'); if(prev) prev.innerHTML=cleanupPlanSummaryHtml(plan);
+}
+function applyLibraryCleanup(){ finishLibraryCleanupV099(document.getElementById('cleanupMode')?.value || 'verystrong'); }
+function finishLibraryCleanupV099(mode='verystrong'){
+  const plan=buildLibraryCleanupPlan(mode);
+  if(!confirm(`Aplicar depuració TEIMOR?\n\nPartides actuals: ${plan.before}\nPartides resultants: ${plan.after}\nDuplicades agrupades: ${plan.duplicates}\nTextos descartats: ${plan.trashCount}\n\nEs guardarà una còpia interna per restaurar.`)) return;
+  data.libraryCleanupBackups = Array.isArray(data.libraryCleanupBackups) ? data.libraryCleanupBackups : [];
+  data.libraryCleanupBackups.push({id:uid('LIBBACK'),date:new Date().toISOString(),mode,before:JSON.parse(JSON.stringify(data.library||[])),note:`V09.9 depuració TEIMOR ${plan.before} → ${plan.after}`});
+  if(data.libraryCleanupBackups.length>5) data.libraryCleanupBackups=data.libraryCleanupBackups.slice(-5);
+  const idMap={};
+  const next=[];
+  for(const g of plan.rows){
+    const rep=JSON.parse(JSON.stringify(g.representative||{}));
+    rep.chapter=g.cls?.chapter || rep.chapter || 'Altres / revisar';
+    rep.status=strip(rep.status||'').includes('valid') ? rep.status : 'Partida tipus agrupada';
+    rep.isTypeRepresentative=true;
+    rep.hiddenDuplicate=false; rep.mergedInto=''; rep.discardedAsTrash=false;
+    rep.groupKey=g.key; rep.groupSubtype=g.cls?.subtype || ''; rep.groupedCount=g.items?.length || 1;
+    rep.aliases=[...new Set((g.items||[]).map(x=>cleanText(x.concept||'')).filter(Boolean))].slice(0,150);
+    rep.history=[...(rep.history||[])];
+    for(const dup of (g.duplicates||[])){
+      idMap[dup.id]=rep.id;
+      rep.history.push({origin:dup.origin||'Agrupada', concept:dup.concept, longDesc:dup.longDesc, unit:dup.unit, unitPrice:dup.unitPrice, total:dup.total, status:dup.status, chapterBefore:dup.chapter, date:today(), mergedInto:rep.id});
+    }
+    next.push(rep);
+  }
+  for(const b of data.budgets||[]){
+    for(const l of (b.lines||[])){
+      if(l.libraryId && idMap[l.libraryId]) l.libraryId=idMap[l.libraryId];
+      const cls=classifyLibraryFamily(l); if(cls && !cls.trash) l.chapter=cls.chapter;
+    }
+  }
+  data.library=next.sort((a,b)=>TEIMOR_CHAPTERS_V099.indexOf(a.chapter)-TEIMOR_CHAPTERS_V099.indexOf(b.chapter) || String(a.concept||'').localeCompare(String(b.concept||''),'ca',{numeric:true}));
+  data.importLogs=data.importLogs||[];
+  data.importLogs.push({id:uid('CLEAN'),date:new Date().toISOString(),type:'Depuració TEIMOR V09.9',before:plan.before,after:plan.after,duplicates:plan.duplicates,trash:plan.trashCount,mode});
+  state.libChapterFilter=''; state.libSearch=''; state.libStatusFilter=''; state.libShowAllOriginals=false;
+  saveData(); closeModal(); renderLibrary();
+}
+function normalizeExistingLibraryChaptersV099(){
+  let changed=false;
+  for(const item of data.library||[]){
+    if(isTrashLibraryConceptV099(item)){ item.discardedAsTrash=true; changed=true; continue; }
+    const cls=classifyLibraryFamily(item);
+    if(cls && !cls.trash && (!item.chapter || !TEIMOR_CHAPTER_SET_V099.has(strip(item.chapter)))){
+      item.chapter=cls.chapter; changed=true;
+    }
+  }
+  if(changed){ try{ saveData(); }catch(e){} }
+}
+function libraryRowsCleanAutoV098(){
+  normalizeExistingLibraryChaptersV099();
+  const lib=data.library||[];
+  const reps=lib.filter(x=>x.isTypeRepresentative && !x.hiddenDuplicate && !x.mergedInto && !x.discardedAsTrash && !isTrashLibraryConceptV099(x));
+  if(reps.length) return reps;
+  return lib.filter(x=>!(x.hiddenDuplicate || x.mergedInto || x.discardedAsTrash) && !isTrashLibraryConceptV099(x));
+}
+function libraryTable(rows){
+  if(!rows.length) return empty();
+  return `<div class="table-wrap library-mini-table"><table><thead><tr><th>Sel.</th>${sortableTh('Codi','library','code')}<th>Ut</th>${sortableTh('Descripció curta','library','concept')}${sortableTh('PU final','library','pu')}<th>Estat</th><th>Accions</th></tr></thead><tbody>${rows.map(item=>`
+    <tr>
+      <td><input type="checkbox" class="select-library" value="${esc(item.id)}"></td>
+      <td><strong>${esc(item.code||'')}</strong></td>
+      <td>${esc(item.unit||'')}</td>
+      <td><button class="linklike" data-view-lib="${esc(item.id)}"><strong>${esc(item.concept||'')}</strong></button></td>
+      <td class="num">${money(item.unitPrice || libFinal(item))}</td>
+      <td>${statusPill(item.status||'Pendent')}</td>
+      <td class="nowrap"><button class="ghost small" data-view-lib="${esc(item.id)}">Veure / editar</button> <button class="danger small" data-delete-lib="${esc(item.id)}">Eliminar</button></td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+function libraryGroupedTable(rows){
+  if(!rows.length) return empty();
+  const grouped={};
+  for(const item of rows){ const ch=item.chapter||'Altres / revisar'; (grouped[ch] ||= []).push(item); }
+  const keys=Object.keys(grouped).sort((a,b)=>{
+    const ia=TEIMOR_CHAPTERS_V099.indexOf(a), ib=TEIMOR_CHAPTERS_V099.indexOf(b);
+    return (ia<0?999:ia)-(ib<0?999:ib) || a.localeCompare(b,'ca',{numeric:true});
+  });
+  return keys.map(ch=>`
+    <details class="chapter-group" open>
+      <summary><strong>${esc(ch)}</strong><span>${grouped[ch].length} partida/es</span></summary>
+      ${libraryTable(grouped[ch])}
+    </details>`).join('');
+}
+function renderLibrary(){
+  autoFinalizeLibraryIfNeededV098?.();
+  normalizeExistingLibraryChaptersV099();
+  setHeader('Llibreria de partides · V09.9','Capítols TEIMOR. La vista elimina l’origen de les partides i prioritza una llibreria curta de partides tipus representatives.');
+  const q=state.libSearch || '';
+  const filter=strip(q);
+  const showAll=!!state.libShowAllOriginals;
+  const baseRows=showAll ? (data.library||[]).filter(x=>!isTrashLibraryConceptV099(x)) : libraryRowsCleanAutoV098();
+  const chapters=TEIMOR_CHAPTERS_V099.filter(ch=>baseRows.some(x=>(x.chapter||'Altres / revisar')===ch));
+  const chapter=state.libChapterFilter || '';
+  const statusFilter=strip(state.libStatusFilter || '');
+  let rows=baseRows.filter(x=>{
+    const chapterOk=!chapter || (x.chapter||'Altres / revisar')===chapter;
+    const statusOk=!statusFilter || strip(x.status||'').includes(statusFilter);
+    const searchOk=!filter || strip([x.code,x.chapter,x.unit,x.concept,x.longDesc,x.status,(x.aliases||[]).join(' ')].join(' ')).includes(filter);
+    return chapterOk && statusOk && searchOk;
+  });
+  rows=sortByLibraryField(rows);
+  setContent(`
+    <div class="card">
+      <div class="toolbar"><h2>Llibreria per capítols TEIMOR</h2><div class="right"><button class="primary" id="smartCleanLibraryV097">Depurar per conceptes TEIMOR</button><button class="ghost" id="selectAllLibrary">Seleccionar tot</button><button class="ghost" id="clearSelectedLibrary">Desmarcar</button><button class="danger" id="deleteSelectedLibrary">Eliminar seleccionades</button><button class="ghost" id="exportLibraryJson">Exportar llibreria</button><label class="ghost file-label">Importar llibreria<input id="importLibraryJson" type="file" accept="application/json" hidden></label><button class="primary" id="newLibItem">Nova partida</button></div></div>
+      <div class="grid four">
+        <div class="kpi"><span>Partides visibles</span><strong>${rows.length}</strong></div>
+        <div class="kpi"><span>Total guardades</span><strong>${(data.library||[]).length}</strong></div>
+        <div class="kpi good"><span>Capítols visibles</span><strong>${chapters.length}</strong></div>
+        <div class="kpi"><span>Vista</span><strong>${showAll?'Totes':'Neta'}</strong></div>
+      </div>
+      <div class="filter-grid" style="margin-top:12px">
+        <label>Cerca<input id="libSearch" placeholder="Cercar partida, codi, capítol..." value="${esc(q)}"></label>
+        <label>Capítol<select id="libChapterFilter"><option value="">Tots els capítols</option>${TEIMOR_CHAPTERS_V099.map(c=>`<option value="${esc(c)}" ${c===chapter?'selected':''}>${esc(c)}</option>`).join('')}</select></label>
+        <label>Estat<select id="libStatusFilter"><option value="">Tots</option>${['Validada','Validada pendent revisió','Partida tipus agrupada','Importada pendent de revisar','Històrica sense amidament','PA pendent amidament','Duplicada possible'].map(s=>`<option ${strip(s)===statusFilter?'selected':''}>${esc(s)}</option>`).join('')}</select></label>
+        <label>Vista<select id="libShowAllOriginals"><option value="0" ${!showAll?'selected':''}>Neta: només partides tipus</option><option value="1" ${showAll?'selected':''}>Totes les guardades</option></select></label>
+      </div>
+      <div class="sort-bar small-text">Ordenar llibreria: ${sortableInline('Codi','library','code')} ${sortableInline('Capítol','library','chapter')} ${sortableInline('Concepte','library','concept')} ${sortableInline('PU','library','pu')} ${sortableInline('Estat','library','status')}</div>
+      <div id="libraryTable">${libraryGroupedTable(rows)}</div>
+    </div>
+  `);
+}
+function openLibModal(id=''){
+  const item = id ? byId(data.library,id) : {id:uid('LIB'), ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, decomp:[], status:'Pendent de revisar', chapter:'Altres / revisar'};
+  const lines = item.decomp || [];
+  const cd = libDirect(item);
+  const final = item.unitPrice || libFinal(item);
+  const currentChapter=item.chapter || 'Altres / revisar';
+  const chapterOptions=[...TEIMOR_CHAPTERS_V099]; if(currentChapter && !chapterOptions.includes(currentChapter)) chapterOptions.push(currentChapter);
+  openModal(`
+    <h2>${id?'Fitxa de partida':'Nova partida de llibreria'}</h2>
+    <form id="libForm" class="form-grid lib-modal-form lib-modal-v099">
+      <input type="hidden" name="editId" value="${esc(id)}"><input type="hidden" name="id" value="${esc(item.id)}"><input type="hidden" name="origin" value="${esc(item.origin||'Manual')}">
+      <div class="full tabs-small modal-tabs">
+        <button type="button" class="active" data-modal-tab="fitxa">Fitxa</button>
+        <button type="button" data-modal-tab="descripcio">Descripció llarga</button>
+        <button type="button" data-modal-tab="descompost">Descompost BEDEC</button>
+        <button type="button" data-modal-tab="historic">Històric</button>
+      </div>
+      <div class="full modal-panel active" data-modal-panel="fitxa">
+        <div class="form-grid">
+          <label>Codi<input name="code" value="${esc(item.code||'')}"></label>
+          <label>Capítol<select name="chapter">${chapterOptions.map(ch=>`<option value="${esc(ch)}" ${ch===currentChapter?'selected':''}>${esc(ch)}</option>`).join('')}</select></label>
+          <label>Unitat<input name="unit" value="${esc(item.unit||'')}"></label>
+          <label>Estat<select name="status">
+            ${['Validada','Validada pendent revisió','Partida tipus agrupada','Importada pendent de revisar','Històrica sense amidament','PA pendent amidament','Duplicada possible'].map(s=>`<option ${item.status===s?'selected':''}>${s}</option>`).join('')}
+          </select></label>
+          <label class="wide">Descripció curta<input name="concept" value="${esc(item.concept||'')}"></label>
+          <label>Cost directe<input name="directCost" type="number" step="0.01" value="${esc(item.directCost||'')}"></label>
+          <label>PU final històric<input name="unitPrice" type="number" step="0.01" value="${esc(item.unitPrice||'')}"></label>
+          <label>CI %<input name="ci" type="number" step="0.01" value="${esc(item.ci ?? data.settings.defaultCI)}"></label>
+          <label>DGE %<input name="dge" type="number" step="0.01" value="${esc(item.dge ?? data.settings.defaultDGE)}"></label>
+          <label>BI %<input name="bi" type="number" step="0.01" value="${esc(item.bi ?? data.settings.defaultBI)}"></label>
+        </div>
+        <div class="grid three" style="margin-top:12px">
+          <div class="kpi"><span>Cost directe calculat</span><strong>${money(cd)}</strong></div>
+          <div class="kpi"><span>PU final / històric</span><strong>${money(final)}</strong></div>
+          <div class="kpi"><span>Línies descompost</span><strong>${lines.length}</strong></div>
+        </div>
+      </div>
+      <div class="full modal-panel" data-modal-panel="descripcio">
+        <label class="full">Descripció llarga<textarea name="longDesc" class="large-textarea desc-big-v099">${esc(item.longDesc||'')}</textarea></label>
+      </div>
+      <div class="full modal-panel" data-modal-panel="descompost">
+        <div class="detail-box"><div class="toolbar"><h3>Descompost BEDEC estructurat</h3><button class="ghost small" type="button" id="addDecompLine">Afegir línia</button></div>
+          <div class="table-wrap"><table id="decompTable" class="bedec-table"><thead><tr><th>Tipus</th><th>Recurs</th><th>Ut</th><th>Rendiment</th><th>Preu</th><th>Fórmula</th><th>Total CD</th><th></th></tr></thead><tbody>
+            ${lines.length ? lines.map((l,i)=>decompRow(l,i)).join('') : ''}
+          </tbody><tfoot><tr><td colspan="6" class="num"><strong>Cost directe</strong></td><td class="num"><strong>${money(decompSummary(lines))}</strong></td><td></td></tr></tfoot></table></div>
+          <p class="small-text">El cost directe és rendiment × preu. Els percentatges CI, DGE i BI poden variar per pressupost.</p>
+        </div>
+      </div>
+      <div class="full modal-panel" data-modal-panel="historic">
+        ${libraryHistoryTable(item)}
+      </div>
+      <div class="actions full"><button class="primary">Guardar partida</button><button class="ghost" type="button" id="closeModalBtn">Cancel·lar</button></div>
+    </form>
+  `);
+}
+const __teimorBindViewEvents_V099 = bindViewEvents;
+bindViewEvents = function(){
+  __teimorBindViewEvents_V099();
+  if(state.view==='library'){
+    const cleanBtn=document.getElementById('smartCleanLibraryV097'); if(cleanBtn) cleanBtn.onclick=openLibraryCleanupModal;
+    const show=document.getElementById('libShowAllOriginals'); if(show) show.onchange=e=>{ state.libShowAllOriginals=e.target.value==='1'; renderLibrary(); };
+  }
+};
+const __teimorBindModalEvents_V099 = bindModalEvents;
+bindModalEvents = function(){
+  __teimorBindModalEvents_V099();
+  const mode=document.getElementById('cleanupMode'); if(mode) mode.onchange=refreshCleanupPreview;
+  const refresh=document.getElementById('refreshCleanupPreview'); if(refresh) refresh.onclick=refreshCleanupPreview;
+  const apply=document.getElementById('applyLibraryCleanup'); if(apply) apply.onclick=applyLibraryCleanup;
+};
+
+
+/* ============================================================
+   TEIMOR V09.10 · capítols nets + origen ocult a llibreria
+   - Capítols principals reduïts.
+   - Normalització automàtica de capítols antics.
+   - No mostra origen a la llibreria ni a l'històric visible.
+   ============================================================ */
+(function(){
+  data.meta = data.meta || {};
+  data.meta.version = '9.10.0-capitols-nets';
+  try{ saveData?.(); }catch(e){}
+})();
+
+const TEIMOR_CHAPTERS_V0910 = [
+  'Formació de pendents',
+  'Mitges canyes',
+  'Geotèxtil',
+  'Làmines asfàltiques',
+  'Làmines polimèriques',
+  'Làmines autoprotegides',
+  'Imprimacions',
+  'Proves d’estanqueïtat',
+  'Regates i obertures',
+  'Remats i peces especials',
+  'Col·locació de paviment',
+  'Col·locació de sòcol',
+  'Repicar paviment',
+  'Grava solta',
+  'Aïllament de poliestirè',
+  'Residus i runes',
+  'Proteccions i mitjans auxiliars',
+  'Altres / revisar'
+];
+const TEIMOR_CHAPTER_SET_V0910 = new Set(TEIMOR_CHAPTERS_V0910.map(strip));
+
+function textV0910(item){ return cleanText([item?.concept,item?.longDesc,item?.unit,item?.code].filter(Boolean).join(' ')); }
+function normV0910(v){ return strip(v).replace(/[·']/g,' ').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim(); }
+function unitBucketV0910(u){ const s=strip(u||''); if(/m2|m²/.test(s)) return 'm2'; if(/ml|m lineal/.test(s)) return 'ml'; if(/ut|ud|u\b/.test(s)) return 'ut'; if(/kg/.test(s)) return 'kg'; return s||'gen'; }
+function classifyLibraryFamily(item){
+  const raw=textV0910(item);
+  const t=normV0910(raw);
+  if(isTrashLibraryConceptV099(item)) return {chapter:'Descartades / no partides', family:'no-partida', label:'No partida evident', subtype:'trash', key:'trash:'+t.slice(0,60), trash:true};
+  const rules=[
+    ['Formació de pendents','formacio-pendents',/formaci[oó] de pendent|formacion de pendiente|pendents?|pendientes?|capa de pendents|capa de pendientes|morter de pendent|mortero de pendiente|regularitzaci[oó].*pendent|recreixement.*pendent/],
+    ['Mitges canyes','mitges-canyes',/mitja canya|mitges canyes|media cana|medias canas|escocia|esc[oó]cia|cantonera arrodonida|rodonament/],
+    ['Geotèxtil','geotextil',/geot[eè]xtil|geotextil|geotex/],
+    ['Làmines autoprotegides','lamines-autoprotegides',/autoproteg|autoprotegid|autoprotegida|mineral|pissarra|pizarra|alumini|aluminio/],
+    ['Làmines asfàltiques','lamines-asfaltiques',/l[àa]mina.*asf|lamina.*asf|l[àa]mina.*bitumin|lamina.*bitumin|lbm|lba|bet[uú]n|betun|sbs|app|oxiasfalt|asf[aà]ltic|asfaltica|bituminosa/],
+    ['Làmines polimèriques','lamines-polimeriques',/epdm|pvc|tpo|polim[eè]ric|polimeric|butil|cautxu|caucho|membrana elastomer|l[àa]mina.*synt|lamina.*sint/],
+    ['Imprimacions','imprimacions',/imprimaci[oó]|imprimacion|primer|emprimaci[oó]|emprimacion|preparaci[oó].*suport|preparacion.*soporte/],
+    ['Proves d’estanqueïtat','proves-estanqueitat',/prova d.?estanque|prueba d.?estanque|estanque[iï]tat|estanqueidad|inundaci[oó]|inundacion/],
+    ['Regates i obertures','regates-obertures',/regata|regates|roza|rozas|obertura|obertures|apertura|aperturas|encast|empotrar|cala|forat|agujero/],
+    ['Remats i peces especials','remats-peces',/remat|remate|minvell|babero|entrega|solapament|solape|cantonera|perfil|xapa|chapa|pe[cç]a especial|pieza especial|sif[oó]|sumidero|bunera/],
+    ['Col·locació de paviment','colocacio-paviment',/col[· ]?locaci[oó].*paviment|colocacion.*pavimento|paviment|pavimento|gres|rajol|baldosa|llosa|loseta|cer[aà]mic|ceramic|terratzo|terrazo/],
+    ['Col·locació de sòcol','colocacio-socol',/s[oò]col|socol|z[oó]calo|zocalo|rodapeu|rodapie|rodapi[eé]/],
+    ['Repicar paviment','repicar-paviment',/repicar.*paviment|picar.*paviment|arrencar.*paviment|retirar.*paviment|demolici[oó].*paviment|levantar.*pavimento|repicat|repicado/],
+    ['Grava solta','grava-solta',/grava|gravilla|canto rodado|c[àa]rrega.*grava|extendido.*grava/],
+    ['Aïllament de poliestirè','aillament-poliestire',/poliestir[eè]|poliestireno|xps|eps|extrusion|extru[iï]t|extrusio|expandit|expandido|a[iï]llament|aislamiento/],
+    ['Residus i runes','residus-runes',/runa|runes|residu|residuos|enderroc|escombro|contenidor|contenedor|abocador|vertedero|transport.*runa|gesti[oó].*residu/],
+    ['Proteccions i mitjans auxiliars','proteccions-mitjans',/protecci[oó]|proteccion|protegir|cart[oó]|pl[àa]stic|plastico|lloguer|alquiler|bastida|andamio|camio|cami[oó]|grua|elevador|muntacargas|mitjans auxiliars|medios auxiliares/]
+  ];
+  for(const [chapter,family,rx] of rules){
+    if(rx.test(t)){
+      const sub=subtypeV099(t,family) || 'general';
+      return {chapter,family,label:chapter,subtype:sub,key:`${family}:${sub}:${unitBucketV0910(item.unit)}`};
+    }
+  }
+  const key=t.split(' ').filter(w=>w.length>3).slice(0,4).join('-') || 'general';
+  return {chapter:'Altres / revisar', family:'altres', label:'Altres / revisar', subtype:key, key:`altres:${key}:${unitBucketV0910(item.unit)}`};
+}
+function cleanupKeyV099(item, mode){
+  const cls=classifyLibraryFamily(item);
+  if(cls.trash) return cls.key;
+  if(mode==='ultra') return `${cls.family}:general`;
+  if(mode==='verystrong'){
+    if(['lamines-asfaltiques','lamines-polimeriques','lamines-autoprotegides','geotextil','aillament-poliestire'].includes(cls.family)) return `${cls.family}:${cls.subtype||'general'}`;
+    return `${cls.family}:general`;
+  }
+  if(mode==='strong') return `${cls.family}:${cls.subtype||'general'}:${unitBucketV0910(item.unit)}`;
+  return `${cls.family}:${cls.subtype||'general'}:${unitBucketV0910(item.unit)}:${normV0910(item.concept||'').split(' ').slice(0,3).join('-')}`;
+}
+function normalizeExistingLibraryChaptersV099(){
+  let changed=false;
+  for(const item of data.library||[]){
+    if(isTrashLibraryConceptV099(item)){ item.discardedAsTrash=true; changed=true; continue; }
+    const cls=classifyLibraryFamily(item);
+    if(cls && !cls.trash && item.chapter!==cls.chapter){ item.chapter=cls.chapter; changed=true; }
+    if(item.chapter && !TEIMOR_CHAPTER_SET_V0910.has(strip(item.chapter))){ item.chapter='Altres / revisar'; changed=true; }
+  }
+  if(changed){ try{ saveData(); }catch(e){} }
+}
+function libraryRowsCleanAutoV098(){
+  normalizeExistingLibraryChaptersV099();
+  const lib=data.library||[];
+  const reps=lib.filter(x=>x.isTypeRepresentative && !x.hiddenDuplicate && !x.mergedInto && !x.discardedAsTrash && !isTrashLibraryConceptV099(x));
+  if(reps.length) return reps;
+  return lib.filter(x=>!(x.hiddenDuplicate || x.mergedInto || x.discardedAsTrash) && !isTrashLibraryConceptV099(x));
+}
+function buildLibraryCleanupPlan(mode='verystrong'){
+  const groups=new Map();
+  const trash=[];
+  for(const item of data.library||[]){
+    const cls=classifyLibraryFamily(item);
+    if(cls.trash){ trash.push({item,cls}); continue; }
+    const key=cleanupKeyV099(item,mode);
+    if(!groups.has(key)) groups.set(key,{key, cls:{...cls,key}, items:[]});
+    groups.get(key).items.push(item);
+  }
+  const idx=ch=>{ const i=TEIMOR_CHAPTERS_V0910.indexOf(ch); return i<0?999:i; };
+  const rows=[...groups.values()].map(g=>{
+    const sorted=[...g.items].sort((a,b)=>libraryRepresentativeScore(b)-libraryRepresentativeScore(a));
+    return {...g, representative:sorted[0], duplicates:sorted.slice(1)};
+  }).sort((a,b)=>idx(a.cls.chapter)-idx(b.cls.chapter) || String(a.cls.chapter).localeCompare(String(b.cls.chapter),'ca',{numeric:true}) || String(a.cls.subtype||'').localeCompare(String(b.cls.subtype||''),'ca',{numeric:true}));
+  const duplicates=rows.reduce((s,g)=>s+g.duplicates.length,0);
+  return {mode, rows, trash, before:(data.library||[]).length, after:rows.length, duplicates, trashCount:trash.length};
+}
+function cleanupPlanSummaryHtml(plan){
+  const byChapter={}; plan.rows.forEach(g=>{ const ch=g.cls.chapter||'Altres / revisar'; (byChapter[ch] ||= []).push(g); });
+  const chapterSummary=TEIMOR_CHAPTERS_V0910.filter(ch=>byChapter[ch]?.length).map(ch=>`<tr><td><strong>${esc(ch)}</strong></td><td>${byChapter[ch].length}</td><td>${byChapter[ch].reduce((s,g)=>s+g.items.length,0)}</td></tr>`).join('');
+  const preview=plan.rows.filter(g=>g.items.length>1).slice(0,120);
+  return `
+    <div class="grid four">
+      <div class="kpi"><span>Partides actuals</span><strong>${plan.before}</strong></div>
+      <div class="kpi good"><span>Partides tipus resultants</span><strong>${plan.after}</strong></div>
+      <div class="kpi"><span>Duplicades agrupables</span><strong>${plan.duplicates}</strong></div>
+      <div class="kpi ${plan.trashCount?'bad':'good'}"><span>No partides / descartades</span><strong>${plan.trashCount}</strong></div>
+    </div>
+    <div class="card notice-blue"><strong>V09.10:</strong> depuració amb capítols principals TEIMOR reduïts. Els capítols antics sobrants es reassignen automàticament a un capítol principal o a Altres / revisar.</div>
+    <details class="chapter-group" open><summary><strong>Capítols proposats</strong><span>${Object.keys(byChapter).length}</span></summary><div class="table-wrap"><table><thead><tr><th>Capítol</th><th>Partides tipus</th><th>Originals agrupades</th></tr></thead><tbody>${chapterSummary}</tbody></table></div></details>
+    ${preview.length?`<div class="table-wrap"><table><thead><tr><th>Capítol</th><th>Grup</th><th>Es conserva</th><th>S’agrupen</th><th>Representant</th></tr></thead><tbody>${preview.map(g=>`<tr><td>${esc(g.cls.chapter)}</td><td>${esc(g.cls.subtype||g.key)}</td><td>1</td><td>${g.duplicates.length}</td><td><strong>${esc(g.representative.concept||'')}</strong><br><span class="muted">${esc(g.representative.unit||'')} · ${money(g.representative.unitPrice||libFinal(g.representative))}</span></td></tr>`).join('')}</tbody></table></div>`:`<div class="empty">No hi ha grups duplicats segons el criteri actual.</div>`}
+    ${plan.trashCount?`<details class="chapter-group"><summary><strong>Textos descartables com a no partida</strong><span>${plan.trashCount}</span></summary><div class="small-text">${plan.trash.slice(0,160).map(x=>esc(x.item.concept||x.item.longDesc||x.item.code||'')).join('<br>')}</div></details>`:''}
+  `;
+}
+function finishLibraryCleanupV099(mode='verystrong'){
+  const plan=buildLibraryCleanupPlan(mode);
+  if(!confirm(`Aplicar depuració TEIMOR?\n\nPartides actuals: ${plan.before}\nPartides resultants: ${plan.after}\nDuplicades agrupades: ${plan.duplicates}\nTextos descartats: ${plan.trashCount}\n\nEs guardarà una còpia interna per restaurar.`)) return;
+  data.libraryCleanupBackups = Array.isArray(data.libraryCleanupBackups) ? data.libraryCleanupBackups : [];
+  data.libraryCleanupBackups.push({id:uid('LIBBACK'),date:new Date().toISOString(),mode,before:JSON.parse(JSON.stringify(data.library||[])),note:`V09.10 depuració TEIMOR ${plan.before} → ${plan.after}`});
+  if(data.libraryCleanupBackups.length>5) data.libraryCleanupBackups=data.libraryCleanupBackups.slice(-5);
+  const idMap={}; const next=[];
+  for(const g of plan.rows){
+    const rep=JSON.parse(JSON.stringify(g.representative||{}));
+    rep.chapter=g.cls?.chapter || 'Altres / revisar';
+    rep.status=strip(rep.status||'').includes('valid') ? rep.status : 'Partida tipus agrupada';
+    rep.isTypeRepresentative=true; rep.hiddenDuplicate=false; rep.mergedInto=''; rep.discardedAsTrash=false;
+    rep.groupKey=g.key; rep.groupSubtype=g.cls?.subtype || ''; rep.groupedCount=g.items?.length || 1;
+    rep.aliases=[...new Set((g.items||[]).map(x=>cleanText(x.concept||'')).filter(Boolean))].slice(0,150);
+    rep.history=[...(rep.history||[])];
+    for(const dup of (g.duplicates||[])){
+      idMap[dup.id]=rep.id;
+      rep.history.push({concept:dup.concept, longDesc:dup.longDesc, unit:dup.unit, unitPrice:dup.unitPrice, total:dup.total, status:dup.status, chapterBefore:dup.chapter, date:today(), mergedInto:rep.id});
+    }
+    next.push(rep);
+  }
+  for(const b of data.budgets||[]){ for(const l of (b.lines||[])){ if(l.libraryId && idMap[l.libraryId]) l.libraryId=idMap[l.libraryId]; const cls=classifyLibraryFamily(l); if(cls && !cls.trash) l.chapter=cls.chapter; } }
+  const idx=ch=>{ const i=TEIMOR_CHAPTERS_V0910.indexOf(ch); return i<0?999:i; };
+  data.library=next.sort((a,b)=>idx(a.chapter)-idx(b.chapter) || String(a.concept||'').localeCompare(String(b.concept||''),'ca',{numeric:true}));
+  data.importLogs=data.importLogs||[];
+  data.importLogs.push({id:uid('CLEAN'),date:new Date().toISOString(),type:'Depuració TEIMOR V09.10',before:plan.before,after:plan.after,duplicates:plan.duplicates,trash:plan.trashCount,mode});
+  state.libChapterFilter=''; state.libSearch=''; state.libStatusFilter=''; state.libShowAllOriginals=false;
+  saveData(); closeModal(); renderLibrary();
+}
+function normalizeChaptersNowV0910(){
+  normalizeExistingLibraryChaptersV099();
+  state.libShowAllOriginals=false; state.libChapterFilter='';
+  saveData();
+  renderLibrary();
+}
+function libraryHistoryTable(item){
+  const rows=item.history||[];
+  if(!rows.length) return '<div class="empty">Sense històric agrupat.</div>';
+  return table(['Data','Quantitat','PU','Total','Estat','Capítol anterior'], rows.map(h=>`<tr><td>${esc(h.date||'')}</td><td class="num">${h.qty?num(h.qty).toFixed(3):''}</td><td class="num">${h.unitPrice?money(h.unitPrice):''}</td><td class="num">${h.total?money(h.total):''}</td><td>${statusPill(h.status||'')}</td><td>${esc(h.chapterBefore||'')}</td></tr>`));
+}
+function libraryTable(rows){
+  if(!rows.length) return empty();
+  return `<div class="table-wrap library-mini-table"><table><thead><tr><th>Sel.</th>${sortableTh('Codi','library','code')}<th>Ut</th>${sortableTh('Descripció curta','library','concept')}${sortableTh('PU final','library','pu')}<th>Estat</th><th>Accions</th></tr></thead><tbody>${rows.map(item=>`
+    <tr>
+      <td><input type="checkbox" class="select-library" value="${esc(item.id)}"></td>
+      <td><strong>${esc(item.code||'')}</strong></td>
+      <td>${esc(item.unit||'')}</td>
+      <td><button class="linklike" data-view-lib="${esc(item.id)}"><strong>${esc(item.concept||'')}</strong></button></td>
+      <td class="num">${money(item.unitPrice || libFinal(item))}</td>
+      <td>${statusPill(item.status||'Pendent')}</td>
+      <td class="nowrap"><button class="ghost small" data-view-lib="${esc(item.id)}">Veure / editar</button> <button class="danger small" data-delete-lib="${esc(item.id)}">Eliminar</button></td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+function libraryGroupedTable(rows){
+  if(!rows.length) return empty();
+  const grouped={};
+  for(const item of rows){ const ch=TEIMOR_CHAPTER_SET_V0910.has(strip(item.chapter||'')) ? item.chapter : 'Altres / revisar'; (grouped[ch] ||= []).push(item); }
+  const keys=TEIMOR_CHAPTERS_V0910.filter(ch=>grouped[ch]?.length);
+  return keys.map(ch=>`
+    <details class="chapter-group" open>
+      <summary><strong>${esc(ch)}</strong><span>${grouped[ch].length} partida/es</span></summary>
+      ${libraryTable(grouped[ch])}
+    </details>`).join('');
+}
+function renderLibrary(){
+  autoFinalizeLibraryIfNeededV098?.();
+  normalizeExistingLibraryChaptersV099();
+  setHeader('Llibreria de partides · V09.10','Capítols TEIMOR reduïts. L’origen queda ocult i la vista neta mostra només partides tipus representatives.');
+  const q=state.libSearch || ''; const filter=strip(q); const showAll=!!state.libShowAllOriginals;
+  const baseRows=showAll ? (data.library||[]).filter(x=>!isTrashLibraryConceptV099(x)) : libraryRowsCleanAutoV098();
+  const chapters=TEIMOR_CHAPTERS_V0910.filter(ch=>baseRows.some(x=>(TEIMOR_CHAPTER_SET_V0910.has(strip(x.chapter||'')) ? x.chapter : 'Altres / revisar')===ch));
+  const chapter=state.libChapterFilter || ''; const statusFilter=strip(state.libStatusFilter || '');
+  let rows=baseRows.filter(x=>{
+    const ch=TEIMOR_CHAPTER_SET_V0910.has(strip(x.chapter||'')) ? x.chapter : 'Altres / revisar';
+    const chapterOk=!chapter || ch===chapter;
+    const statusOk=!statusFilter || strip(x.status||'').includes(statusFilter);
+    const searchOk=!filter || strip([x.code,ch,x.unit,x.concept,x.longDesc,x.status,(x.aliases||[]).join(' ')].join(' ')).includes(filter);
+    return chapterOk && statusOk && searchOk;
+  });
+  rows=sortByLibraryField(rows);
+  setContent(`
+    <div class="card">
+      <div class="toolbar"><h2>Llibreria per capítols TEIMOR</h2><div class="right"><button class="primary" id="smartCleanLibraryV097">Depurar per conceptes TEIMOR</button><button class="ghost" id="normalizeChaptersV0910">Normalitzar capítols</button><button class="ghost" id="selectAllLibrary">Seleccionar tot</button><button class="ghost" id="clearSelectedLibrary">Desmarcar</button><button class="danger" id="deleteSelectedLibrary">Eliminar seleccionades</button><button class="ghost" id="exportLibraryJson">Exportar llibreria</button><label class="ghost file-label">Importar llibreria<input id="importLibraryJson" type="file" accept="application/json" hidden></label><button class="primary" id="newLibItem">Nova partida</button></div></div>
+      <div class="grid four">
+        <div class="kpi"><span>Partides visibles</span><strong>${rows.length}</strong></div>
+        <div class="kpi"><span>Total guardades</span><strong>${(data.library||[]).length}</strong></div>
+        <div class="kpi good"><span>Capítols visibles</span><strong>${chapters.length}</strong></div>
+        <div class="kpi"><span>Vista</span><strong>${showAll?'Totes':'Neta'}</strong></div>
+      </div>
+      <div class="filter-grid" style="margin-top:12px">
+        <label>Cerca<input id="libSearch" placeholder="Cercar partida, codi, capítol..." value="${esc(q)}"></label>
+        <label>Capítol<select id="libChapterFilter"><option value="">Tots els capítols</option>${TEIMOR_CHAPTERS_V0910.map(c=>`<option value="${esc(c)}" ${c===chapter?'selected':''}>${esc(c)}</option>`).join('')}</select></label>
+        <label>Estat<select id="libStatusFilter"><option value="">Tots</option>${['Validada','Validada pendent revisió','Partida tipus agrupada','Importada pendent de revisar','Històrica sense amidament','PA pendent amidament','Duplicada possible'].map(s=>`<option ${strip(s)===statusFilter?'selected':''}>${esc(s)}</option>`).join('')}</select></label>
+        <label>Vista<select id="libShowAllOriginals"><option value="0" ${!showAll?'selected':''}>Neta: només partides tipus</option><option value="1" ${showAll?'selected':''}>Totes les guardades</option></select></label>
+      </div>
+      <div class="sort-bar small-text">Ordenar llibreria: ${sortableInline('Codi','library','code')} ${sortableInline('Capítol','library','chapter')} ${sortableInline('Concepte','library','concept')} ${sortableInline('PU','library','pu')} ${sortableInline('Estat','library','status')}</div>
+      <div id="libraryTable">${libraryGroupedTable(rows)}</div>
+    </div>
+  `);
+}
+function openLibModal(id=''){
+  const item = id ? byId(data.library,id) : {id:uid('LIB'), ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, decomp:[], status:'Pendent de revisar', chapter:'Altres / revisar'};
+  const lines = item.decomp || []; const cd = libDirect(item); const final = item.unitPrice || libFinal(item);
+  const cls=classifyLibraryFamily(item); if(!id && cls && !cls.trash) item.chapter=cls.chapter;
+  const currentChapter=TEIMOR_CHAPTER_SET_V0910.has(strip(item.chapter||'')) ? item.chapter : 'Altres / revisar';
+  const chapterOptions=[...TEIMOR_CHAPTERS_V0910]; if(currentChapter && !chapterOptions.includes(currentChapter)) chapterOptions.push(currentChapter);
+  openModal(`
+    <h2>${id?'Fitxa de partida':'Nova partida de llibreria'}</h2>
+    <form id="libForm" class="form-grid lib-modal-form lib-modal-v099">
+      <input type="hidden" name="editId" value="${esc(id)}"><input type="hidden" name="id" value="${esc(item.id)}"><input type="hidden" name="origin" value="${esc(item.origin||'Manual')}">
+      <div class="full tabs-small modal-tabs">
+        <button type="button" class="active" data-modal-tab="fitxa">Fitxa</button>
+        <button type="button" data-modal-tab="descripcio">Descripció llarga</button>
+        <button type="button" data-modal-tab="descompost">Descompost BEDEC</button>
+        <button type="button" data-modal-tab="historic">Històric</button>
+      </div>
+      <div class="full modal-panel active" data-modal-panel="fitxa">
+        <div class="form-grid">
+          <label>Codi<input name="code" value="${esc(item.code||'')}"></label>
+          <label>Capítol<select name="chapter">${chapterOptions.map(ch=>`<option value="${esc(ch)}" ${ch===currentChapter?'selected':''}>${esc(ch)}</option>`).join('')}</select></label>
+          <label>Unitat<input name="unit" value="${esc(item.unit||'')}"></label>
+          <label>Estat<select name="status">${['Validada','Validada pendent revisió','Partida tipus agrupada','Importada pendent de revisar','Històrica sense amidament','PA pendent amidament','Duplicada possible'].map(s=>`<option ${item.status===s?'selected':''}>${s}</option>`).join('')}</select></label>
+          <label class="wide">Descripció curta<input name="concept" value="${esc(item.concept||'')}"></label>
+          <label>Cost directe<input name="directCost" type="number" step="0.01" value="${esc(item.directCost||'')}"></label>
+          <label>PU final històric<input name="unitPrice" type="number" step="0.01" value="${esc(item.unitPrice||'')}"></label>
+          <label>CI %<input name="ci" type="number" step="0.01" value="${esc(item.ci ?? data.settings.defaultCI)}"></label>
+          <label>DGE %<input name="dge" type="number" step="0.01" value="${esc(item.dge ?? data.settings.defaultDGE)}"></label>
+          <label>BI %<input name="bi" type="number" step="0.01" value="${esc(item.bi ?? data.settings.defaultBI)}"></label>
+        </div>
+        <div class="grid three" style="margin-top:12px"><div class="kpi"><span>Cost directe calculat</span><strong>${money(cd)}</strong></div><div class="kpi"><span>PU final / històric</span><strong>${money(final)}</strong></div><div class="kpi"><span>Línies descompost</span><strong>${lines.length}</strong></div></div>
+      </div>
+      <div class="full modal-panel" data-modal-panel="descripcio"><label class="full">Descripció llarga<textarea name="longDesc" class="large-textarea desc-big-v099">${esc(item.longDesc||'')}</textarea></label></div>
+      <div class="full modal-panel" data-modal-panel="descompost"><div class="detail-box"><div class="toolbar"><h3>Descompost BEDEC estructurat</h3><button class="ghost small" type="button" id="addDecompLine">Afegir línia</button></div><div class="table-wrap"><table id="decompTable" class="bedec-table"><thead><tr><th>Tipus</th><th>Recurs</th><th>Ut</th><th>Rendiment</th><th>Preu</th><th>Fórmula</th><th>Total CD</th><th></th></tr></thead><tbody>${lines.length ? lines.map((l,i)=>decompRow(l,i)).join('') : ''}</tbody><tfoot><tr><td colspan="6" class="num"><strong>Cost directe</strong></td><td class="num"><strong>${money(decompSummary(lines))}</strong></td><td></td></tr></tfoot></table></div><p class="small-text">El cost directe és rendiment × preu. Els percentatges CI, DGE i BI poden variar per pressupost.</p></div></div>
+      <div class="full modal-panel" data-modal-panel="historic">${libraryHistoryTable(item)}</div>
+      <div class="actions full"><button class="primary">Guardar partida</button><button class="ghost" type="button" id="closeModalBtn">Cancel·lar</button></div>
+    </form>
+  `);
+}
+const __teimorBindViewEvents_V0910 = bindViewEvents;
+bindViewEvents = function(){
+  __teimorBindViewEvents_V0910();
+  if(state.view==='library'){
+    const cleanBtn=document.getElementById('smartCleanLibraryV097'); if(cleanBtn) cleanBtn.onclick=openLibraryCleanupModal;
+    const normalize=document.getElementById('normalizeChaptersV0910'); if(normalize) normalize.onclick=normalizeChaptersNowV0910;
+    const show=document.getElementById('libShowAllOriginals'); if(show) show.onchange=e=>{ state.libShowAllOriginals=e.target.value==='1'; renderLibrary(); };
+  }
+};
