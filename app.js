@@ -1,11 +1,11 @@
-/* TEIMOR · Gestor de pressupostos v05
+/* TEIMOR · Gestor de pressupostos v06
    App estàtica: les dades importades d'Excel/ZIP es llegeixen al navegador i es guarden localment.
 */
-const STORE_KEY = 'teimor_gestor_pressupostos_v05';
+const STORE_KEY = 'teimor_gestor_pressupostos_v06';
 const LEGACY_STORE_KEY = ''; // No carreguem automàticament dades antigues per evitar arrossegar imports bruts de prova.
-const AUTH_KEY = 'teimor_auth_v05';
-const LEGACY_AUTH_KEY = 'teimor_auth_v04';
-const DB_NAME = 'teimor_attachments_v05';
+const AUTH_KEY = 'teimor_auth_v06';
+const LEGACY_AUTH_KEY = 'teimor_auth_v05';
+const DB_NAME = 'teimor_attachments_v06';
 const DB_STORE = 'files';
 const DEFAULT_USER = 'admin';
 const DEFAULT_PASS = 'teimor2026';
@@ -39,7 +39,7 @@ const normKey = s => strip(s).replace(/[^a-z0-9]+/g,' ').trim();
 
 function defaultData(){
   return {
-    meta:{version:'5.0.0',createdAt:today(),updatedAt:today()},
+    meta:{version:'6.0.0',createdAt:today(),updatedAt:today()},
     settings:{
       appName:'TEIMOR · Base de dades de pressupostos',
       loginUser:DEFAULT_USER,
@@ -100,7 +100,8 @@ function decompCost(item){ return (item.decomp || []).reduce((s,l)=>s + num(l.yi
 function libDirect(item){ return num(item.directCost) || decompCost(item); }
 function libFinal(item, b){ const ci = b?.ci ?? item.ci ?? data.settings.defaultCI; const dge = b?.dge ?? item.dge ?? data.settings.defaultDGE; const bi = b?.bi ?? item.bi ?? data.settings.defaultBI; return libDirect(item) * factor(ci,dge,bi); }
 function lineTotal(l){ return num(l.total) || num(l.qty) * num(l.unitPrice); }
-function budgetBase(b){ return (b?.lines || []).reduce((s,l)=>s+lineTotal(l),0); }
+function budgetLineSum(b){ return (b?.lines || []).reduce((s,l)=>s+lineTotal(l),0); }
+function budgetBase(b){ const lineSum=budgetLineSum(b); const imported=num(b?.importedBase); return lineSum>0 ? lineSum : imported; }
 function budgetIVA(b){ return budgetBase(b) * num(b?.iva)/100; }
 function budgetTotal(b){ return budgetBase(b) + budgetIVA(b); }
 function invoiceBase(i){ return num(i.base); }
@@ -487,6 +488,7 @@ function budgetFormCard(formBudget,isNew=false){
         <label>DGE %<input name="dge" type="number" step="0.01" value="${esc(formBudget.dge ?? data.settings.defaultDGE)}"></label>
         <label>BI %<input name="bi" type="number" step="0.01" value="${esc(formBudget.bi ?? data.settings.defaultBI)}"></label>
         <label>IVA %<input name="iva" type="number" step="0.01" value="${esc(formBudget.iva ?? data.settings.defaultIVA)}"></label>
+        <label>Base importada s/IVA<input name="importedBase" type="number" step="0.01" value="${esc(formBudget.importedBase || '')}"></label>
         <label class="full">Notes<textarea name="notes">${esc(formBudget.notes||'')}</textarea></label>
         <div class="actions full"><button class="primary">Guardar pressupost</button><button class="ghost" type="button" data-render-budgets>Cancel·lar</button></div>
       </form>
@@ -507,6 +509,7 @@ function budgetLinesCard(b){
     <div class="table-wrap budget-lines"><table><thead><tr><th>Sel.</th><th>Codi</th><th>Ut</th><th>Concepte / descripció</th><th>Quantitat</th><th>Preu/ut</th><th>Total</th><th>Estat</th><th></th></tr></thead><tbody>${(b.lines||[]).map(l=>`
       <tr><td><input type="checkbox" class="select-budget-line" value="${esc(l.id)}"></td><td><input data-line-field="code" data-line-id="${esc(l.id)}" value="${esc(l.code||'')}"></td><td><input data-line-field="unit" data-line-id="${esc(l.id)}" value="${esc(l.unit||'')}"></td><td><input data-line-field="concept" data-line-id="${esc(l.id)}" value="${esc(l.concept||'')}"><div class="long muted">${esc(l.longDesc||'')}</div></td><td><input class="num" data-line-field="qty" data-line-id="${esc(l.id)}" type="number" step="0.0001" value="${esc(l.qty||'')}"></td><td><input class="num" data-line-field="unitPrice" data-line-id="${esc(l.id)}" type="number" step="0.01" value="${esc(l.unitPrice||'')}"></td><td class="num"><strong>${money(lineTotal(l))}</strong></td><td>${statusPill(l.status||'')}</td><td><button class="danger small" data-delete-line="${esc(l.id)}">Eliminar</button></td></tr>`).join('')}</tbody></table></div>
     <div class="budget-total"><div>Base: <strong>${money(budgetBase(b))}</strong></div><div>IVA: <strong>${money(budgetIVA(b))}</strong></div><div>Total: <strong>${money(budgetTotal(b))}</strong></div></div>
+    ${budgetLineSum(b)===0 && num(b.importedBase)>0 ? `<div class="small-text" style="text-align:right;margin-top:6px">Base presa del total detectat a l’Excel original; les línies separades per * queden pendents de preu/amidament.</div>` : ''}
   </div>`;
 }
 function renderInvoices(editId=''){
@@ -580,7 +583,7 @@ function renderImporter(){
   const ready = typeof XLSX !== 'undefined';
   setContent(`
     ${!ready?'<div class="card notice-red"><strong>Llibreria Excel no carregada.</strong> Comprova connexió o inclou SheetJS localment. Sense aquesta llibreria no es poden llegir .xls/.xlsx.</div>':''}
-    <div class="card notice-blue"><strong>Criteri d’importació V05:</strong> el client guardat és el del requadre/destinatari del pressupost, no TEIMOR. Les obres es veuen integrades dins la pestanya Pressupostos. En pressupostos antics TEIMOR d’una sola partida, l’app crea una partida única amb CONCEPTE + TREBALLS + MEDICIÓ + BASE IMPOSABLE, i no barreja clients dins la llibreria.</div>
+    <div class="card notice-blue"><strong>Criteri d’importació V06:</strong> el client guardat és el del requadre/destinatari del pressupost, no TEIMOR. Les obres es veuen integrades dins la pestanya Pressupostos. En pressupostos antics TEIMOR, l’app llegeix el requadre superior dret com a client, detecta la Data/Fecha adjacent, agafa la BASE IMPOSABLE o imports tipus “Materials i M.O.” com a total del pressupost i separa les línies de TREBALLS marcades amb * com a partides/subpartides pendents de revisar.</div>
     <div class="card"><div id="dropzone" class="dropzone">
       <h2>Importació massiva</h2><p>Arrossega aquí Excels o un ZIP, o fes servir els botons.</p>
       <div class="actions" style="justify-content:center">
@@ -711,7 +714,7 @@ function deleteSelectedClients(){ const ids=selectedValues('.select-client'); if
 
 function saveJob(e){ e.preventDefault(); const f=formObj(e.target); const j={id:f.id,year:Number(f.year)||new Date().getFullYear(),clientId:f.clientId,title:f.title,address:f.address,city:f.city,status:f.status,notes:f.notes,mainBudgetId:byId(data.jobs,f.editId)?.mainBudgetId||''}; const idx=data.jobs.findIndex(x=>x.id===f.editId || x.id===j.id); if(idx>=0) data.jobs[idx]=j; else data.jobs.push(j); saveData(); renderJobs(); }
 function deleteJob(id){ if(!confirm('Eliminar aquesta feina/obra? Els pressupostos vinculats quedaran sense feina.')) return; data.jobs=data.jobs.filter(x=>x.id!==id); data.budgets.forEach(b=>{ if(b.jobId===id) b.jobId=''; }); data.invoices.forEach(i=>{ if(i.jobId===id) i.jobId=''; }); saveData(); renderJobs(); }
-function saveBudget(e){ e.preventDefault(); const f=formObj(e.target); const old=byId(data.budgets,f.id); const b={...(old||{}), id:f.id, number:f.number, date:f.date, clientId:f.clientId, jobId:f.jobId, title:f.title, status:f.status, ci:num(f.ci), dge:num(f.dge), bi:num(f.bi), iva:num(f.iva), notes:f.notes, lines:old?.lines||[]}; const idx=data.budgets.findIndex(x=>x.id===b.id); if(idx>=0) data.budgets[idx]=b; else data.budgets.push(b); state.selectedBudgetId=b.id; state.editBudgetId=b.id; const job=byId(data.jobs,b.jobId); if(job && !job.mainBudgetId) job.mainBudgetId=b.id; saveData(); renderBudgets(b.id); }
+function saveBudget(e){ e.preventDefault(); const f=formObj(e.target); const old=byId(data.budgets,f.id); const b={...(old||{}), id:f.id, number:f.number, date:f.date, clientId:f.clientId, jobId:f.jobId, title:f.title, status:f.status, ci:num(f.ci), dge:num(f.dge), bi:num(f.bi), iva:num(f.iva), importedBase:num(f.importedBase), notes:f.notes, lines:old?.lines||[]}; const idx=data.budgets.findIndex(x=>x.id===b.id); if(idx>=0) data.budgets[idx]=b; else data.budgets.push(b); state.selectedBudgetId=b.id; state.editBudgetId=b.id; const job=byId(data.jobs,b.jobId); if(job && !job.mainBudgetId) job.mainBudgetId=b.id; saveData(); renderBudgets(b.id); }
 function updateBudgetStatus(id,status){ const b=byId(data.budgets,id); if(!b) return; b.status=status; saveData(); filterBudgets(); }
 function deleteBudget(id){ if(!confirm('Eliminar aquest pressupost i les seves partides?')) return; data.budgets=data.budgets.filter(x=>x.id!==id); data.jobs.forEach(j=>{ if(j.mainBudgetId===id) j.mainBudgetId=''; }); data.invoices.forEach(i=>{ if(i.budgetId===id) i.budgetId=''; }); if(state.selectedBudgetId===id) state.selectedBudgetId=''; if(state.editBudgetId===id) state.editBudgetId=''; saveData(); renderBudgets(); }
 function deleteSelectedBudgets(){ const ids=selectedValues('.select-budget'); if(!ids.length) return alert('No has seleccionat cap pressupost.'); if(!confirm(`Eliminar ${ids.length} pressupost/os seleccionat/s?`)) return; data.budgets=data.budgets.filter(x=>!ids.includes(x.id)); data.jobs.forEach(j=>{ if(ids.includes(j.mainBudgetId)) j.mainBudgetId=''; }); data.invoices.forEach(i=>{ if(ids.includes(i.budgetId)) i.budgetId=''; }); if(ids.includes(state.selectedBudgetId)) state.selectedBudgetId=''; if(ids.includes(state.editBudgetId)) state.editBudgetId=''; saveData(); renderBudgets(); }
@@ -781,7 +784,7 @@ async function deleteAttachment(id){ if(!confirm('Eliminar arxiu local?')) retur
 async function exportPackageZip(){
   if(typeof JSZip === 'undefined') return alert('No s’ha carregat JSZip. Prova exportar JSON complet o revisa la connexió.');
   const zip=new JSZip();
-  const payload={...data, exportedAt:new Date().toISOString(), packageType:'TEIMOR_V05_COMPLET'};
+  const payload={...data, exportedAt:new Date().toISOString(), packageType:'TEIMOR_V06_COMPLET'};
   zip.file('teimor_dades_completes.json', JSON.stringify(payload,null,2));
   zip.file('README.txt', 'Paquet exportat des de TEIMOR Gestor. Aquest ZIP és compatible amb WinRAR. Per seguretat, pot contenir dades personals si has exportat la còpia completa.');
   const folder=zip.folder('arxius_incrustats');
@@ -866,13 +869,22 @@ function parseWorkbook(fileName, arrayBuffer){
   const client = detectClient(fileName, flat);
   const detectedDate = detectDate(flat);
   const year = detectedDate ? Number(detectedDate.slice(0,4)) : detectYear(fileName, flat);
-  const job = {id:uid('F'), year, clientTempKey:client.tempKey, title:detectJobTitle(fileName, flat), address:client.workAddress || detectAddress(flat), city:detectCity(flat), status:'Històrica', source:fileName, notes:'Importada automàticament des d’Excel antic.'};
   const parsedItems=[];
-  sheets.forEach(sh => parsedItems.push(...detectItemsFromSheet(fileName, sh.name, sh.aoa)));
-  const budget = {id:uid('P'), number:detectBudgetNumber(fileName, flat), date:detectedDate || `${year}-01-01`, clientTempKey:client.tempKey, jobTempKey:job.id, title:job.title, status:'Històric importat', ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, iva:data.settings.defaultIVA, source:fileName, notes:'Pressupost importat. Revisa partides sense amidament.', lines:[]};
+  const sheetTotals=[];
+  sheets.forEach(sh => {
+    const rows=sh.aoa.map(row=>row.map(v=>cleanText(v)));
+    const t=findBestTotal(rows);
+    if(t) sheetTotals.push(t);
+    parsedItems.push(...detectItemsFromSheet(fileName, sh.name, sh.aoa));
+  });
+  const importedBase = sheetTotals.length ? Math.max(...sheetTotals) : 0;
+  if(importedBase) warnings.push(`${fileName}: total/base imposable detectat: ${money(importedBase)}.`);
+  const job = {id:uid('F'), year, clientTempKey:client.tempKey, title:detectJobTitle(fileName, flat), address:client.workAddress || detectAddress(flat), city:client.city || detectCity(flat), status:'Històrica', source:fileName, notes:'Importada automàticament des d’Excel antic.'};
+  const budget = {id:uid('P'), number:detectBudgetNumber(fileName, flat), date:detectedDate || `${year}-01-01`, clientTempKey:client.tempKey, jobTempKey:job.id, title:job.title, status:'Històric importat', ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, iva:data.settings.defaultIVA, importedBase, source:fileName, notes:'Pressupost importat. Revisa partides sense amidament/preu.', lines:[]};
   budget.lines = parsedItems.map(it=>({...it,id:uid('LIN')}));
   const items = parsedItems.map(it=>({...it, origin:fileName, sourceBudget:budget.number || fileName}));
-  if(!parsedItems.length) warnings.push(`${fileName}: no s’han detectat partides tabulades. Es guardarà només client/feina/pressupost si confirmes.`);
+  if(!parsedItems.length) warnings.push(`${fileName}: no s’han detectat partides separades. Es guardarà només client/pressupost si confirmes.`);
+  if(client.name==='Client pendent de revisar') warnings.push(`${fileName}: no s’ha trobat un nom de client segur al requadre; revisa el client abans de confirmar.`);
   return {client, job, budget, items, warnings};
 }
 function mergePreviewClients(clients){
@@ -892,44 +904,86 @@ function detectClient(fileName, flat){
   const email = firstRegex(candidateText, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || '';
   const phone = detectPhone(candidateText);
   let name = recipient.name || findValueByLabels(flat, ['client','cliente','destinatari','destinatario','senyors','sres','promotor','propietari','propiedad','comunitat','comunidad']) || '';
-  if(badClientName(name)){ const guessed=guessNameFromFile(fileName); name = badClientName(guessed) ? 'Client pendent de revisar' : guessed; }
+  name = cleanClientName(name);
+  if(name==='Client pendent de revisar'){
+    const guessed=guessNameFromFile(fileName);
+    name = cleanClientName(guessed);
+  }
   const workAddress = recipient.address || findValueByLabels(flat, ['obra','direccion obra','direcció obra','adreça obra','situada','situat','emplaçament','emplazamiento']) || detectAddress(flat);
   const city = recipient.city || detectCity(flat);
-  return {id:uid('CLI'), tempKey:uid('TMPCLI'), name:cleanClientName(name), nif, phone, email, contact:'', fiscalAddress:'', workAddress, city, status:'Actiu', source:fileName, notes:'Client detectat automàticament del requadre/destinatari. Revisar si cal.'};
+  return {id:uid('CLI'), tempKey:uid('TMPCLI'), name, nif, phone, email, contact:'', fiscalAddress:recipient.fiscalAddress||'', workAddress, city, status:'Actiu', source:fileName, notes:'Client detectat automàticament del requadre/destinatari. Revisar si cal.'};
 }
 function detectRecipientBlock(flat){
-  const candidates=[];
-  // Format TEIMOR: destinatari dins requadre superior dret, normalment columnes D/I i files 8-18.
-  for(const r of flat){
-    const cells=r.raw.map(v=>cleanText(v));
-    cells.forEach((c,ci)=>{
-      if(!c || isTeimorText(c) || isNonRecipientText(c)) return;
-      if(r.rowIndex <= 22 && ci >= 3) candidates.push({row:r.rowIndex,col:ci,text:c});
-    });
-  }
-  // Si hi ha etiquetes explícites de client/destinatari, també les afegim amb prioritat.
-  const labelled=findValueByLabels(flat, ['client','cliente','destinatari','destinatario','senyors','sres','promotor','propietari','propiedad','comunitat','comunidad']);
-  if(labelled) candidates.push({row:0,col:99,text:labelled});
-  if(!candidates.length) return {name:'',address:'',city:'',text:''};
-  const lines=[]; const seen=new Set();
-  candidates.sort((a,b)=>a.row-b.row || a.col-b.col).forEach(x=>{
-    const k=strip(x.text); if(!seen.has(k)){ seen.add(k); lines.push(x.text); }
+  // Patró TEIMOR: requadre de destinatari a la part superior dreta. Cada línia sol estar a la mateixa columna:
+  // Nom client → adreça → CP/població → província o NIF/DNI.
+  const blocks=[];
+  const bySheet={};
+  for(const r of flat){ if(r.rowIndex>35) continue; (bySheet[r.sheet]=bySheet[r.sheet]||[]).push(r); }
+  Object.values(bySheet).forEach(rows=>{
+    for(let col=2; col<=12; col++){
+      const lines=[];
+      for(const r of rows){
+        const raw=r.raw||[];
+        const val=cleanText(raw[col]||'');
+        if(!val || isTeimorText(val) || isNonRecipientText(val)) continue;
+        // evitem capçalera d’empresa i imports, però mantenim línies amb NIF/DNI si són dins el requadre.
+        if(/www\.|@teimor|base imposable|iva|pressupost|presupuesto|concepte|medici[oó]|treballs/i.test(val)) continue;
+        if(r.rowIndex<=5) continue; // capçalera TEIMOR
+        if(r.rowIndex>24) continue; // fora del requadre habitual
+        // Si hi ha més text a la dreta a la mateixa fila, normalment no forma part del destinatari sinó d'una altra zona.
+        lines.push({row:r.rowIndex,col,text:val});
+      }
+      if(lines.length>=1){
+        lines.sort((a,b)=>a.row-b.row);
+        // trenquem si hi ha salts grans; el millor bloc sol tenir files consecutives o quasi consecutives.
+        let chunk=[];
+        const flush=()=>{ if(chunk.length) blocks.push({col, lines:chunk.map(x=>x.text), rows:chunk.map(x=>x.row)}); chunk=[]; };
+        for(const l of lines){ if(chunk.length && l.row-chunk[chunk.length-1].row>3) flush(); chunk.push(l); }
+        flush();
+      }
+    }
   });
-  const ranked=lines.map(x=>({text:x,score:clientLineScore(x)})).sort((a,b)=>b.score-a.score);
-  const name=(ranked.find(x=>x.score>0)?.text) || '';
+  // També recollim blocs etiquetats explícitament si existeixen.
+  const labelled=findValueByLabels(flat, ['client','cliente','destinatari','destinatario','senyors','sres','promotor','propietari','propiedad','comunitat','comunidad']);
+  if(labelled) blocks.push({col:99, rows:[0], lines:[labelled]});
+  if(!blocks.length) return {name:'',address:'',city:'',fiscalAddress:'',text:''};
+  const scored=blocks.map(b=>({...b, score:recipientBlockScore(b.lines)})).sort((a,b)=>b.score-a.score);
+  const best=scored[0];
+  const lines=best.lines.map(cleanText).filter(Boolean);
+  let name='';
+  for(const l of lines){
+    if(isProbablyClientName(l)){ name=l; break; }
+  }
   const address = lines.find(looksLikeAddress) || '';
   const cityLine = lines.find(looksLikeCityLine) || '';
-  return {name, address, city:extractCityFromLine(cityLine), text:lines.join('\n')};
+  const fiscalAddress = lines.filter(l=>l && l!==name).join('\n');
+  return {name, address, city:extractCityFromLine(cityLine), fiscalAddress, text:lines.join('\n')};
 }
-function isNonRecipientText(s){ return /^(data|fecha|date|pressupost|presupuesto|n[úu]m\.?|numero|número|obra|concepte|concepto|medicio|medició|medición|medicion|treballs|trabajos|base imposable|base imponible|iva|exclos|excl[oò]s)$/i.test(cleanText(s)); }
-function looksLikeAddress(s){ return /\b(c\/|c\.|carrer|calle|avinguda|avenida|av\.?|avda\.?|passeig|pg\.?|plaza|plaça|rambla|carretera|ctra\.?|urbanitzaci[oó]|urb\.?|travessera|cam[ií]|n[ºo]|núm|num\.?|número|numero|bloc|bloque|esc\.?|escala|baixos|pis|portal|local)\b/i.test(String(s)); }
+function recipientBlockScore(lines){
+  if(!lines || !lines.length) return -999;
+  let score=0;
+  const clean=lines.map(cleanText).filter(Boolean);
+  const first=clean[0]||'';
+  if(isProbablyClientName(first)) score+=120;
+  if(looksLikeAddress(first)) score-=120;
+  if(clean.some(looksLikeAddress)) score+=45;
+  if(clean.some(looksLikeCityLine)) score+=35;
+  if(clean.some(x=>/\b([A-HJNP-SUVW][0-9]{7}[0-9A-J]|[0-9]{8}[A-Z]|[XYZ][0-9]{7}[A-Z])\b/i.test(x))) score+=25;
+  if(clean.some(isTeimorText)) score-=200;
+  if(clean.length>=2 && clean.length<=6) score+=20;
+  return score;
+}
+function isNonRecipientText(s){ return /^(data|fecha|date|pressupost|presupuesto|n[úu]m\.?|num\.?|numero|número|obra|concepte|concepto|medicio|medició|medición|medicion|treballs|trabajos|base imposable|base imponible|iva|exclos|excl[oò]s|total|subtotal)$/i.test(cleanText(s)); }
+function looksLikeAddress(s){ return /\b(c\/|c\.|carrer|calle|avinguda|avenida|av\.?|avda\.?|passeig|pg\.?|plaza|plaça|rambla|carretera|ctra\.?|urbanitzaci[oó]|urb\.?|travessera|cam[ií]|n[ºo]|núm|num\.?|número|numero|bloc|bloque|esc\.?|escala|baixos|pis|portal|local|edifici\s+[^a-z]*$)\b/i.test(String(s)); }
 function looksLikeCityLine(s){ return /\b(17\d{3}|08\d{3}|Girona|Barcelona|Palafrugell|Palam[oó]s|Calonge|Sant Antoni|Begur|Pals|Sant Feliu de Gu[ií]xols|S.?Agar[oó])\b/i.test(String(s)); }
-function badClientName(s){ const t=cleanText(s); return !t || looksLikeAddress(t) || looksLikeCityLine(t) || isTeimorText(t) || isNonRecipientText(t) || /^\(?girona\)?$/i.test(t) || /^[0-9\s.,()-]+$/.test(t); }
+function isProvinceOnly(s){ return /^\(?\s*(girona|barcelona|tarragona|lleida|gerona)\s*\)?$/i.test(cleanText(s)); }
+function isProbablyClientName(s){ const t=cleanText(s); if(!t || t.length<3) return false; if(looksLikeAddress(t) || looksLikeCityLine(t) || isProvinceOnly(t) || isTeimorText(t) || isNonRecipientText(t)) return false; if(/@|\b(tel|telefono|telèfon|nif|dni|cif|cp|codi postal)\b/i.test(t)) return false; if(/^[0-9\s.,()\/-]+$/.test(t)) return false; return true; }
+function badClientName(s){ const t=cleanText(s); return !isProbablyClientName(t); }
 function clientLineScore(s){ const t=cleanText(s); if(badClientName(t)) return -100; let score=Math.min(t.length,80); if(/com\.?\s*de\s*prop|comunitat|comunidad|propietaris|propietarios|s\.?l\.?|s\.?a\.?|scp|cb|riart/i.test(t)) score+=80; if(/^[A-ZÀ-Ý0-9 .&()'-]+$/.test(t)) score+=10; if(/@|\d{8}[A-Z]|[A-Z]\d{7}/i.test(t)) score-=40; return score; }
 function extractCityFromLine(s){ const m=String(s||'').match(/(Palafrugell|Palam[oó]s|Calonge(?: i Sant Antoni)?|Sant Antoni|Begur|Pals|Sant Feliu de Gu[ií]xols|S.?Agar[oó]|Girona|Barcelona)/i); return m?m[0]:cleanText(s||''); }
 function cleanClientName(s){
   s=cleanText(s).replace(/^(client|cliente|destinatari|destinatario|senyors|sres|promotor|propietari|propiedad)\s*[:\-]?\s*/i,'').trim();
-  if(!s || badClientName(s) || s.length<3) return 'Client pendent de revisar';
+  if(!isProbablyClientName(s)) return 'Client pendent de revisar';
   return s;
 }
 function guessNameFromFile(file){
@@ -1046,25 +1100,42 @@ function labelHit(joined, lab){
   if(lab==='total') return new RegExp('(^|\\s)total($|\\s|:)', 'i').test(joined);
   return new RegExp('(^|\\s)'+escLab+'($|\\s|:)', 'i').test(joined) || joined.includes(lab+':');
 }
+function extractMoneyAmounts(text){
+  const s=String(text||'');
+  const out=[];
+  const moneyRe=/(?:€\s*)?([0-9]{1,3}(?:[.,][0-9]{3})+(?:[.,][0-9]{2})|[0-9]+(?:[.,][0-9]{2}))(?:\s*€)?/g;
+  let m;
+  while((m=moneyRe.exec(s))){ const n=num(m[1]); if(n>0.01 && n<100000000) out.push(n); }
+  return out;
+}
 function findAmountByLabels(rows, labels){
   const labs=labels.map(strip);
   for(let i=0;i<rows.length;i++){
     const row=rows[i]||[]; const joined=strip(row.join(' '));
     const hit=labs.some(l=>labelHit(joined,l));
     if(!hit) continue;
-    // Evitem files només d'IVA o condicions.
-    if(/iva|exclos|exclòs|perm[ií]s|aigua|llum/.test(joined) && !/base|import|importe|total/.test(joined)) continue;
+    if(/iva/.test(joined) && !/base|import|importe|total|imposable|imponible/.test(joined)) continue;
     let nums=numericValues(row);
     if(nums.length) return Math.max(...nums.map(Math.abs));
-    for(let j=i+1;j<=Math.min(rows.length-1,i+3);j++){
+    let amounts=extractMoneyAmounts(row.join(' '));
+    if(amounts.length) return Math.max(...amounts);
+    for(let j=i+1;j<=Math.min(rows.length-1,i+5);j++){
       nums=numericValues(rows[j]||[]);
       if(nums.length) return Math.max(...nums.map(Math.abs));
+      amounts=extractMoneyAmounts((rows[j]||[]).join(' '));
+      if(amounts.length) return Math.max(...amounts);
     }
   }
   return 0;
 }
 function findBestTotal(rows){
-  return findAmountByLabels(rows,['base imposable','base imponible','import total','importe total','total pressupost','total presupuesto','total obra','total']) || 0;
+  const labelled = findAmountByLabels(rows,['base imposable','base imponible','import total','importe total','total pressupost','total presupuesto','total obra','materials i m.o','materials i mo','materiales y m.o','materiales y mo','materials i mà d’obra','materials i ma d obra','total']);
+  if(labelled) return labelled;
+  // Fallback específic: alguns pressupostos antics tenen el total dins el text: “Materials i M.O. = 3.276,00 €”.
+  const text=rows.map(r=>r.join(' ')).join('\n');
+  const m=text.match(/materials?\s*(?:i|y)?\s*(?:m\.?o\.?|ma d'?obra|mà d’obra)[^0-9]{0,20}([0-9.,]+)\s*€?/i);
+  if(m) return num(m[1]);
+  return 0;
 }
 function nonEmptyAfterLabel(rows, labels){
   const labs=labels.map(strip);
@@ -1090,32 +1161,68 @@ function parseTeimorSingleConcept(rows,fileName,sheetName){
   const medRow=findLabelRow(rows,['medicio','medición','medicion','medició','amidament','medicion total','medició total']);
   const worksRow=findLabelRow(rows,['treballs','trabajos','descripcio treballs','descripción trabajos','detall','detalle']);
   const hasOneConceptPattern = conceptRow>=0 || worksRow>=0 || medRow>=0;
-  const totalRow = rows.findIndex(r=>/(base imposable|base imponible|import total|importe total|total pressupost|total presupuesto|total obra|^\s*total\s*$)/i.test(r.join(' ')));
+  const totalRow = rows.findIndex(r=>/(base imposable|base imponible|import total|importe total|total pressupost|total presupuesto|total obra|^\s*total\s*$|materials\s*i\s*m\.?o\.?)\b/i.test(r.join(' ')));
   const total = findBestTotal(rows);
   if(!hasOneConceptPattern && !total) return [];
   if(!hasOneConceptPattern && total && !rows.some(r=>r.join(' ').length>30)) return [];
-  const concept = (conceptRow>=0 ? rowValueAfterLabel(rows[conceptRow],['concepte','concepto','descripcio','descripción','descripcion']) : '') || nonEmptyAfterLabel(rows,['obra','treball','trabajo']) || longestText(rows[conceptRow]||[]) || guessNameFromFile(fileName) || 'Partida importada TEIMOR';
+  const parentConcept = (conceptRow>=0 ? rowValueAfterLabel(rows[conceptRow],['concepte','concepto','descripcio','descripción','descripcion']) : '') || nonEmptyAfterLabel(rows,['obra','treball','trabajo']) || longestText(rows[conceptRow]||[]) || guessNameFromFile(fileName) || 'Pressupost importat TEIMOR';
   let medText=medRow>=0 ? rowValueAfterLabel(rows[medRow],['medicio','medición','medicion','medició','amidament','medicion total','medició total']) || rows[medRow].join(' ') : '';
-  if(!medText && concept) medText=concept;
-  const {qty,unit}=parseMeasurement(medText);
-  let longParts=[];
+  if(!medText && parentConcept) medText=parentConcept;
+  const parentMeasure=parseMeasurement(medText);
+  let workTexts=[];
   if(worksRow>=0){
-    const end = totalRow>worksRow ? totalRow : Math.min(rows.length, worksRow+40);
-    for(let i=worksRow;i<end;i++){
+    const firstWork = rowValueAfterLabel(rows[worksRow],['treballs','trabajos','descripcio treballs','descripción trabajos','detall','detalle']);
+    if(firstWork) workTexts.push(firstWork);
+    const end = totalRow>worksRow ? totalRow : Math.min(rows.length, worksRow+80);
+    for(let i=worksRow+1;i<end;i++){
       const row=rows[i].filter(Boolean);
-      const text=row.filter(c=>!isNonRecipientText(c) && !isTeimorText(c) && !/(base imposable|base imponible|iva|total pressupost|total presupuesto)/i.test(c)).join(' ').trim();
-      if(text && !/^treballs|trabajos$/i.test(text)) longParts.push(text);
+      let text=row.filter(c=>!isNonRecipientText(c) && !isTeimorText(c) && !/(base imposable|base imponible|iva|total pressupost|total presupuesto|materials\s*i\s*m\.?o\.?|aigua|llum|permisos)/i.test(c)).join(' ').trim();
+      if(text) workTexts.push(text);
     }
   } else {
-    // Si no hi ha fila TREBALLS, recollim textos centrals llargs que no siguin capçalera, client o total.
     for(const row of rows.slice(12, totalRow>0 ? totalRow : 80)){
       const text=row.filter(Boolean).filter(c=>!isNonItemLine(c) && !isTeimorText(c) && !looksLikeAddress(c) && !looksLikeCityLine(c)).join(' ').trim();
-      if(text.length>25) longParts.push(text);
+      if(text.length>25) workTexts.push(text);
     }
   }
+  const bullets=splitStarItems(workTexts);
+  if(bullets.length){
+    return bullets.map((txt,idx)=>{
+      const m=parseMeasurement(txt);
+      const amounts=extractMoneyAmounts(txt).filter(x=>!String(txt).includes('50/G') || x!==50);
+      const lineTotal=amounts.length ? Math.max(...amounts) : 0;
+      const unit=m.unit || '';
+      const qty=m.qty || '';
+      const pu=(qty && lineTotal) ? lineTotal/qty : 0;
+      const status = lineTotal && qty ? 'Subpartida detectada per * amb import pendent validar' : 'Subpartida detectada per * pendent de preu/amidament';
+      return makeItem({code:'',chapter:parentConcept||'Històric importat',unit,desc:shortenBullet(txt),qty,pu,total:lineTotal,status,fileName,sheetName,longDescOverride:txt});
+    });
+  }
+  const {qty,unit}=parentMeasure;
   let pu = qty && total ? total/qty : 0;
   const status = unit && qty && pu ? 'PU calculat des de amidament + total pendent validar' : (total ? 'Històrica sense amidament' : 'Importada pendent de revisar');
-  return [makeItem({code:'',chapter:'Històric importat',unit,desc:concept||'Partida importada TEIMOR',qty,pu,total,status,fileName,sheetName,longDescOverride:longParts.join('\n') || concept})];
+  return [makeItem({code:'',chapter:'Històric importat',unit,desc:parentConcept||'Partida importada TEIMOR',qty,pu,total:total||0,status,fileName,sheetName,longDescOverride:workTexts.join('\n') || parentConcept})];
+}
+function splitStarItems(lines){
+  const items=[]; let cur='';
+  for(const raw of lines){
+    const parts=String(raw||'').split(/(?=\*)/g).map(x=>x.trim()).filter(Boolean);
+    const list=parts.length ? parts : [raw];
+    for(let part of list){
+      part=cleanText(part);
+      if(!part) continue;
+      if(part.startsWith('*')){ if(cur) items.push(cur.trim()); cur=part.replace(/^\*+\s*/,''); }
+      else if(cur){ cur += ' ' + part; }
+      else if(part.length>15){ cur=part; }
+    }
+  }
+  if(cur) items.push(cur.trim());
+  return items.map(x=>cleanText(x)).filter(x=>x.length>8 && !/^(treballs|trabajos)$/i.test(x) && !/(base imposable|iva|materials\s*i\s*m\.?o\.?|aigua|llum|permisos)/i.test(x));
+}
+function shortenBullet(txt){
+  let s=cleanText(txt).replace(/^[-•*]+\s*/,'');
+  s=s.replace(/\s*\([^)]{0,50}\)\s*$/,'').trim();
+  return s.length>120 ? s.slice(0,117)+'...' : s;
 }
 function headerMap(row){
   const map={};
