@@ -2920,3 +2920,315 @@ bindViewEvents = function(){
     const old=document.getElementById('smartCleanLibrary'); if(old) old.remove();
   }
 };
+
+/* =========================
+   TEIMOR V09.6 · DEPURADOR PER CONCEPTES + UI FITXA/PDF
+   ========================= */
+(function(){
+  if(data && data.meta){ data.meta.version = '9.6.0-depurador-conceptes-ui'; try{ saveData?.(); }catch(e){} }
+})();
+
+const TEIMOR_CHAPTERS_V096 = [
+  'Geotèxtil','Làmines asfàltiques','Imprimacions','Mitges canyes','Formació de pendents','Proves d’estanqueïtat','Regates i obertures','Remats i peces especials','Segellats i juntes','Cobertes de planxa','Cobertes i teules','Impermeabilització líquida','Paviments i enrajolats','Residus i runes','Proteccions d’obra','Mitjans auxiliars i lloguers','Neteja i sanejat','Enderrocs i arrencades','Pintura i revestiments','Reparació de formigó','Morters i regularitzacions','Canalons i baixants','Baranes i inox','Aïllaments','Drenatges','Formigons i soleres','Paleteria','Fusteria, portes i tancaments','Instal·lacions','Seguretat i salut','Neteja final','Altres / revisar'
+];
+function conceptTextV096(item){ return cleanText([item?.concept,item?.longDesc,item?.unit,item?.code].filter(Boolean).join(' ')); }
+function normConceptV096(text){
+  return strip(text||'')
+    .replace(/col3/g,'col').replace(/l\s*\.\s*b\s*\.\s*m/g,' lbm ').replace(/m\s*\.\s*o\s*\./g,' ma obra ')
+    .replace(/\b(aproximadament|aproximado|aprox|similar|existent|existents|todos|todas|tots|totes|zona|part|tota|tot)\b/g,' ')
+    .replace(/\b\d+[\.,]?\d*\s*(m2|m²|m|ml|kg|h|hores|ut|ud|uds|mm|cm|cm2|%)\b/g,' ')
+    .replace(/\b\d+[\.,]?\d*\s*(eur|euros|€)\b/g,' ')
+    .replace(/\b\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}\b/g,' ')
+    .replace(/[^a-z0-9]+/g,' ')
+    .replace(/\b(de|del|dels|dela|la|las|los|el|els|les|i|y|amb|con|para|per|en|al|a|un|una|uns|unes|sobre|sota|fins|fins a|m2|ml|ut|ud|pa)\b/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+function isTrashLibraryConceptV096(item){
+  const raw=conceptTextV096(item);
+  const s=strip(raw);
+  if(!s || s.length<3) return true;
+  const badAnywhere=[
+    /\biva\b/,/base\s+imposable/,/import\s+total/,/total\s+pressupost/,/subtotal/,/pressupost\s*n[uú]m/,/presupuesto/,/fecha\b/,/\bdata\b/,/client(e)?\b/,/nif|dni|cif/,/tel[eè]fon|telefono|email|correu/,/forma\s+de\s+pagament/,/venciment|vencimiento/,/compte\s+bancari|iban/,/teixidor|teimor/,/materials?\s+i\s+m\.?\s*o\.?\s*(unitat)?\s*=/,/materiales?\s+y\s+m\.?\s*o\.?\s*(unidad)?\s*=/
+  ];
+  if(badAnywhere.some(rx=>rx.test(s))) return true;
+  const badStart=[
+    /^(carrer|calle|avda|avinguda|avenida|pla[cç]a|plaza|passeig|passatge|carretera|ctra|ronda)\b/,
+    /^(cp|c\.p\.|codi postal|codigo postal)\b/,
+    /^\d{5}\s+[a-z]/,
+    /^\d+[\.,]?\d*\s*(m|m2|m²|ml|ut|ud|kg|h)?\s*x\s*\d+[\.,]?\d*\s*(€|eur)?\s*=/,
+    /^\d+[\.,]?\d*\s*(€|eur)?$/,
+    /^\(?\s*\d+\s*%\s*\)?$/
+  ];
+  if(badStart.some(rx=>rx.test(s))) return true;
+  if(/[=€]/.test(raw) && !/(subministrament|col|exec|paviment|lamina|l[aà]mina|geot[eè]xtil|morter|pintur|formig|segell|baixant|canal|barana|impermeabil)/i.test(raw)) return true;
+  return false;
+}
+function subtypeV096(t,family){
+  const s=normConceptV096(t);
+  if(family==='lamines-asfaltiques'){
+    const tags=[];
+    if(/doble|2 capes|dues capes|bicapa/.test(s)) tags.push('doble-làmina');
+    if(/autoproteg|pissarra|mineral|alumini/.test(s)) tags.push('autoprotegida');
+    if(/sbs/.test(s)) tags.push('SBS');
+    if(/app/.test(s)) tags.push('APP');
+    if(/3\s*kg|lbm\s*30|30\s*g|3kg/.test(s)) tags.push('3kg');
+    if(/4\s*kg|lbm\s*40|40\s*g|4kg/.test(s)) tags.push('4kg');
+    if(/50\s*g|5\s*kg|5kg|50 g/.test(s)) tags.push('5kg');
+    return tags.join('+') || 'general';
+  }
+  if(family==='paviments-enrajolats'){
+    if(/socol|zocalo|rodapie/.test(s)) return 'sòcol';
+    if(/gres|ceramic|porcelanic|baldosa|rajol|rajola|panot/.test(s)) return 'paviment';
+    if(/rejunt/.test(s)) return 'rejuntat';
+    return 'general';
+  }
+  if(family==='geotextil'){
+    if(/300/.test(s)) return '300g'; if(/200/.test(s)) return '200g'; if(/150/.test(s)) return '150g'; return 'general';
+  }
+  if(family==='formacio-pendents'){
+    if(/morter|mortero/.test(s)) return 'morter';
+    if(/formig|hormig/.test(s)) return 'formigó';
+    return 'general';
+  }
+  if(family==='mitjans-lloguers'){
+    if(/camio|camion|grua/.test(s)) return 'camió-grua';
+    if(/bastida|andami/.test(s)) return 'bastida';
+    if(/plataforma|elevadora|pem/.test(s)) return 'plataforma';
+    return 'general';
+  }
+  return 'general';
+}
+function classifyLibraryFamily(item){
+  const text=conceptTextV096(item);
+  const t=normConceptV096(text);
+  if(isTrashLibraryConceptV096(item)) return {chapter:'Descartades / no partides', family:'no-partida', label:'No partida evident', subtype:'trash', key:'trash:'+t.slice(0,50), trash:true};
+  const rules=[
+    ['Geotèxtil','geotextil',/geot[eè]xtil|geotextil|feltre separador/],
+    ['Làmines asfàltiques','lamines-asfaltiques',/l[aà]mina|lamina|asfalt|asf[aà]ltic|bitumin|sbs|app|lbm|tela asfaltica|tela asf[aà]ltica|bet[uú]n|betun/],
+    ['Imprimacions','imprimacions',/imprimaci|imprimacion|primer|emulsi[oó] bituminosa|pont d unio|puente de union|fixador|fijador|preparador suport/],
+    ['Mitges canyes','mitges-canyes',/mitja canya|mitges canyes|media caña|medias cañas|canya perimetral|canyes contorns|contorns amb morter/],
+    ['Formació de pendents','formacio-pendents',/pendent|pendents|pendiente|pendientes|formaci[oó] pendent|regularitzar pendent|modificar pendent|conduir aig[uü]es|evacuaci[oó] aig[uü]es|mestrejat pendent/],
+    ['Proves d’estanqueïtat','proves-estanqueitat',/estanqueitat|estanqueidad|prova d aigua|prueba de agua|inundaci[oó]|48 h|24 h/],
+    ['Regates i obertures','regates-obertures',/regata|regates|roza|rozas|obrir regata|obertura|forat|taladre|perforaci[oó]|xemeneia|chimenea/],
+    ['Remats i peces especials','remats-peces',/remat|rematar|pe[cç]a|pieza|gra[oó]|esgra[oó]|escal[oó]|cantonera|entrega|trobada|coronament|bord[oó]|perfil/],
+    ['Segellats i juntes','segellats-juntes',/segell|sellad|silicona|massilla|masilla|junta|poliuretano|poliuret[aà]|sikaflex|reomplir junta|juntes perimetrals/],
+    ['Impermeabilització líquida','impermeabilitzacio-liquida',/poliureta|poliuret[aà]|resina|membrana liquida|sikalastic|mapelastic|cautxu|caucho|impermeabilitzant liquid|impermeabilizante liquido|cautx[uú]/],
+    ['Cobertes de planxa','cobertes-planxa',/planxa|chapa|coberta de planxa|cubierta de chapa|cargol|cargols|tornill|sobreeixidor|rebosadero|carena|carenes|cumbrera|pissarra mineral|fibres|fibra/],
+    ['Cobertes i teules','cobertes-teules',/coberta|cubierta|teula|teja|teulat|tejado|lluerna|claraboia/],
+    ['Paviments i enrajolats','paviments-enrajolats',/paviment|rajol|rajola|baldosa|gres|ceramic|cer[aà]mic|enrajolat|alicatat|alicatado|socol|zocalo|rodapie|gresite|panot|porcelanic|rejunt/],
+    ['Residus i runes','residus-runes',/runa|runes|residu|residuos|contenidor|container|abocador|vertedero|retirada|transport|sac|big bag|carrega|carga|desc[aà]rrega/],
+    ['Proteccions d’obra','proteccions-obra',/prote(gir|ccio|cció|ccion)|cartro|carton|pl[aà]stic|cinta proteccio|tapar|protegir pas|protecciones/],
+    ['Mitjans auxiliars i lloguers','mitjans-lloguers',/lloguer|alquiler|camio grua|camion grua|grua|elevadora|plataforma|pem|muntacargues|andami|bastida|mitjans auxiliars|medios auxiliares/],
+    ['Neteja i sanejat','neteja-sanejat',/neteja|limpieza|sanejat|saneado|repicat|picat|raspat|rascado|decapat|hidro|pressio|presion|desbross|netejar|eliminar bruticia/],
+    ['Enderrocs i arrencades','enderrocs-arrencades',/enderroc|derribo|demolicio|demolicion|arrencad|arranque|desmuntatge|desmontaje|treure gespa|retirar gespa|gespa artificial|retirada gespa|extreure|picar paviment/],
+    ['Pintura i revestiments','pintura-revestiments',/pintur|pintat|pintado|revestiment|revestimiento|jotashield|webertene|acrylic|acrilic|acrilico|esmalte|veladura/],
+    ['Reparació de formigó','reparacio-formigo',/formig[oó]|hormigon|armadur|oxid|passiv|monotop|weberrep|morter r3|morter r4|reparacio|reparacion|cantell|canto forjat|canto de forjado|despreniment|desconch|fissur|esquerda|grieta/],
+    ['Morters i regularitzacions','morters-regularitzacions',/morter|mortero|regularitz|regulariz|arreboss|enfosc|rebossat|remolinat|maestrejat|capa base|recreixement/],
+    ['Canalons i baixants','canalons-baixants',/canal[oó]|canalon|baixant|bajante|pluvial|desgu[aà]s|desague|g[uü]atera|canaleta/],
+    ['Baranes i inox','baranes-inox',/barana|barandilla|passama|pasamano|inox|acer inoxidable|acero inoxidable|aisi|316/],
+    ['Aïllaments','aillaments',/aillament|aislamiento|xps|eps|llana mineral|lana mineral|poliestire|poliestireno|rockwool/],
+    ['Drenatges','drenatges',/dren|drenatge|drenaje|tub dren|grava|geodren/],
+    ['Formigons i soleres','formigons-soleres',/solera|formigonat|hormigonado|ha 25|ha25|ha 30|ha30|mallazo|malla electrosoldada|armat/],
+    ['Paleteria','paleteria',/paleta|ma[oó]|ladrillo|gero|totxana|tabic|env[aà]|pared|paret|muret|bloc formigo|bloque hormigon/],
+    ['Fusteria, portes i tancaments','fusteria-tancaments',/porta|puerta|finestra|ventana|fusteria|carpinteria|alumini|aluminio|persiana|reixa|valla/],
+    ['Instal·lacions','instal-lacions',/instal lac|instalacion|electric|fontaner|lampist|aigua|agua|desgu[aà]s|clima|aire condicionat|calefacc/],
+    ['Seguretat i salut','seguretat-salut',/seguretat|seguridad|salut|salud|epis|proteccions col lectives|protecciones colectivas/],
+    ['Neteja final','neteja-final',/neteja final|limpieza final|entrega obra|final obra/]
+  ];
+  for(const [chapter,family,rx] of rules){
+    if(rx.test(t)){
+      const sub=subtypeV096(text,family);
+      return {chapter,family,label:chapter, subtype:sub, key:`${family}:${sub||'general'}:${unitBucket(item.unit)}`};
+    }
+  }
+  const tokens=t.split(' ').filter(w=>w.length>4 && !/^\d+$/.test(w) && !/^(obra|obres|treball|treballs|realitzar|realitzacio|execucio|subministrament|col|colocacio|inclou|inclosa|segons)$/.test(w));
+  const key=[...new Set(tokens)].slice(0,3).join('-') || 'general';
+  return {chapter:'Altres / revisar', family:'altres', label:'Altres / revisar', subtype:key, key:`altres:${key}:${unitBucket(item.unit)}`};
+}
+function libraryRepresentativeScore(item){
+  let score=0; const c=cleanText(item.concept||''); const l=cleanText(item.longDesc||''); const st=strip(item.status||'');
+  if(isTrashLibraryConceptV096(item)) score-=2000;
+  if(num(item.unitPrice)>0) score+=50;
+  if(num(item.directCost)>0) score+=20;
+  if(Array.isArray(item.decomp) && item.decomp.length) score+=60;
+  if(st.includes('valid')) score+=45;
+  if(st.includes('tipus')) score+=20;
+  if(st.includes('pendent')) score-=8;
+  if(st.includes('historic') || st.includes('històric')) score-=10;
+  if(c.length>8 && c.length<125) score+=30;
+  if(c.length>150) score-=25;
+  if(l.length>30) score+=10;
+  if(/[=€]/.test(c)) score-=500;
+  return score;
+}
+function groupKeyV096(item, cls, mode){
+  const unit = mode==='ultra' ? 'all' : unitBucket(item.unit);
+  if(mode==='conservative') return `${cls.family}:${cls.subtype||'general'}:${unit}:${normConceptV096(item.concept||'').split(' ').slice(0,4).join('-')}`;
+  if(mode==='strong') return `${cls.family}:${cls.subtype||'general'}:${unit}`;
+  if(mode==='ultra') return cls.family==='lamines-asfaltiques' ? `${cls.family}:${cls.subtype||'general'}` : `${cls.family}`;
+  // molt fort: conserva subtipus útils només en famílies tècniques que varien molt de preu.
+  const keepSub=['lamines-asfaltiques','paviments-enrajolats','mitjans-lloguers','formacio-pendents','geotextil'];
+  return keepSub.includes(cls.family) ? `${cls.family}:${cls.subtype||'general'}` : `${cls.family}`;
+}
+function buildLibraryCleanupPlan(mode='verystrong'){
+  const groups=new Map(); const trash=[];
+  for(const item of data.library||[]){
+    const cls=classifyLibraryFamily(item);
+    if(cls.trash){ trash.push({item,cls}); continue; }
+    const key=groupKeyV096(item,cls,mode);
+    if(!groups.has(key)) groups.set(key,{key,cls:{...cls,key},items:[]});
+    groups.get(key).items.push(item);
+  }
+  const rows=[...groups.values()].map(g=>{
+    const sorted=[...g.items].sort((a,b)=>libraryRepresentativeScore(b)-libraryRepresentativeScore(a));
+    return {...g, representative:sorted[0], duplicates:sorted.slice(1)};
+  }).sort((a,b)=>String(a.cls.chapter).localeCompare(String(b.cls.chapter),'ca',{numeric:true}) || String(a.cls.subtype||'').localeCompare(String(b.cls.subtype||''),'ca',{numeric:true}));
+  const duplicates=rows.reduce((s,g)=>s+g.duplicates.length,0);
+  return {mode, rows, trash, before:(data.library||[]).length, after:rows.length, duplicates, trashCount:trash.length};
+}
+function cleanupPlanSummaryHtml(plan){
+  const byChapter={}; plan.rows.forEach(g=>{ const ch=g.cls.chapter||'Altres / revisar'; (byChapter[ch] ||= []).push(g); });
+  const chapterSummary=Object.keys(byChapter).sort((a,b)=>a.localeCompare(b,'ca',{numeric:true})).map(ch=>`<tr><td><strong>${esc(ch)}</strong></td><td>${byChapter[ch].length}</td><td>${byChapter[ch].reduce((s,g)=>s+g.items.length,0)}</td></tr>`).join('');
+  const preview=plan.rows.filter(g=>g.items.length>1).slice(0,120);
+  return `
+    <div class="grid four">
+      <div class="kpi"><span>Partides actuals</span><strong>${plan.before}</strong></div>
+      <div class="kpi good"><span>Partides tipus resultants</span><strong>${plan.after}</strong></div>
+      <div class="kpi"><span>Duplicades agrupables</span><strong>${plan.duplicates}</strong></div>
+      <div class="kpi ${plan.trashCount?'bad':'good'}"><span>No partides / textos descartats</span><strong>${plan.trashCount}</strong></div>
+    </div>
+    <div class="card notice-blue"><strong>V09.6:</strong> depura més per concepte. Descarta línies d’IVA, bases, totals, fórmules, dades de client i adreces, i agrupa variants repetides dins capítols tècnics reals.</div>
+    <details class="chapter-group" open><summary><strong>Resum proposat per capítols</strong><span>${Object.keys(byChapter).length}</span></summary><div class="table-wrap"><table><thead><tr><th>Capítol tècnic</th><th>Partides tipus</th><th>Originals agrupades</th></tr></thead><tbody>${chapterSummary}</tbody></table></div></details>
+    ${preview.length?`<div class="table-wrap"><table><thead><tr><th>Capítol</th><th>Grup</th><th>Es conserva</th><th>S’agrupen</th><th>Representant</th></tr></thead><tbody>${preview.map(g=>`<tr><td>${esc(g.cls.chapter)}</td><td>${esc(g.cls.subtype||g.key)}</td><td>1</td><td>${g.duplicates.length}</td><td><strong>${esc(g.representative.concept||'')}</strong><br><span class="muted">${esc(g.representative.unit||'')} · ${money(g.representative.unitPrice||libFinal(g.representative))}</span></td></tr>`).join('')}</tbody></table></div>`:`<div class="empty">No hi ha grups duplicats segons el criteri actual.</div>`}
+    ${plan.trashCount?`<details class="chapter-group"><summary><strong>Textos que es descartarien com a no partides</strong><span>${plan.trashCount}</span></summary><div class="small-text">${plan.trash.slice(0,150).map(x=>esc(x.item.concept||x.item.longDesc||x.item.code||'')).join('<br>')}</div></details>`:''}
+  `;
+}
+function openLibraryCleanupModal(){
+  const plan=buildLibraryCleanupPlan('verystrong');
+  openModal(`<h2>Depurar llibreria per conceptes</h2>
+    <div class="card">
+      <p>Aquesta versió intenta reduir més la llibreria importada: conserva una partida tipus per grup tècnic i elimina textos que no són partides.</p>
+      <div class="form-grid">
+        <label>Mode de depuració<select id="cleanupMode"><option value="verystrong" selected>Molt fort recomanat · objectiu 50-100 partides tipus</option><option value="strong">Fort · conserva més subtipus i unitats</option><option value="ultra">Ultra · una partida tipus per família principal</option><option value="conservative">Conservador · separa més variants</option></select></label>
+        <label>Resultat estimat<input id="cleanupEstimate" readonly value="${plan.before} → ${plan.after} partides tipus"></label>
+      </div>
+      <div id="cleanupPreview">${cleanupPlanSummaryHtml(plan)}</div>
+      <div class="actions"><button class="primary" id="applyLibraryCleanup">Aplicar depuració per conceptes</button><button class="ghost" id="refreshCleanupPreview">Recalcular previsualització</button>${(data.libraryCleanupBackups||[]).length?'<button class="ghost" id="restoreLibraryCleanup">Restaurar última depuració</button>':''}</div>
+    </div>`);
+}
+function refreshCleanupPreview(){
+  const mode=document.getElementById('cleanupMode')?.value || 'verystrong';
+  const plan=buildLibraryCleanupPlan(mode);
+  const est=document.getElementById('cleanupEstimate'); if(est) est.value=`${plan.before} → ${plan.after} partides tipus`;
+  const prev=document.getElementById('cleanupPreview'); if(prev) prev.innerHTML=cleanupPlanSummaryHtml(plan);
+}
+function applyLibraryCleanup(){
+  const mode=document.getElementById('cleanupMode')?.value || 'verystrong';
+  const plan=buildLibraryCleanupPlan(mode);
+  if(!confirm(`Aplicar depuració per conceptes?\n\nPartides actuals: ${plan.before}\nPartides resultants: ${plan.after}\nDuplicades agrupades: ${plan.duplicates}\nTextos descartats: ${plan.trashCount}\n\nEs guardarà una còpia interna per poder restaurar.`)) return;
+  data.libraryCleanupBackups = Array.isArray(data.libraryCleanupBackups) ? data.libraryCleanupBackups : [];
+  data.libraryCleanupBackups.push({id:uid('LIBBACK'), date:new Date().toISOString(), mode, before:JSON.parse(JSON.stringify(data.library)), note:`Depuració V09.6 ${plan.before} → ${plan.after}`});
+  if(data.libraryCleanupBackups.length>3) data.libraryCleanupBackups=data.libraryCleanupBackups.slice(-3);
+  const idMap={}; const next=[];
+  for(const g of plan.rows){
+    const rep={...g.representative};
+    rep.chapter=g.cls.chapter || rep.chapter || 'Altres / revisar';
+    rep.status=strip(rep.status).includes('valid') ? rep.status : 'Partida tipus agrupada';
+    const origins=[rep.origin, ...g.duplicates.map(x=>x.origin)].filter(Boolean);
+    rep.origin=[...new Set(origins)].slice(0,12).join(' · ');
+    rep.groupKey=g.key; rep.groupSubtype=g.cls.subtype || ''; rep.groupedCount=g.items.length;
+    rep.aliases=[...new Set(g.items.map(x=>cleanText(x.concept||'')).filter(Boolean))].slice(0,80);
+    rep.history=[...(rep.history||[])];
+    for(const dup of g.duplicates){ idMap[dup.id]=rep.id; rep.history.push({origin:dup.origin||'Agrupada', concept:dup.concept, unit:dup.unit, unitPrice:dup.unitPrice, total:dup.total, status:dup.status, chapterBefore:dup.chapter, date:today()}); }
+    next.push(rep);
+  }
+  for(const b of data.budgets||[]){ for(const l of (b.lines||[])){ const cls=classifyLibraryFamily(l); if(cls && !cls.trash) l.chapter=cls.chapter; if(l.libraryId && idMap[l.libraryId]) l.libraryId=idMap[l.libraryId]; } }
+  data.library=next.sort((a,b)=>String(a.chapter||'').localeCompare(String(b.chapter||''),'ca',{numeric:true}) || String(a.concept||'').localeCompare(String(b.concept||''),'ca',{numeric:true}));
+  data.importLogs=data.importLogs||[]; data.importLogs.push({id:uid('CLEAN'),date:new Date().toISOString(),type:'Depuració per conceptes V09.6',before:plan.before,after:plan.after,duplicates:plan.duplicates,trash:plan.trashCount,mode});
+  saveData(); closeModal(); state.libChapterFilter=''; state.libSearch=''; renderLibrary();
+}
+function chapterOptionsV096(selected){
+  const chapters=[...new Set([...(data.library||[]).map(x=>x.chapter).filter(Boolean), ...TEIMOR_CHAPTERS_V096])].sort((a,b)=>a.localeCompare(b,'ca',{numeric:true}));
+  return chapters.map(c=>`<option value="${esc(c)}" ${c===selected?'selected':''}>${esc(c)}</option>`).join('');
+}
+function openLibModal(id=''){
+  const item = id ? byId(data.library,id) : {id:uid('LIB'), ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, decomp:[], status:'Pendent de revisar', chapter:'Altres / revisar'};
+  if(!item) return alert('No s’ha trobat aquesta partida.');
+  const lines = item.decomp || []; const cd = libDirect(item); const final = item.unitPrice || libFinal(item);
+  openModal(`
+    <h2>${id?'Fitxa de partida':'Nova partida de llibreria'}</h2>
+    <form id="libForm" class="form-grid lib-modal-form lib-modal-v096">
+      <input type="hidden" name="editId" value="${esc(id)}"><input type="hidden" name="id" value="${esc(item.id)}">
+      <div class="full tabs-small modal-tabs">
+        <button type="button" class="active" data-modal-tab="fitxa">Fitxa</button>
+        <button type="button" data-modal-tab="descripcio">Descripció llarga</button>
+        <button type="button" data-modal-tab="descompost">Descompost BEDEC</button>
+        <button type="button" data-modal-tab="historic">Històric</button>
+      </div>
+      <div class="full modal-panel active" data-modal-panel="fitxa">
+        <div class="form-grid">
+          <label>Codi<input name="code" value="${esc(item.code||'')}"></label>
+          <label class="wide">Capítol tècnic<select name="chapter">${chapterOptionsV096(item.chapter||'Altres / revisar')}</select></label>
+          <label>Unitat<input name="unit" value="${esc(item.unit||'')}"></label>
+          <label>Estat<select name="status">
+            ${['Validada','Validada pendent revisió','Partida tipus agrupada','Importada pendent de revisar','Històrica sense amidament','PA pendent amidament','Duplicada possible'].map(s=>`<option ${item.status===s?'selected':''}>${s}</option>`).join('')}
+          </select></label>
+          <label class="full">Descripció curta<input name="concept" value="${esc(item.concept||'')}"></label>
+          <label>Cost directe<input name="directCost" type="number" step="0.01" value="${esc(item.directCost||'')}"></label>
+          <label>PU final històric<input name="unitPrice" type="number" step="0.01" value="${esc(item.unitPrice||'')}"></label>
+          <label>CI %<input name="ci" type="number" step="0.01" value="${esc(item.ci ?? data.settings.defaultCI)}"></label>
+          <label>DGE %<input name="dge" type="number" step="0.01" value="${esc(item.dge ?? data.settings.defaultDGE)}"></label>
+          <label>BI %<input name="bi" type="number" step="0.01" value="${esc(item.bi ?? data.settings.defaultBI)}"></label>
+          <label class="full">Origen<input name="origin" value="${esc(item.origin||'Manual')}"></label>
+        </div>
+        <div class="grid three" style="margin-top:12px">
+          <div class="kpi"><span>Cost directe calculat</span><strong>${money(cd)}</strong></div>
+          <div class="kpi"><span>PU final / històric</span><strong>${money(final)}</strong></div>
+          <div class="kpi"><span>Agrupades</span><strong>${esc(item.groupedCount||1)}</strong></div>
+        </div>
+      </div>
+      <div class="full modal-panel" data-modal-panel="descripcio">
+        <label class="full">Descripció llarga<textarea name="longDesc" class="large-textarea desc-big-v096">${esc(item.longDesc||'')}</textarea></label>
+      </div>
+      <div class="full modal-panel" data-modal-panel="descompost">
+        <div class="detail-box"><div class="toolbar"><h3>Descompost BEDEC estructurat</h3><button class="ghost small" type="button" id="addDecompLine">Afegir línia</button></div>
+          <div class="table-wrap"><table id="decompTable" class="bedec-table"><thead><tr><th>Tipus</th><th>Recurs</th><th>Ut</th><th>Rendiment</th><th>Preu</th><th>Fórmula</th><th>Total CD</th><th></th></tr></thead><tbody>
+            ${lines.length ? lines.map((l,i)=>decompRow(l,i)).join('') : ''}
+          </tbody><tfoot><tr><td colspan="6" class="num"><strong>Cost directe</strong></td><td class="num"><strong>${money(decompSummary(lines))}</strong></td><td></td></tr></tfoot></table></div>
+          <p class="small-text">El cost directe és rendiment × preu. Els percentatges CI, DGE i BI poden variar per pressupost.</p>
+        </div>
+      </div>
+      <div class="full modal-panel" data-modal-panel="historic">${libraryHistoryTable(item)}</div>
+      <div class="actions full"><button class="primary">Guardar partida</button><button class="ghost" type="button" id="closeModalBtn">Cancel·lar</button></div>
+    </form>
+  `);
+}
+function saveLibraryItem(e){
+  e.preventDefault(); const f=formObj(e.target);
+  const old=byId(data.library,f.editId) || {};
+  const rows=[...document.querySelectorAll('#decompTable tbody tr')];
+  const decomp=rows.map((tr,i)=>({type:tr.querySelector(`[name="type_${i}"]`)?.value||tr.querySelector('select')?.value||'Material', name:tr.querySelector(`[name="name_${i}"]`)?.value||tr.children[1]?.querySelector('input')?.value||'', unit:tr.querySelector(`[name="unit_${i}"]`)?.value||tr.children[2]?.querySelector('input')?.value||'', yield:num(tr.querySelector(`[name="yield_${i}"]`)?.value||tr.children[3]?.querySelector('input')?.value), price:num(tr.querySelector(`[name="price_${i}"]`)?.value||tr.children[4]?.querySelector('input')?.value)})).filter(x=>x.name || x.yield || x.price);
+  const direct = num(f.directCost) || decomp.reduce((s,l)=>s+num(l.yield)*num(l.price),0);
+  const final = num(f.unitPrice) || direct * factor(f.ci,f.dge,f.bi);
+  const item={...old,id:f.id,code:f.code,chapter:f.chapter,unit:f.unit,concept:f.concept,longDesc:f.longDesc,directCost:direct,unitPrice:final,ci:num(f.ci),dge:num(f.dge),bi:num(f.bi),origin:f.origin,status:f.status,decomp};
+  const idx=data.library.findIndex(x=>x.id===f.editId || x.id===item.id);
+  if(idx>=0) data.library[idx]=item; else data.library.push(item);
+  saveData(); closeModal(); renderLibrary();
+}
+function previewCss(){ return `body{font-family:Arial,sans-serif;background:#e5e7eb;margin:0;padding:18px;color:#111827}.preview-toolbar{max-width:210mm;margin:0 auto 12px}.preview-toolbar button{border:1px solid #ddd;border-radius:8px;padding:8px 12px;margin-right:8px}.preview-toolbar .primary{background:#c2410c;color:white}.a4-sheet{width:210mm;min-height:297mm;margin:auto;background:white;padding:15mm;box-shadow:0 8px 30px rgba(0,0,0,.18);border-top:7px solid #c2410c}.preview-header{display:grid;grid-template-columns:1fr 76mm;gap:12mm;align-items:start}.preview-header h1{font-size:24px;margin:0 0 5px;color:#7c2d12;letter-spacing:.2px}.preview-header p{font-size:12px;line-height:1.35}.client-box{border:1px solid #fdba74;background:#fff7ed;padding:9px;min-height:34mm;font-size:12px;line-height:1.45}.preview-meta{display:flex;gap:24mm;background:#f8fafc;border-left:5px solid #c2410c;padding:8px 10px;margin:8mm 0;font-size:13px}h2{font-size:16px;margin:0 0 5mm;color:#7c2d12}.preview-table{width:100%;border-collapse:collapse;font-size:11px}.preview-table th,.preview-table td{border:1px solid #d1d5db;padding:5px;vertical-align:top}.preview-table th{background:#c2410c;color:#fff;text-align:left}.preview-table tbody tr:nth-child(even){background:#fff7ed}.num{text-align:right;white-space:nowrap}.preview-desc{font-size:10.5px;margin-top:4px;white-space:pre-wrap;line-height:1.32;color:#374151}.preview-totals{margin-top:8mm;margin-left:auto;width:86mm;font-size:13px;border-top:2px solid #c2410c}.preview-totals div{display:flex;justify-content:space-between;border-bottom:1px solid #ddd;padding:5px}.preview-totals div:last-child{background:#fff7ed;color:#7c2d12;font-size:15px}.preview-notes{margin-top:10mm;font-size:10px;color:#555}@media print{body{background:white;padding:0}.preview-toolbar{display:none}.a4-sheet{box-shadow:none;margin:0;width:auto;min-height:auto;padding:12mm}@page{size:A4;margin:0}}`; }
+const __teimorBaseBindModalEvents_V096 = bindModalEvents;
+bindModalEvents = function(){
+  __teimorBaseBindModalEvents_V096();
+  const refresh=document.getElementById('refreshCleanupPreview'); if(refresh) refresh.onclick=refreshCleanupPreview;
+  const apply=document.getElementById('applyLibraryCleanup'); if(apply) apply.onclick=applyLibraryCleanup;
+  const restore=document.getElementById('restoreLibraryCleanup'); if(restore) restore.onclick=restoreLibraryCleanup;
+};
+const __teimorBaseBindViewEvents_V096 = bindViewEvents;
+bindViewEvents = function(){
+  __teimorBaseBindViewEvents_V096();
+  if(state.view==='library'){
+    const btn=document.getElementById('smartCleanLibraryV095') || document.getElementById('smartCleanLibrary');
+    if(btn){ btn.textContent='Depurar més per conceptes'; btn.onclick=openLibraryCleanupModal; }
+  }
+};

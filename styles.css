@@ -86,3 +86,19 @@ button,input,select,textarea{font:inherit} button{cursor:pointer}.hidden{display
 /* V09.4 depurador llibreria */
 .notice-blue{background:#eef6ff;border-color:#b9d9ff}.notice-red{background:#fff0f0;border-color:#ffc6c6}
 .chapter-group .small-text{padding:12px 14px;line-height:1.55}.sort-chip{margin:2px}.kpi.bad strong{color:#b42318}.kpi.good strong{color:#067647}
+
+/* TEIMOR V09.6 */
+.lib-modal-v096 .desc-big-v096,
+.large-textarea.desc-big-v096{
+  font-size:15px;
+  line-height:1.5;
+  min-height:240px;
+}
+.lib-modal-v096 label select[name="chapter"]{
+  font-weight:700;
+  color:#7c2d12;
+}
+.chapter-group summary{
+  background:#fff7ed;
+}
+.preview-desc{font-size:11px;line-height:1.35}

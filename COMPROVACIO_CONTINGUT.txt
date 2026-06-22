@@ -1,10 +1,11 @@
-Versió: V09.5_DEPURADOR_TECNIC_LLibreria
-Contingut net de carpeta:
+App_TEIMOR_gestor_pressupostos_v09_6_DEPURADOR_CONCEPTES_UI
+
+Contingut net:
 - index.html
 - app.js
 - styles.css
 - render.yaml
-- README_TEIMOR_APP_v09_5.md
+- README_TEIMOR_APP_v09_6.md
 - COMPROVACIO_CONTINGUT.txt
 
-Correcció clau: el depurador de partides ja no utilitza el capítol/origen antic de l’Excel per classificar, sinó el text tècnic real de cada partida.
+Versió: V09.6 depurador per conceptes + UI fitxa/PDF.
