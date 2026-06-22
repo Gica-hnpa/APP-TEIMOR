@@ -1,7 +1,1 @@
-Carpeta neta V09.3:
-- index.html
-- app.js
-- styles.css
-- render.yaml
-- README_TEIMOR_APP_v09_3.md
-- COMPROVACIO_CONTINGUT.txt
+Carpeta neta V09.4. Fitxers: index.html, app.js, styles.css, render.yaml, README_TEIMOR_APP_v09_4.md. Sense arxius antics.

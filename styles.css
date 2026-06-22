@@ -81,3 +81,8 @@ button,input,select,textarea{font:inherit} button{cursor:pointer}.hidden{display
 .agenda-item{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#fff}
 .agenda-form{grid-template-columns:repeat(4,minmax(150px,1fr))}
 @media(max-width:900px){.agenda-layout{grid-template-columns:1fr}.calendar-grid{grid-template-columns:repeat(7,minmax(40px,1fr))}.calendar-cell{min-height:86px;padding:5px}.calendar-event{font-size:10px}.budget-form-wide,.agenda-form{grid-template-columns:1fr}.compact-filters{grid-template-columns:1fr}}
+
+
+/* V09.4 depurador llibreria */
+.notice-blue{background:#eef6ff;border-color:#b9d9ff}.notice-red{background:#fff0f0;border-color:#ffc6c6}
+.chapter-group .small-text{padding:12px 14px;line-height:1.55}.sort-chip{margin:2px}.kpi.bad strong{color:#b42318}.kpi.good strong{color:#067647}

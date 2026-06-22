@@ -2411,3 +2411,265 @@ bindModalEvents = function(){
   const renameForm=document.getElementById('renameChapterForm'); if(renameForm) renameForm.onsubmit=saveRenameChapter;
   const agendaForm=document.getElementById('agendaForm'); if(agendaForm) agendaForm.onsubmit=saveAgendaEvent;
 };
+
+
+/* =========================
+   TEIMOR V09.4 · DEPURADOR INTEL·LIGENT DE LLIBRERIA
+   Agrupa partides importades per paraules clau/família i conserva una partida tipus.
+   ========================= */
+(function(){
+  if(data && data.meta){ data.meta.version = '9.4.0-depurador-llibreria'; saveData?.(); }
+})();
+
+function normalizeForGrouping(text){
+  return strip(text || '')
+    .replace(/€/g,' eur ')
+    .replace(/[ºª]/g,' ')
+    .replace(/[^a-z0-9]+/g,' ')
+    .replace(/\b(de|del|la|las|los|el|els|les|i|y|amb|con|para|per|en|al|a|un|una|dels|dela|m2|m²|ml|ut|uds|ud)\b/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+function libraryItemText(item){ return [item.code,item.chapter,item.unit,item.concept,item.longDesc,item.origin].filter(Boolean).join(' '); }
+function isProbablyNotPartida(item){
+  const c=strip(item.concept || item.longDesc || '');
+  if(!c) return true;
+  if(c.length < 3) return true;
+  const bad=[
+    /^(data|fecha|pressupost|presupuesto|client|cliente|nif|dni|cif|telefono|telèfon|email|correu|base imposable|iva|total|subtotal)$/,
+    /(materials?\s+i\s+m\.?o\.?|materiales?\s+y\s+m\.?o\.?).*(unitat|unidad)?\s*=/,
+    /\d+[\.,]?\d*\s*(m|m2|m²|ml|ut)?\s*x\s*\d+[\.,]?\d*\s*€?\s*=/,
+    /^(carrer|calle|avda|avinguda|avenida|plaça|plaza|passeig|passatge|carretera)\b/,
+    /^(cp|c\.p\.|codi postal)\b/,
+    /^\d{5}\s+[a-z]/,
+    /^\d+[\.,]?\d*\s*€?$/
+  ];
+  return bad.some(rx=>rx.test(c));
+}
+function unitBucket(unit){
+  const u=strip(unit||'');
+  if(/m2|m²|metre quadrat|metro cuadrado/.test(u)) return 'm2';
+  if(/ml|m lineal|metre lineal|metro lineal/.test(u)) return 'ml';
+  if(/ut|ud|unitat|unidad/.test(u)) return 'ut';
+  if(/kg/.test(u)) return 'kg';
+  if(/h|hora/.test(u)) return 'h';
+  if(/pa|partida alçada|partida alzada/.test(u)) return 'pa';
+  return u || 'sense-ut';
+}
+function detectSubtype(text, family){
+  const t=normalizeForGrouping(text);
+  const parts=[];
+  if(family==='lamines-asfaltiques'){
+    const kg=(t.match(/\b([345])\s*kg\b/)||t.match(/\blbm\s*([345]0)\b/)||[])[1];
+    if(kg) parts.push(String(kg).length===2 ? String(Number(kg)/10)+'kg' : kg+'kg');
+    if(/doble|dues capes|dos capes|2 capes|bicapa/.test(t)) parts.push('doble');
+    if(/autoproteg|mineral|pissarra|alumini/.test(t)) parts.push('autoprotegida');
+    if(/sbs/.test(t)) parts.push('sbs');
+    if(/app/.test(t)) parts.push('app');
+  }
+  if(family==='geotextil'){
+    const gr=(t.match(/\b(100|125|150|180|200|250|300|500)\s*(gr|g)\b/)||[])[1];
+    if(gr) parts.push(gr+'g');
+  }
+  if(family==='pintura'){
+    if(/fa[cç]ana|exterior/.test(t)) parts.push('facana');
+    if(/interior|escala|garatge|parking|aparcament/.test(t)) parts.push('interior-garatge');
+    if(/barana|metall|ferro|reixa/.test(t)) parts.push('metall');
+  }
+  if(family==='reparacio-formigo'){
+    if(/armadur|oxid|passiv|ferro/.test(t)) parts.push('armadures');
+    if(/r3/.test(t)) parts.push('r3');
+    if(/r4/.test(t)) parts.push('r4');
+    if(/fissur|esquerda|grieta/.test(t)) parts.push('fissures');
+  }
+  if(family==='paviments-revestiments'){
+    if(/gres|ceramic|rajol|baldosa|panot/.test(t)) parts.push('ceramic');
+    if(/socol|rodapie/.test(t)) parts.push('socol');
+    if(/terrassa|balco|balcon/.test(t)) parts.push('terrassa');
+  }
+  if(family==='baranes-inox'){
+    if(/inox|aisi|316/.test(t)) parts.push('inox');
+    if(/passama|pasamano/.test(t)) parts.push('passama');
+  }
+  if(family==='canalons-baixants'){
+    if(/canalo|canalon/.test(t)) parts.push('canalo');
+    if(/baixant|bajante/.test(t)) parts.push('baixant');
+  }
+  if(parts.length) return [...new Set(parts)].join('-');
+  return '';
+}
+function classifyLibraryFamily(item){
+  const text=libraryItemText(item);
+  const t=normalizeForGrouping(text);
+  if(isProbablyNotPartida(item)) return {chapter:'Descartades / no partides', family:'no-partida', label:'No partida evident', key:'trash:'+t.slice(0,40), trash:true};
+  const rules=[
+    ['Geotèxtil','geotextil',/\bgeot[eè]xtil\b|\bgeotextil\b/],
+    ['Làmines asfàltiques','lamines-asfaltiques',/lamina|l[aà]mina|asfalt|asf[aà]ltic|bitumin|sbs|app|lbm|tela asfaltica|tela asf[aà]ltica/],
+    ['Impermeabilització líquida','impermeabilitzacio-liquida',/poliureta|poliuret[aà]|resina|membrana liquida|sikalastic|mapelastic|cautxu|caucho|impermeabilitzant liquid|impermeabilizante liquido/],
+    ['Imprimacions i ponts d’unió','imprimacions',/imprimaci|imprimacion|primer|pont d unio|puente de union|fixador|fijador/],
+    ['Segellats i juntes','segellats-juntes',/segell|sellad|silicona|massilla|masilla|junta|poliuretano|poliuret[aà]|sikaflex/],
+    ['Pintura i revestiments','pintura',/pintur|pintat|pintado|revestiment|revestimiento|jotashield|webertene|acrylic|acrilic|acrilico|esmalte/],
+    ['Reparació de formigó','reparacio-formigo',/formigo|hormigon|armadur|oxid|passiv|monotop|weberrep|morter r3|morter r4|reparacio|reparacion|cantell|canto forjat|canto de forjado|despreniment|desconch/],
+    ['Neteja i sanejat','neteja-sanejat',/neteja|limpieza|sanejat|saneado|repicat|picat|hidro|pressio|presion|decapat|raspat|rascado/],
+    ['Morters i regularitzacions','morters',/morter|mortero|regularitz|regulariz|arreboss|enfosc|rebossat|remolinat|maestrejat|capa base|recreixement/],
+    ['Paviments i revestiments','paviments-revestiments',/paviment|rajol|baldosa|gres|ceramic|cer[aà]mic|enrajolat|alicatat|alicatado|socol|zocalo|rodapie|gresite|panot/],
+    ['Bastides i mitjans auxiliars','bastides',/bastida|andami|plataforma|elevadora|pem|mitjans auxiliars|medios auxiliares/],
+    ['Treballs verticals','treballs-verticals',/treball vertical|trabajo vertical|corda|cuerda|rapel|rappel|arnes|arn[eé]s/],
+    ['Residus, contenidors i transport','residus-transport',/residu|run[aà]|runa|contenidor|container|transport|abocador|vertedero|sac|big bag|retirada/],
+    ['Canalons i baixants','canalons-baixants',/canal[oó]|canalon|baixant|bajante|pluvial|desgu[aà]s|desague|g[uü]atera|canaleta/],
+    ['Baranes i inox','baranes-inox',/barana|barandilla|passama|pasamano|inox|acer inoxidable|acero inoxidable|aisi|316/],
+    ['Enderrocs i desmuntatges','enderrocs',/enderroc|derribo|demolicio|demolicion|desmuntatge|desmontaje|arrencada|arranque|retirar|desmuntar/],
+    ['Aïllaments','aillaments',/aillament|aislamiento|xps|eps|llana mineral|lana mineral|poliestire|poliestireno|rockwool/],
+    ['Cobertes i teules','cobertes',/coberta|cubierta|teula|teja|carener|cumbrera|lluerna|claraboia/],
+    ['Drenatges','drenatges',/dren|drenatge|drenaje|tub dren|grava|geodren/],
+    ['Formigons i soleres','formigons-soleres',/solera|formigonat|hormigonado|ha 25|ha25|ha 30|ha30|mallazo|malla electrosoldada|armat/],
+    ['Paleteria','paleteria',/paleta|ma[oó]|ladrillo|gero|totxana|tabic|env[aà]|pared|paret|muret|bloc formigo|bloque hormigon/],
+    ['Fusteria, portes i tancaments','fusteria-tancaments',/porta|puerta|finestra|ventana|fusteria|carpinteria|alumini|aluminio|persiana|reixa|valla/],
+    ['Instal·lacions','instal-lacions',/instal lac|instalacion|electric|fontaner|lampist|aigua|agua|desgu[aà]s|clima|aire condicionat|calefacc/],
+    ['Seguretat i salut','seguretat-salut',/seguretat|seguridad|salut|salud|epis|proteccions|protecciones/],
+    ['Neteja final','neteja-final',/neteja final|limpieza final|entrega obra|final obra/]
+  ];
+  for(const [chapter,family,rx] of rules){
+    if(rx.test(t)){
+      const sub=detectSubtype(text,family);
+      return {chapter,family,label:chapter, subtype:sub, key:`${family}:${sub||'general'}:${unitBucket(item.unit)}`};
+    }
+  }
+  // Agrupació genèrica per paraules fortes quan no entra a cap família.
+  const tokens=t.split(' ').filter(w=>w.length>4 && !/^\d+$/.test(w)).slice(0,8);
+  const keyTokens=[...new Set(tokens)].slice(0,4).join('-') || t.slice(0,30) || 'sense-text';
+  const ch=cleanText(item.chapter||'Altres / revisar') || 'Altres / revisar';
+  return {chapter:ch, family:'altres', label:ch, key:`altres:${strip(ch)}:${keyTokens}:${unitBucket(item.unit)}`};
+}
+function libraryRepresentativeScore(item){
+  let score=0;
+  if(num(item.unitPrice)>0) score+=45;
+  if(num(item.directCost)>0) score+=15;
+  if(Array.isArray(item.decomp) && item.decomp.length) score+=35;
+  const st=strip(item.status||'');
+  if(st.includes('valid')) score+=35;
+  if(st.includes('pendent')) score-=5;
+  if(st.includes('historic') || st.includes('històric')) score-=10;
+  const conceptLen=cleanText(item.concept||'').length;
+  const longLen=cleanText(item.longDesc||'').length;
+  if(conceptLen>12 && conceptLen<180) score+=20;
+  if(longLen>30) score+=10;
+  if(isProbablyNotPartida(item)) score-=1000;
+  return score;
+}
+function buildLibraryCleanupPlan(mode='strong'){
+  const groups=new Map();
+  const trash=[];
+  for(const item of data.library||[]){
+    const cls=classifyLibraryFamily(item);
+    if(cls.trash){ trash.push({item,cls}); continue; }
+    let key=cls.key;
+    if(mode==='conservative') key = `${cls.family}:${cls.subtype||'general'}:${unitBucket(item.unit)}:${normalizeForGrouping(item.concept||'').slice(0,18)}`;
+    if(!groups.has(key)) groups.set(key,{key, cls, items:[]});
+    groups.get(key).items.push(item);
+  }
+  const rows=[...groups.values()].map(g=>{
+    const sorted=[...g.items].sort((a,b)=>libraryRepresentativeScore(b)-libraryRepresentativeScore(a));
+    const rep=sorted[0];
+    return {...g, representative:rep, duplicates:sorted.slice(1)};
+  }).sort((a,b)=>String(a.cls.chapter).localeCompare(String(b.cls.chapter),'ca',{numeric:true}) || b.items.length-a.items.length);
+  const duplicates=rows.reduce((s,g)=>s+g.duplicates.length,0);
+  return {mode, rows, trash, before:(data.library||[]).length, after:rows.length, duplicates, trashCount:trash.length};
+}
+function cleanupPlanSummaryHtml(plan){
+  const preview=plan.rows.filter(g=>g.items.length>1).slice(0,90);
+  return `
+    <div class="grid four">
+      <div class="kpi"><span>Partides actuals</span><strong>${plan.before}</strong></div>
+      <div class="kpi good"><span>Partides tipus resultants</span><strong>${plan.after}</strong></div>
+      <div class="kpi"><span>Duplicades agrupables</span><strong>${plan.duplicates}</strong></div>
+      <div class="kpi ${plan.trashCount?'bad':'good'}"><span>No partides evidents</span><strong>${plan.trashCount}</strong></div>
+    </div>
+    <div class="card notice-blue"><strong>Criteri:</strong> l’app agrupa per paraules clau i unitat. Per exemple, geotèxtil queda dins Geotèxtil; làmina asfàltica, SBS, LBM, 3 kg, 4 kg, doble làmina o autoprotegida queden dins Làmines asfàltiques amb subtipus quan es detecta. Abans d’aplicar, exporta un JSON complet si vols una còpia externa.</div>
+    ${preview.length?`<div class="table-wrap"><table><thead><tr><th>Capítol proposat</th><th>Grup</th><th>Es conserven</th><th>S’agrupen</th><th>Representant</th></tr></thead><tbody>${preview.map(g=>`<tr><td>${esc(g.cls.chapter)}</td><td>${esc((g.cls.subtype?g.cls.subtype+' · ':'')+g.key)}</td><td>1</td><td>${g.duplicates.length}</td><td><strong>${esc(g.representative.concept||'')}</strong><br><span class="muted">${esc(g.representative.unit||'')} · ${money(g.representative.unitPrice||libFinal(g.representative))}</span></td></tr>`).join('')}</tbody></table></div>`:`<div class="empty">No hi ha grups duplicats segons el criteri actual.</div>`}
+    ${plan.trashCount?`<details class="chapter-group"><summary><strong>Textos que es descartarien com a no partides</strong><span>${plan.trashCount}</span></summary><div class="small-text">${plan.trash.slice(0,80).map(x=>esc(x.item.concept||x.item.longDesc||x.item.code||'')).join('<br>')}</div></details>`:''}
+  `;
+}
+function openLibraryCleanupModal(){
+  const plan=buildLibraryCleanupPlan('strong');
+  openModal(`<h2>Depurar llibreria importada</h2>
+    <div class="card">
+      <p>Aquesta eina serveix després d’importar molts Excels: redueix la llibreria a partides tipus i evita tenir 20 o 30 variants repetides del mateix concepte.</p>
+      <div class="form-grid">
+        <label>Mode de depuració<select id="cleanupMode"><option value="strong" selected>Fort recomanat · base 50-100 partides</option><option value="conservative">Conservador · separa més variants</option></select></label>
+        <label>Resultat estimat<input id="cleanupEstimate" readonly value="${plan.before} → ${plan.after} partides tipus"></label>
+      </div>
+      <div id="cleanupPreview">${cleanupPlanSummaryHtml(plan)}</div>
+      <div class="actions"><button class="primary" id="applyLibraryCleanup">Aplicar depuració i conservar representants</button><button class="ghost" id="refreshCleanupPreview">Recalcular previsualització</button>${(data.libraryCleanupBackups||[]).length?'<button class="ghost" id="restoreLibraryCleanup">Restaurar última depuració</button>':''}</div>
+    </div>`);
+}
+function refreshCleanupPreview(){
+  const mode=document.getElementById('cleanupMode')?.value || 'strong';
+  const plan=buildLibraryCleanupPlan(mode);
+  const est=document.getElementById('cleanupEstimate'); if(est) est.value=`${plan.before} → ${plan.after} partides tipus`;
+  const prev=document.getElementById('cleanupPreview'); if(prev) prev.innerHTML=cleanupPlanSummaryHtml(plan);
+}
+function applyLibraryCleanup(){
+  const mode=document.getElementById('cleanupMode')?.value || 'strong';
+  const plan=buildLibraryCleanupPlan(mode);
+  if(!confirm(`Aplicar depuració?\n\nPartides actuals: ${plan.before}\nPartides resultants: ${plan.after}\nDuplicades agrupades: ${plan.duplicates}\nNo partides descartades: ${plan.trashCount}\n\nEs guardarà una còpia interna per poder restaurar.`)) return;
+  data.libraryCleanupBackups = Array.isArray(data.libraryCleanupBackups) ? data.libraryCleanupBackups : [];
+  data.libraryCleanupBackups.push({id:uid('LIBBACK'), date:new Date().toISOString(), mode, before:data.library, note:`Depuració ${plan.before} → ${plan.after}`});
+  if(data.libraryCleanupBackups.length>3) data.libraryCleanupBackups=data.libraryCleanupBackups.slice(-3);
+  const idMap={};
+  const next=[];
+  for(const g of plan.rows){
+    const rep={...g.representative};
+    rep.chapter=g.cls.chapter || rep.chapter || 'Altres / revisar';
+    rep.status=strip(rep.status).includes('valid') ? rep.status : 'Partida tipus agrupada';
+    const origins=[rep.origin, ...g.duplicates.map(x=>x.origin)].filter(Boolean);
+    rep.origin=[...new Set(origins)].slice(0,8).join(' · ');
+    rep.groupKey=g.key;
+    rep.groupedCount=g.items.length;
+    rep.aliases=[...new Set(g.items.map(x=>cleanText(x.concept||'')).filter(Boolean))].slice(0,30);
+    rep.history=[...(rep.history||[])];
+    for(const dup of g.duplicates){
+      idMap[dup.id]=rep.id;
+      rep.history.push({origin:dup.origin||'Agrupada', concept:dup.concept, unit:dup.unit, unitPrice:dup.unitPrice, total:dup.total, status:dup.status, date:today()});
+    }
+    next.push(rep);
+  }
+  // Actualitza línies de pressupost que apuntaven a una partida duplicada.
+  for(const b of data.budgets||[]){
+    for(const l of (b.lines||[])){
+      if(l.libraryId && idMap[l.libraryId]) l.libraryId=idMap[l.libraryId];
+    }
+  }
+  data.library=next.sort((a,b)=>String(a.chapter||'').localeCompare(String(b.chapter||''),'ca',{numeric:true}) || String(a.concept||'').localeCompare(String(b.concept||''),'ca',{numeric:true}));
+  data.importLogs=data.importLogs||[];
+  data.importLogs.push({id:uid('CLEAN'),date:new Date().toISOString(),type:'Depuració llibreria',before:plan.before,after:plan.after,duplicates:plan.duplicates,trash:plan.trashCount,mode});
+  saveData(); closeModal(); state.libChapterFilter=''; state.libSearch=''; renderLibrary();
+}
+function restoreLastLibraryCleanup(){
+  data.libraryCleanupBackups = Array.isArray(data.libraryCleanupBackups) ? data.libraryCleanupBackups : [];
+  const last=data.libraryCleanupBackups.pop();
+  if(!last) return alert('No hi ha cap còpia interna de depuració per restaurar.');
+  if(!confirm(`Restaurar la llibreria anterior a la depuració?\n${last.note||''}`)) { data.libraryCleanupBackups.push(last); return; }
+  data.library=last.before || data.library;
+  saveData(); closeModal(); renderLibrary();
+}
+
+const __teimorBaseBindViewEvents_V094 = bindViewEvents;
+bindViewEvents = function(){
+  __teimorBaseBindViewEvents_V094();
+  if(state.view==='library'){
+    const right=document.querySelector('#content .card .toolbar .right');
+    if(right && !document.getElementById('smartCleanLibrary')){
+      right.insertAdjacentHTML('afterbegin','<button class="primary" id="smartCleanLibrary">Depurar similars</button>');
+    }
+    const smart=document.getElementById('smartCleanLibrary'); if(smart) smart.onclick=openLibraryCleanupModal;
+  }
+};
+const __teimorBaseBindModalEvents_V094 = bindModalEvents;
+bindModalEvents = function(){
+  __teimorBaseBindModalEvents_V094();
+  const mode=document.getElementById('cleanupMode'); if(mode) mode.onchange=refreshCleanupPreview;
+  const refresh=document.getElementById('refreshCleanupPreview'); if(refresh) refresh.onclick=refreshCleanupPreview;
+  const apply=document.getElementById('applyLibraryCleanup'); if(apply) apply.onclick=applyLibraryCleanup;
+  const restore=document.getElementById('restoreLibraryCleanup'); if(restore) restore.onclick=restoreLastLibraryCleanup;
+};
