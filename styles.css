@@ -52,3 +52,32 @@ button,input,select,textarea{font:inherit} button{cursor:pointer}.hidden{display
 .budget-lines table{min-width:1250px}
 .modal .form-grid{grid-template-columns:repeat(6,minmax(0,1fr))}.modal .form-grid .wide{grid-column:span 3}.modal .form-grid .full{grid-column:1/-1}
 @media(max-width:1200px){.modal .form-grid{grid-template-columns:1fr}.modal .form-grid .wide,.modal .form-grid .full{grid-column:auto}.budget-lines .concept-col,.budget-lines .concept-cell{min-width:360px}}
+
+/* V09.3 · agrupació per anys, agenda i modals més còmodes */
+.year-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0 14px;padding:10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px}
+.year-strip span{font-weight:700;color:#334155;margin-right:4px}
+.year-chip{border:1px solid #cbd5e1;background:#fff;border-radius:999px;padding:7px 12px;cursor:pointer;font-weight:700;color:#334155}
+.year-chip.active{background:#c2410c;color:#fff;border-color:#c2410c}
+.compact-filters{grid-template-columns:2fr 1fr 1fr}
+.modal-box{width:min(96vw,1380px);max-height:92vh;overflow:auto}
+.budget-form-wide{grid-template-columns:repeat(4,minmax(160px,1fr))}
+.budget-form-wide .concept-field input{font-size:16px;padding:12px 14px}
+.budget-lines table{min-width:1180px}
+.linklike{background:transparent;border:0;padding:0;text-align:left;color:#0f172a;cursor:pointer;text-decoration:none}
+.linklike:hover strong{text-decoration:underline}
+.chapter-group summary{gap:10px}
+.chapter-group summary .mini{margin-left:auto;font-size:12px;padding:4px 8px}
+.agenda-layout{grid-template-columns:2fr 1fr}
+.calendar-weekdays{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin:12px 0 6px;color:#475569;font-weight:800;text-align:center}
+.calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(90px,1fr));gap:6px}
+.calendar-cell{min-height:118px;border:1px solid #e2e8f0;border-radius:14px;background:#fff;padding:8px;cursor:pointer;overflow:hidden}
+.calendar-cell.today{outline:2px solid #c2410c;background:#fff7ed}
+.calendar-cell.muted-bg{background:#f8fafc;cursor:default}
+.day-num{font-weight:900;color:#0f172a;margin-bottom:6px}
+.calendar-event{display:block;width:100%;border:0;background:#e0f2fe;color:#075985;border-radius:8px;padding:4px 6px;margin:3px 0;text-align:left;font-size:12px;line-height:1.2;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.calendar-event:hover{background:#bae6fd}
+.more-events{font-size:12px;color:#64748b;margin-top:4px}
+.agenda-list{display:flex;flex-direction:column;gap:10px}
+.agenda-item{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#fff}
+.agenda-form{grid-template-columns:repeat(4,minmax(150px,1fr))}
+@media(max-width:900px){.agenda-layout{grid-template-columns:1fr}.calendar-grid{grid-template-columns:repeat(7,minmax(40px,1fr))}.calendar-cell{min-height:86px;padding:5px}.calendar-event{font-size:10px}.budget-form-wide,.agenda-form{grid-template-columns:1fr}.compact-filters{grid-template-columns:1fr}}

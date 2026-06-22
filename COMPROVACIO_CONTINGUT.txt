@@ -1,3 +1,7 @@
-Carpeta V09.2 neta.
-Fitxers inclosos: index.html, app.js, styles.css, render.yaml, README_TEIMOR_APP_v09_2.md, COMPROVACIO_CONTINGUT.txt.
-No inclou READMEs antics ni carpetes de versions anteriors.
+Carpeta neta V09.3:
+- index.html
+- app.js
+- styles.css
+- render.yaml
+- README_TEIMOR_APP_v09_3.md
+- COMPROVACIO_CONTINGUT.txt

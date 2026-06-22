@@ -2134,3 +2134,280 @@ bindModalEvents = function(){
     dateInput.addEventListener('change',()=>{ if(numberInput.dataset.autoNumber==='1') numberInput.value=nextBudgetNumber(dateInput.value); });
   }
 };
+
+/* =========================
+   V09.3 overrides: rendiment clicable, any actiu, agenda i edició de capítols
+   ========================= */
+(function(){
+  data.meta = data.meta || {};
+  data.meta.version = '9.3.0-rendiment-agenda';
+  data.agenda = Array.isArray(data.agenda) ? data.agenda : [];
+  data.jobs = Array.isArray(data.jobs) ? data.jobs : [];
+  data.budgets = Array.isArray(data.budgets) ? data.budgets : [];
+  data.library = Array.isArray(data.library) ? data.library : [];
+  state.agendaMonth = state.agendaMonth || today().slice(0,7);
+})();
+
+function render(){
+  document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('active', b.dataset.view===state.view));
+  const views={dashboard:renderDashboard,clients:renderClients,library:renderLibrary,budgets:renderBudgets,invoices:renderInvoices,performance:renderPerformance,agenda:renderAgenda,attachments:renderAttachments,importer:renderImporter,backup:renderBackup,settings:renderSettings};
+  (views[state.view]||renderDashboard)();
+}
+
+function availableBudgetYears(){
+  return [...new Set(data.budgets.map(b=>budgetYear(b)).filter(Boolean))].sort((a,b)=>b-a);
+}
+function activeYear(kind='budget'){
+  const years=availableBudgetYears();
+  const key=kind==='performance'?'performanceYearFilter':'budgetYearFilter';
+  if(state[key] === 'all') return 'all';
+  if(state[key] && years.includes(Number(state[key]))) return Number(state[key]);
+  return years[0] || new Date().getFullYear();
+}
+function yearSelectorHtml(current, target='budget'){
+  const years=availableBudgetYears();
+  if(!years.length) return '';
+  return `<div class="year-strip"><span>Any actiu:</span>${years.map(y=>`<button class="year-chip ${String(current)===String(y)?'active':''}" data-year-target="${esc(target)}" data-year="${y}">${y}</button>`).join('')}<button class="year-chip ${current==='all'?'active':''}" data-year-target="${esc(target)}" data-year="all">Tots</button></div>`;
+}
+function bindYearSelectors(){
+  document.querySelectorAll('[data-year-target][data-year]').forEach(btn=>btn.onclick=()=>{
+    const target=btn.dataset.yearTarget;
+    const value=btn.dataset.year;
+    if(target==='performance') { state.performanceYearFilter=value; renderPerformance(); }
+    else { state.budgetYearFilter=value; renderBudgets(); }
+  });
+}
+
+function budgetRowsFiltered(){
+  const q=strip(document.getElementById('budgetSearch')?.value ?? state.budgetSearch ?? '');
+  const yearState=state.budgetYearFilter ?? activeYear('budget');
+  const status=strip(document.getElementById('budgetStatusFilter')?.value ?? state.budgetStatusFilter ?? '');
+  const client=document.getElementById('budgetClientFilter')?.value ?? state.budgetClientFilter ?? '';
+  const rows=data.budgets.filter(b=>{
+    const j=byId(data.jobs,b.jobId);
+    const c=byId(data.clients,b.clientId);
+    const blob=[b.id,b.number,b.date,b.title,b.status,b.source,b.notes,c?.name,c?.nif,c?.phone,c?.email,j?.title,j?.address,j?.city,budgetYear(b)].join(' ');
+    const yearOk = !yearState || yearState==='all' || String(budgetYear(b))===String(yearState);
+    return (!q || strip(blob).includes(q)) && yearOk && (!status || strip(b.status)===status) && (!client || b.clientId===client);
+  });
+  return sortByBudgetField(rows);
+}
+
+function renderBudgets(editId=''){
+  setHeader('Pressupostos','Llistat complet agrupable per any. Clica les capçaleres per ordenar en sentit ascendent o descendent.');
+  if(editId) { state.editBudgetId=editId; state.selectedBudgetId=editId === '__new' ? '' : editId; }
+  const currentYear=activeYear('budget');
+  const statuses=[...new Set(data.budgets.map(b=>b.status).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const rows=budgetRowsFiltered();
+  setContent(`
+    <div class="grid four">
+      <div class="kpi"><span>Pressupostos</span><strong>${rows.length}</strong></div>
+      <div class="kpi"><span>Total s/IVA any actiu</span><strong>${money(rows.reduce((s,b)=>s+budgetBase(b),0))}</strong></div>
+      <div class="kpi"><span>Acceptats / fets</span><strong>${rows.filter(b=>strip(b.status).includes('acceptat')||strip(b.status).includes('fet')).length}</strong></div>
+      <div class="kpi"><span>Rebutjats / anul·lats</span><strong>${rows.filter(b=>strip(b.status).includes('rebutjat')||strip(b.status).includes('anul')).length}</strong></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h2>Pressupostos ${currentYear==='all'?'· tots els anys':'· '+esc(currentYear)}</h2><div class="right"><button class="ghost" id="selectAllBudgets">Seleccionar tot</button><button class="ghost" id="clearSelectedBudgets">Desmarcar</button><button class="danger" id="deleteSelectedBudgets">Eliminar seleccionats</button><button class="primary" id="newBudgetBtn">+ Nou pressupost</button><button class="ghost" id="exportBudgetCsv">Exportar CSV del seleccionat</button></div></div>
+      ${yearSelectorHtml(currentYear,'budget')}
+      <div class="filter-grid compact-filters">
+        <label>Cerca<input id="budgetSearch" placeholder="Client, obra, núm., adreça, any..." value="${esc(state.budgetSearch||'')}"></label>
+        <label>Client<select id="budgetClientFilter"><option value="">Tots</option>${options(data.clients,state.budgetClientFilter||'')}</select></label>
+        <label>Estat<select id="budgetStatusFilter"><option value="">Tots</option>${statuses.map(x=>`<option ${strip(x)===strip(state.budgetStatusFilter||'')?'selected':''}>${esc(x)}</option>`).join('')}</select></label>
+      </div>
+      <div class="sort-help small-text">Ordre actual: <strong>${esc(state.budgetSortField||'data')}</strong> ${esc(state.budgetSortDir==='asc'?'ascendent':'descendent')} · prem una capçalera per canviar.</div>
+      <div id="budgetFilterInfo" class="small-text" style="margin:10px 0">Mostrant ${rows.length} de ${data.budgets.length} pressupostos.</div>
+      <div id="budgetsTable">${currentYear==='all' ? budgetsGroupedByYear(rows) : budgetsTable(rows)}</div>
+    </div>
+  `);
+}
+function budgetsGroupedByYear(rows){
+  const grouped={}; rows.forEach(b=>{ const y=budgetYear(b)||'Sense any'; (grouped[y] ||= []).push(b); });
+  return Object.keys(grouped).sort((a,b)=>compareMixed(a,b,'desc')).map(y=>`<details class="chapter-group" open><summary><strong>Any ${esc(y)}</strong><span>${grouped[y].length} pressupost/os</span></summary>${budgetsTable(grouped[y])}</details>`).join('') || empty();
+}
+
+function renderPerformance(){
+  setHeader('Rendiment','Rendiment per pressupost/obra, agrupable per any i clicable per obrir directament la fitxa del pressupost.');
+  const currentYear=activeYear('performance');
+  const rows=sortByBudgetField(data.budgets.filter(b=> currentYear==='all' || String(budgetYear(b))===String(currentYear)));
+  const rowData=rows.map(b=>{
+    const inv=data.invoices.filter(i=>i.budgetId===b.id || (b.jobId && i.jobId===b.jobId));
+    const fact=inv.reduce((s,i)=>s+invoiceTotal(i),0);
+    const base=budgetBase(b);
+    return {b,base,fact,margin:base-fact, invoices:inv.length};
+  });
+  const max=Math.max(1,...rowData.map(r=>r.base));
+  setContent(`
+    <div class="grid four">
+      <div class="kpi"><span>Pressupostat base</span><strong>${money(rowData.reduce((s,r)=>s+r.base,0))}</strong></div>
+      <div class="kpi"><span>Facturat IVA incl.</span><strong>${money(rowData.reduce((s,r)=>s+r.fact,0))}</strong></div>
+      <div class="kpi ${rowData.reduce((s,r)=>s+r.margin,0)>=0?'good':'warn'}"><span>Diferència</span><strong>${money(rowData.reduce((s,r)=>s+r.margin,0))}</strong></div>
+      <div class="kpi"><span>Pressupostos any actiu</span><strong>${rowData.length}</strong></div>
+    </div>
+    <div class="card"><div class="toolbar"><h2>Rendiment ${currentYear==='all'?'· tots els anys':'· '+esc(currentYear)}</h2><div class="right"><button class="ghost" data-go="budgets">Anar a pressupostos</button></div></div>${yearSelectorHtml(currentYear,'performance')}
+      <div class="chart">${rowData.slice(0,16).map(r=>`<div class="chart-bar" title="${esc(budgetName(r.b.id))}" style="height:${Math.max(4,(r.base/max)*100)}%"><span>${money(r.base)}</span></div>`).join('')}</div>
+      <div class="chart-labels">${rowData.slice(0,16).map(r=>`<span>${esc((r.b.number||'')+' · '+clientName(r.b.clientId)).slice(0,32)}</span>`).join('')}</div>
+    </div>
+    <div class="card"><h2>Rendiment per pressupost / obra</h2>${performanceTable(rowData)}</div>
+  `);
+}
+function performanceTable(rowData){
+  if(!rowData.length) return empty('No hi ha pressupostos per aquest any.');
+  const rows=rowData.map(r=>{
+    const b=r.b; const j=byId(data.jobs,b.jobId)||{}; const m=r.margin; const p=r.base?m/r.base*100:0;
+    return `<tr class="clickable-row" data-open-budget="${esc(b.id)}"><td>${esc(budgetYear(b)||'')}</td><td>${dateDisplay(b.date)}</td><td><strong>${esc(b.number||'')}</strong></td><td>${esc(clientName(b.clientId))}</td><td><strong>${esc(b.title||j.title||'')}</strong>${j.address?`<br><span class="muted">${esc(j.address)}</span>`:''}</td><td>${statusPill(b.status||'')}</td><td class="num">${money(r.base)}</td><td class="num">${money(r.fact)}</td><td class="num ${m>=0?'status-ok':'status-bad'}">${money(m)}</td><td class="num">${p.toFixed(1)}%</td><td><button class="ghost small" data-edit-budget="${esc(b.id)}" data-no-row-open>Obrir</button></td></tr>`;
+  });
+  return `<div class="table-wrap"><table><thead><tr><th>Any</th><th>Data</th><th>Núm.</th><th>Client</th><th>Obra / concepte</th><th>Estat</th><th>Pressupostat base</th><th>Factures</th><th>Diferència</th><th>%</th><th>Acció</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
+}
+
+function renderLibrary(){
+  setHeader('Llibreria de partides','Partides agrupades per capítol. Pots filtrar, ordenar, editar capítols i obrir cada partida.');
+  const q=state.libSearch || '';
+  const filter=strip(q);
+  const chapters=[...new Set(data.library.map(x=>x.chapter||'Sense capítol').filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const chapter=state.libChapterFilter || '';
+  const statusFilter=strip(state.libStatusFilter || '');
+  let rows=data.library.filter(x=>{
+    const chapterOk=!chapter || (x.chapter||'Sense capítol')===chapter;
+    const statusOk=!statusFilter || strip(x.status||'').includes(statusFilter);
+    const searchOk=!filter || strip([x.code,x.chapter,x.unit,x.concept,x.longDesc,x.status,x.origin].join(' ')).includes(filter);
+    return chapterOk && statusOk && searchOk;
+  });
+  rows=sortByLibraryField(rows);
+  setContent(`
+    <div class="card">
+      <div class="toolbar"><h2>Llibreria per capítols</h2><div class="right"><button class="ghost" id="selectAllLibrary">Seleccionar tot</button><button class="ghost" id="clearSelectedLibrary">Desmarcar</button><button class="danger" id="deleteSelectedLibrary">Eliminar seleccionades</button><button class="ghost" id="exportLibraryJson">Exportar llibreria</button><label class="ghost file-label">Importar llibreria<input id="importLibraryJson" type="file" accept="application/json" hidden></label><button class="primary" id="newLibItem">Nova partida</button></div></div>
+      <div class="filter-grid">
+        <label>Cerca<input id="libSearch" placeholder="Cercar partida, codi, origen..." value="${esc(q)}"></label>
+        <label>Capítol<select id="libChapterFilter"><option value="">Tots els capítols</option>${chapters.map(c=>`<option value="${esc(c)}" ${c===chapter?'selected':''}>${esc(c)}</option>`).join('')}</select></label>
+        <label>Estat<select id="libStatusFilter"><option value="">Tots</option>${['Validada','Validada pendent revisió','Importada pendent de revisar','Històrica sense amidament','PA pendent amidament','Duplicada possible'].map(s=>`<option ${strip(s)===statusFilter?'selected':''}>${esc(s)}</option>`).join('')}</select></label>
+        <label>Resultats<input readonly value="${rows.length} de ${data.library.length}"></label>
+      </div>
+      <div class="sort-bar small-text">Ordenar llibreria: ${sortableInline('Codi','library','code')} ${sortableInline('Capítol','library','chapter')} ${sortableInline('Concepte','library','concept')} ${sortableInline('PU','library','pu')} ${sortableInline('Estat','library','status')}</div>
+      <div id="libraryTable">${libraryGroupedTable(rows)}</div>
+    </div>
+  `);
+}
+function libraryGroupedTable(rows){
+  if(!rows.length) return empty();
+  const grouped={};
+  for(const item of rows){ const ch=item.chapter||'Sense capítol'; (grouped[ch] ||= []).push(item); }
+  return Object.keys(grouped).sort((a,b)=>a.localeCompare(b,'ca',{numeric:true})).map(ch=>`
+    <details class="chapter-group" open>
+      <summary><strong>${esc(ch)}</strong><span>${grouped[ch].length} partida/es</span><button class="ghost mini" data-rename-chapter="${esc(ch)}" type="button">Editar capítol</button></summary>
+      ${libraryTable(grouped[ch])}
+    </details>`).join('');
+}
+function openRenameChapterModal(oldChapter){
+  openModal(`<h2>Editar nom de capítol</h2><div class="card"><form id="renameChapterForm" class="form-grid"><input type="hidden" name="oldChapter" value="${esc(oldChapter)}"><label class="full">Nom actual<input readonly value="${esc(oldChapter)}"></label><label class="full">Nou nom<input name="newChapter" required value="${esc(oldChapter)}"></label><div class="actions full"><button class="primary">Guardar canvi</button></div></form><p class="small-text">El canvi s’aplicarà a totes les partides de la llibreria i també a les línies de pressupostos que tinguin exactament aquest capítol.</p></div>`);
+}
+function saveRenameChapter(e){
+  e.preventDefault();
+  const f=formObj(e.target); const old=f.oldChapter||'Sense capítol'; const neu=cleanText(f.newChapter)||'Sense capítol';
+  data.library.forEach(x=>{ if((x.chapter||'Sense capítol')===old) x.chapter=neu; });
+  data.budgets.forEach(b=>(b.lines||[]).forEach(l=>{ if((l.chapter||'Sense capítol')===old) l.chapter=neu; }));
+  saveData(); closeModal(); renderLibrary();
+}
+
+function budgetLinesCard(b){
+  return `<div class="card"><div class="toolbar"><h2>Partides del pressupost</h2><div class="right"><button class="ghost" id="selectAllBudgetLines">Seleccionar tot</button><button class="ghost" id="clearSelectedBudgetLines">Desmarcar</button><button class="danger" id="deleteSelectedBudgetLines">Eliminar línies seleccionades</button><button class="primary" id="addLineFromLibrary">Afegir de llibreria</button><button class="ghost" id="addManualLine">Afegir partida nova</button></div></div>
+    <div class="table-wrap budget-lines"><table><thead><tr><th>Sel.</th><th>Codi</th><th>Capítol</th><th>Ut</th><th class="concept-col">Concepte / descripció</th><th>Quantitat</th><th>Preu/ut</th><th>Total</th><th>Estat</th><th></th></tr></thead><tbody>${(b.lines||[]).map(l=>`
+      <tr><td><input type="checkbox" class="select-budget-line" value="${esc(l.id)}"></td><td><input data-line-field="code" data-line-id="${esc(l.id)}" value="${esc(l.code||'')}"></td><td><input data-line-field="chapter" data-line-id="${esc(l.id)}" value="${esc(l.chapter||'')}"></td><td><input data-line-field="unit" data-line-id="${esc(l.id)}" value="${esc(l.unit||'')}"></td><td class="concept-cell"><textarea data-line-field="concept" data-line-id="${esc(l.id)}" class="line-concept">${esc(l.concept||'')}</textarea>${l.longDesc?`<div class="long muted">${esc(l.longDesc||'')}</div>`:''}</td><td><input class="num" data-line-field="qty" data-line-id="${esc(l.id)}" type="number" step="0.0001" value="${esc(l.qty||'')}"></td><td><input class="num" data-line-field="unitPrice" data-line-id="${esc(l.id)}" type="number" step="0.01" value="${esc(l.unitPrice||'')}"></td><td class="num"><strong>${money(lineTotal(l))}</strong></td><td>${statusPill(l.status||'')}</td><td><button class="danger small" data-delete-line="${esc(l.id)}">Eliminar</button></td></tr>`).join('')}</tbody></table></div>
+    <div class="budget-total"><div>Base: <strong>${money(budgetBase(b))}</strong></div><div>IVA: <strong>${money(budgetIVA(b))}</strong></div><div>Total: <strong>${money(budgetTotal(b))}</strong></div></div>
+    ${budgetLineSum(b)===0 && num(b.importedBase)>0 ? `<div class="small-text" style="text-align:right;margin-top:6px">Base presa del total detectat a l’Excel original; les línies separades per * queden pendents de preu/amidament.</div>` : ''}
+  </div>`;
+}
+
+function monthLabel(ym){
+  const [y,m]=ym.split('-').map(Number);
+  return new Date(y,m-1,1).toLocaleDateString('ca-ES',{month:'long',year:'numeric'});
+}
+function shiftMonth(ym,delta){
+  const [y,m]=ym.split('-').map(Number); const d=new Date(y,m-1+delta,1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+}
+function agendaEventsForDate(date){ return (data.agenda||[]).filter(e=>e.date===date).sort((a,b)=>String(a.time||'').localeCompare(String(b.time||''))); }
+function renderAgenda(){
+  setHeader('Agenda','Calendari tipus Google Calendar per cites, notes i seguiments vinculats a client, obra o pressupost.');
+  data.agenda = Array.isArray(data.agenda) ? data.agenda : [];
+  const ym=state.agendaMonth || today().slice(0,7);
+  const [y,m]=ym.split('-').map(Number);
+  const first=new Date(y,m-1,1); const last=new Date(y,m,0).getDate();
+  const offset=(first.getDay()+6)%7; // dilluns com a primer dia
+  const cells=[];
+  for(let i=0;i<offset;i++) cells.push('<div class="calendar-cell muted-bg"></div>');
+  for(let d=1; d<=last; d++){
+    const date=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const events=agendaEventsForDate(date);
+    cells.push(`<div class="calendar-cell ${date===today()?'today':''}" data-new-agenda-date="${date}"><div class="day-num">${d}</div>${events.slice(0,3).map(ev=>`<button class="calendar-event" data-agenda-id="${esc(ev.id)}" data-no-day-open>${esc((ev.time?ev.time+' · ':'')+(ev.title||clientName(ev.clientId)||'Nota'))}</button>`).join('')}${events.length>3?`<div class="more-events">+${events.length-3} més</div>`:''}</div>`);
+  }
+  const upcoming=[...(data.agenda||[])].filter(e=>e.date>=today()).sort((a,b)=>String(a.date+a.time).localeCompare(String(b.date+b.time))).slice(0,12);
+  setContent(`
+    <div class="grid two agenda-layout">
+      <div class="card"><div class="toolbar"><h2>${esc(monthLabel(ym))}</h2><div class="right"><button class="ghost" id="agendaPrev">‹ Mes anterior</button><button class="ghost" id="agendaToday">Avui</button><button class="ghost" id="agendaNext">Mes següent ›</button><button class="primary" id="newAgendaEvent">+ Nova cita / nota</button></div></div>
+        <div class="calendar-weekdays"><span>Dl</span><span>Dt</span><span>Dc</span><span>Dj</span><span>Dv</span><span>Ds</span><span>Dg</span></div>
+        <div class="calendar-grid">${cells.join('')}</div>
+      </div>
+      <div class="card"><h2>Properes cites i notes</h2>${agendaList(upcoming)}</div>
+    </div>
+  `);
+}
+function agendaList(rows){
+  if(!rows.length) return empty('No hi ha cites pendents.');
+  return `<div class="agenda-list">${rows.map(e=>`<div class="agenda-item"><div><strong>${dateDisplay(e.date)} ${esc(e.time||'')}</strong><br><span>${esc(e.title||'Nota')}</span><br><span class="muted">${esc(clientName(e.clientId))}${e.budgetId?' · '+esc(budgetName(e.budgetId)):''}${e.jobId?' · '+esc(jobName(e.jobId)):''}</span></div><div class="actions"><button class="ghost small" data-agenda-id="${esc(e.id)}">Editar</button><button class="danger small" data-delete-agenda="${esc(e.id)}">Eliminar</button></div></div>`).join('')}</div>`;
+}
+function openAgendaModal(id='', presetDate=''){
+  const isNew=!id; const e=isNew ? {id:'', date:presetDate||today(), time:'09:00', type:'Cita', status:'Pendent'} : (data.agenda||[]).find(x=>x.id===id);
+  if(!e) return alert('No s’ha trobat aquesta cita.');
+  openModal(`<h2>${isNew?'Nova cita / nota':'Editar cita / nota'}</h2><div class="card"><form id="agendaForm" class="form-grid agenda-form"><input type="hidden" name="id" value="${esc(e.id||uid('AG'))}"><input type="hidden" name="editId" value="${esc(e.id||'')}">
+    <label>Data<input name="date" type="date" required value="${esc(e.date||today())}"></label><label>Hora<input name="time" type="time" value="${esc(e.time||'')}"></label>
+    <label>Tipus<select name="type">${['Cita obra','Trucada','Visita','Recordatori','Nota','Entrega pressupost','Seguiment factura'].map(x=>`<option ${x===(e.type||'')?'selected':''}>${x}</option>`).join('')}</select></label>
+    <label>Estat<select name="status">${['Pendent','Fet','Ajornat','Cancel·lat'].map(x=>`<option ${x===(e.status||'')?'selected':''}>${x}</option>`).join('')}</select></label>
+    <label class="wide">Client<select name="clientId"><option value="">Sense client</option>${options(data.clients,e.clientId||'')}</select></label>
+    <label class="wide">Pressupost / obra activa<select name="budgetId"><option value="">Sense pressupost</option>${options(data.budgets,e.budgetId||'',x=>`${x.number||''} · ${clientName(x.clientId)} · ${x.title||''}`)}</select></label>
+    <label class="wide">Feina existent<select name="jobId"><option value="">Sense feina</option>${options(data.jobs,e.jobId||'',x=>`${x.year} · ${clientName(x.clientId)} · ${x.title}`)}</select></label>
+    <label class="wide">Crear obra nova si cal<input name="newJobTitle" placeholder="Nom de nova obra / feina"></label>
+    <label class="full">Títol / nota curta<input name="title" required value="${esc(e.title||'')}"></label>
+    <label class="full">Notes<textarea name="notes">${esc(e.notes||'')}</textarea></label>
+    <div class="actions full"><button class="primary">Guardar</button></div></form></div>`);
+}
+function saveAgendaEvent(e){
+  e.preventDefault(); const f=formObj(e.target);
+  let jobId=f.jobId||'';
+  if(!jobId && f.newJobTitle && f.clientId){
+    const year=Number((parseDateValue(f.date)||today()).slice(0,4));
+    const j={id:uid('F'),year,clientId:f.clientId,title:cleanText(f.newJobTitle),address:byId(data.clients,f.clientId)?.workAddress||'',city:byId(data.clients,f.clientId)?.city||'',status:'Activa',notes:'Creada des de l’agenda.'};
+    data.jobs.push(j); jobId=j.id;
+  }
+  if(!f.clientId && f.budgetId) f.clientId=byId(data.budgets,f.budgetId)?.clientId||'';
+  const ev={id:f.id, date:parseDateValue(f.date)||f.date, time:f.time, type:f.type, status:f.status, clientId:f.clientId, budgetId:f.budgetId, jobId, title:f.title, notes:f.notes};
+  const idx=data.agenda.findIndex(x=>x.id===f.editId || x.id===ev.id);
+  if(idx>=0) data.agenda[idx]=ev; else data.agenda.push(ev);
+  saveData(); closeModal(); renderAgenda();
+}
+function deleteAgendaEvent(id){
+  if(!confirm('Eliminar aquesta cita/nota?')) return;
+  data.agenda=data.agenda.filter(x=>x.id!==id); saveData(); renderAgenda();
+}
+
+const __teimorBaseBindViewEvents_V093 = bindViewEvents;
+bindViewEvents = function(){
+  __teimorBaseBindViewEvents_V093();
+  bindYearSelectors();
+  document.querySelectorAll('[data-open-budget]').forEach(row=>{
+    row.onclick=e=>{ if(e.target.closest('[data-no-row-open],button,input,select,textarea,a')) return; openBudgetModal(row.dataset.openBudget); };
+  });
+  document.querySelectorAll('[data-rename-chapter]').forEach(btn=>btn.onclick=e=>{ e.preventDefault(); e.stopPropagation(); openRenameChapterModal(btn.dataset.renameChapter); });
+  const agendaPrev=document.getElementById('agendaPrev'); if(agendaPrev) agendaPrev.onclick=()=>{ state.agendaMonth=shiftMonth(state.agendaMonth||today().slice(0,7),-1); renderAgenda(); };
+  const agendaNext=document.getElementById('agendaNext'); if(agendaNext) agendaNext.onclick=()=>{ state.agendaMonth=shiftMonth(state.agendaMonth||today().slice(0,7),1); renderAgenda(); };
+  const agendaToday=document.getElementById('agendaToday'); if(agendaToday) agendaToday.onclick=()=>{ state.agendaMonth=today().slice(0,7); renderAgenda(); };
+  const newAgendaEvent=document.getElementById('newAgendaEvent'); if(newAgendaEvent) newAgendaEvent.onclick=()=>openAgendaModal('', today());
+  document.querySelectorAll('[data-agenda-id]').forEach(btn=>btn.onclick=e=>{ e.preventDefault(); e.stopPropagation(); openAgendaModal(btn.dataset.agendaId); });
+  document.querySelectorAll('[data-delete-agenda]').forEach(btn=>btn.onclick=()=>deleteAgendaEvent(btn.dataset.deleteAgenda));
+  document.querySelectorAll('[data-new-agenda-date]').forEach(cell=>cell.onclick=e=>{ if(e.target.closest('[data-no-day-open],button')) return; openAgendaModal('', cell.dataset.newAgendaDate); });
+};
+
+const __teimorBaseBindModalEvents_V093 = bindModalEvents;
+bindModalEvents = function(){
+  __teimorBaseBindModalEvents_V093();
+  const renameForm=document.getElementById('renameChapterForm'); if(renameForm) renameForm.onsubmit=saveRenameChapter;
+  const agendaForm=document.getElementById('agendaForm'); if(agendaForm) agendaForm.onsubmit=saveAgendaEvent;
+};
