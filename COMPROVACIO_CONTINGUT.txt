@@ -1,1 +1,10 @@
-Carpeta neta V09.4. Fitxers: index.html, app.js, styles.css, render.yaml, README_TEIMOR_APP_v09_4.md. Sense arxius antics.
+Versió: V09.5_DEPURADOR_TECNIC_LLibreria
+Contingut net de carpeta:
+- index.html
+- app.js
+- styles.css
+- render.yaml
+- README_TEIMOR_APP_v09_5.md
+- COMPROVACIO_CONTINGUT.txt
+
+Correcció clau: el depurador de partides ja no utilitza el capítol/origen antic de l’Excel per classificar, sinó el text tècnic real de cada partida.

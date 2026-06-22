@@ -2673,3 +2673,250 @@ bindModalEvents = function(){
   const apply=document.getElementById('applyLibraryCleanup'); if(apply) apply.onclick=applyLibraryCleanup;
   const restore=document.getElementById('restoreLibraryCleanup'); if(restore) restore.onclick=restoreLastLibraryCleanup;
 };
+
+/* ============================================================
+   TEIMOR V09.5 · Depurador tècnic de llibreria
+   Correcció clau: NO classificar per capítol/origen antic de l'Excel.
+   Només es mira concepte + descripció llarga + unitat/codi.
+   ============================================================ */
+(function(){
+  if(data && data.meta){ data.meta.version = '9.5.0-depurador-tecnic-llibreria'; try{ saveData?.(); }catch(e){} }
+})();
+
+function technicalText(item){
+  return [item.concept, item.longDesc, item.unit, item.code].filter(Boolean).join(' ');
+}
+function technicalNorm(text){
+  return strip(text || '')
+    .replace(/col3/g,'col')
+    .replace(/l\s*\.\s*b\s*\.\s*m/g,' lbm ')
+    .replace(/m\s*\.\s*o\s*\./g,' ma obra ')
+    .replace(/€/g,' eur ')
+    .replace(/[ºª]/g,' ')
+    .replace(/[^a-z0-9]+/g,' ')
+    .replace(/\b(de|del|la|las|los|el|els|les|i|y|amb|con|para|per|en|al|a|un|una|uns|unes|dels|dela|m2|m²|ml|ut|uds|ud|aprox|similar|existent|existents|tots|totes|cada|zona|part|tot|tota)\b/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+function isTrashLibraryConceptV095(item){
+  const c=strip(item.concept || item.longDesc || '');
+  if(!c || c.length < 3) return true;
+  const bad=[
+    /^(data|fecha|pressupost|presupuesto|client|cliente|nif|dni|cif|telefono|telèfon|email|correu|base imposable|iva|total|subtotal)$/,
+    /(materials?\s+i\s+m\.?o\.?|materiales?\s+y\s+m\.?o\?).*(unitat|unidad)?\s*=/,
+    /\d+[\.,]?\d*\s*(m|m2|m²|ml|ut)?\s*x\s*\d+[\.,]?\d*\s*€?\s*=/,
+    /^(carrer|calle|avda|avinguda|avenida|plaça|plaza|passeig|passatge|carretera)\b/,
+    /^(cp|c\.p\.|codi postal)\b/,
+    /^\d{5}\s+[a-z]/,
+    /^\d+[\.,]?\d*\s*€?$/
+  ];
+  return bad.some(rx=>rx.test(c));
+}
+function shortKeyWords(text, max=4){
+  const stop='obra obres treball treballs realitzar realitzacio execucio subministrament col locacio colocacio inclou inclos inclosa segons sobre sota amb dels dela totes tots fins zona existent existents'.split(' ');
+  const t=technicalNorm(text).split(' ').filter(w=>w.length>3 && !/^\d+$/.test(w) && !stop.includes(w));
+  return [...new Set(t)].slice(0,max).join('-') || technicalNorm(text).slice(0,30) || 'sense-text';
+}
+function subtypeLaminesV095(t){
+  const parts=[];
+  const kg=(t.match(/\b([345])\s*kg\b/)||t.match(/\b([345])\s*kilos?\b/)||[])[1];
+  if(kg) parts.push(kg+'kg');
+  if(/lbm\s*30|30\s*g|30g/.test(t)) parts.push('lbm30');
+  if(/lbm\s*40|40\s*g|40g/.test(t)) parts.push('lbm40');
+  if(/lbm\s*50|50\s*g|50g|50 g/.test(t)) parts.push('lbm50');
+  if(/doble|dues capes|dos capes|2 capes|bicapa/.test(t)) parts.push('doble');
+  if(/autoproteg|mineral|pissarra|alumini|protegida/.test(t)) parts.push('autoprotegida');
+  if(/sbs/.test(t)) parts.push('sbs');
+  if(/app/.test(t)) parts.push('app');
+  return [...new Set(parts)].join('-') || 'general';
+}
+function subtypeGeotextilV095(t){
+  const gr=(t.match(/\b(80|100|120|125|150|180|200|250|300|400|500)\s*(gr|g|g m2|gr m2)\b/)||[])[1];
+  return gr ? gr+'g' : 'general';
+}
+function subtypePavimentV095(t){
+  if(/socol|zocalo|rodapie/.test(t)) return 'socol';
+  if(/gresite|mosaic/.test(t)) return 'gresite';
+  if(/gres|ceramic|baldosa|rajol|panot|porcelanic/.test(t)) return 'ceramic';
+  if(/junta|rejunt/.test(t)) return 'rejuntat';
+  return 'general';
+}
+function classifyLibraryFamily(item){
+  // V09.5: classificació tècnica només pel text de la partida.
+  const text=technicalText(item);
+  const t=technicalNorm(text);
+  if(isTrashLibraryConceptV095(item)) return {chapter:'Descartades / no partides', family:'no-partida', label:'No partida evident', key:'trash:'+t.slice(0,40), trash:true};
+
+  const rules=[
+    // Preparació / proteccions / mitjans abans d'impermeabilitzar
+    ['Proteccions d’obra','proteccions-obra',/prote(gir|ccio|cció|ccion)|cartro|carton|pl[aà]stic|cinta proteccio|tapar|protegir pas|protecciones/,'general'],
+    ['Mitjans auxiliars i lloguers','mitjans-lloguers',/lloguer|alquiler|camio grua|camion grua|grua|elevadora|plataforma|pem|muntacargues|andami|bastida|mitjans auxiliars|medios auxiliares/,'general'],
+    ['Residus i runes','residus-runes',/runa|runes|residu|residuos|contenidor|container|abocador|vertedero|retirada|transport|sac|big bag|carrega|carga|desc[aà]rrega/,'general'],
+    ['Neteja i sanejat','neteja-sanejat',/neteja|limpieza|sanejat|saneado|repicat|picat|raspat|rascado|decapat|hidro|pressio|presion|desbross|netejar|eliminar bruticia/,'general'],
+    ['Enderrocs i arrencades','enderrocs-arrencades',/enderroc|derribo|demolicio|demolicion|arrencad|arranque|desmuntatge|desmontaje|treure gespa|retirar gespa|gespa artificial|retirada gespa|extreure|picar paviment/,'general'],
+
+    // Impermeabilització detallada per capes/operacions
+    ['Geotèxtil','geotextil',/geot[eè]xtil|geotextil|feltre separador/,(txt)=>subtypeGeotextilV095(txt)],
+    ['Imprimacions','imprimacions',/imprimaci|imprimacion|primer|emulsi[oó] bituminosa|pont d unio|puente de union|fixador|fijador|preparador suport/,'general'],
+    ['Làmines asfàltiques','lamines-asfaltiques',/l[aà]mina|lamina|asfalt|asf[aà]ltic|bitumin|sbs|app|lbm|tela asfaltica|tela asf[aà]ltica|bet[uú]n|betun/,(txt)=>subtypeLaminesV095(txt)],
+    ['Impermeabilització líquida','impermeabilitzacio-liquida',/poliureta|poliuret[aà]|resina|membrana liquida|sikalastic|mapelastic|cautxu|caucho|impermeabilitzant liquid|impermeabilizante liquido|cautx[uú]/,'general'],
+    ['Mitges canyes','mitges-canyes',/mitja canya|mitges canyes|media caña|medias cañas|canya perimetral|canyes contorns|contorns amb morter/,'general'],
+    ['Formació de pendents','formacio-pendents',/pendent|pendents|pendiente|pendientes|formaci[oó] pendent|regularitzar pendent|modificar pendent|conduir aig[uü]es|evacuaci[oó] aig[uü]es|mestrejat pendent/,'general'],
+    ['Proves d’estanqueïtat','proves-estanqueitat',/estanqueitat|estanqueidad|prova d aigua|prueba de agua|inundaci[oó]|48 h|24 h/,'general'],
+    ['Regates i obertures','regates-obertures',/regata|regates|roza|rozas|obrir regata|obertura|forat|taladre|perforaci[oó]|xemeneia|chimenea/,'general'],
+    ['Remats i peces especials','remats-peces',/remat|rematar|pe[cç]a|pieza|gra[oó]|esgra[oó]|escal[oó]|cantonera|entrega|trobada|coronament|bord[oó]|perfil/,'general'],
+    ['Segellats i juntes','segellats-juntes',/segell|sellad|silicona|massilla|masilla|junta|poliuretano|poliuret[aà]|sikaflex|reomplir junta|juntes perimetrals/,'general'],
+
+    // Cobertes / planxa / teula
+    ['Cobertes de planxa','cobertes-planxa',/planxa|chapa|coberta de planxa|cubierta de chapa|cargol|cargols|tornill|sobreeixidor|rebosadero|carena|carenes|cumbrera|pissarra mineral|fibres|fibra/,'general'],
+    ['Cobertes i teules','cobertes-teules',/coberta|cubierta|teula|teja|teulat|tejado|lluerna|claraboia/,'general'],
+
+    // Acabats i rehabilitació
+    ['Paviments i enrajolats','paviments-enrajolats',/paviment|rajol|rajola|baldosa|gres|ceramic|cer[aà]mic|enrajolat|alicatat|alicatado|socol|zocalo|rodapie|gresite|panot|porcelanic|rejunt/,(txt)=>subtypePavimentV095(txt)],
+    ['Pintura i revestiments','pintura-revestiments',/pintur|pintat|pintado|revestiment|revestimiento|jotashield|webertene|acrylic|acrilic|acrilico|esmalte|veladura/,'general'],
+    ['Reparació de formigó','reparacio-formigo',/formig[oó]|hormigon|armadur|oxid|passiv|monotop|weberrep|morter r3|morter r4|reparacio|reparacion|cantell|canto forjat|canto de forjado|despreniment|desconch|fissur|esquerda|grieta/,'general'],
+    ['Morters i regularitzacions','morters-regularitzacions',/morter|mortero|regularitz|regulariz|arreboss|enfosc|rebossat|remolinat|maestrejat|capa base|recreixement/,'general'],
+
+    // Altres famílies habituals
+    ['Canalons i baixants','canalons-baixants',/canal[oó]|canalon|baixant|bajante|pluvial|desgu[aà]s|desague|g[uü]atera|canaleta/,'general'],
+    ['Baranes i inox','baranes-inox',/barana|barandilla|passama|pasamano|inox|acer inoxidable|acero inoxidable|aisi|316/,'general'],
+    ['Aïllaments','aillaments',/aillament|aislamiento|xps|eps|llana mineral|lana mineral|poliestire|poliestireno|rockwool/,'general'],
+    ['Drenatges','drenatges',/dren|drenatge|drenaje|tub dren|grava|geodren/,'general'],
+    ['Formigons i soleres','formigons-soleres',/solera|formigonat|hormigonado|ha 25|ha25|ha 30|ha30|mallazo|malla electrosoldada|armat/,'general'],
+    ['Paleteria','paleteria',/paleta|ma[oó]|ladrillo|gero|totxana|tabic|env[aà]|pared|paret|muret|bloc formigo|bloque hormigon/,'general'],
+    ['Fusteria, portes i tancaments','fusteria-tancaments',/porta|puerta|finestra|ventana|fusteria|carpinteria|alumini|aluminio|persiana|reixa|valla/,'general'],
+    ['Instal·lacions','instal-lacions',/instal lac|instalacion|electric|fontaner|lampist|aigua|agua|desgu[aà]s|clima|aire condicionat|calefacc/,'general'],
+    ['Seguretat i salut','seguretat-salut',/seguretat|seguridad|salut|salud|epis|proteccions col lectives|protecciones colectivas/,'general'],
+    ['Neteja final','neteja-final',/neteja final|limpieza final|entrega obra|final obra/,'general']
+  ];
+  for(const [chapter,family,rx,subdef] of rules){
+    if(rx.test(t)){
+      const sub = typeof subdef === 'function' ? subdef(t) : subdef;
+      return {chapter,family,label:chapter, subtype:sub||'general', key:`${family}:${sub||'general'}:${unitBucket(item.unit)}`};
+    }
+  }
+
+  const k=shortKeyWords(text,3);
+  return {chapter:'Altres / revisar', family:'altres', label:'Altres / revisar', subtype:k, key:`altres:${k}:${unitBucket(item.unit)}`};
+}
+function libraryRepresentativeScore(item){
+  let score=0;
+  const c=cleanText(item.concept||'');
+  const l=cleanText(item.longDesc||'');
+  if(num(item.unitPrice)>0) score+=45;
+  if(num(item.directCost)>0) score+=15;
+  if(Array.isArray(item.decomp) && item.decomp.length) score+=40;
+  const st=strip(item.status||'');
+  if(st.includes('valid')) score+=35;
+  if(st.includes('tipus')) score+=18;
+  if(st.includes('pendent')) score-=5;
+  if(st.includes('historic') || st.includes('històric')) score-=10;
+  if(c.length>8 && c.length<120) score+=25;
+  if(c.length>160) score-=10;
+  if(l.length>25) score+=8;
+  if(/\b(client|pressupost|base imposable|materials i m o|\d+\s*x\s*\d+)/i.test(c)) score-=500;
+  if(isTrashLibraryConceptV095(item)) score-=1000;
+  return score;
+}
+function buildLibraryCleanupPlan(mode='strong'){
+  const groups=new Map();
+  const trash=[];
+  for(const item of data.library||[]){
+    const cls=classifyLibraryFamily(item);
+    if(cls.trash){ trash.push({item,cls}); continue; }
+    let key=cls.key;
+    if(mode==='superstrong') key = `${cls.family}:${cls.subtype||'general'}`;
+    if(mode==='strong') key = `${cls.family}:${cls.subtype||'general'}:${unitBucket(item.unit)}`;
+    if(mode==='conservative') key = `${cls.family}:${cls.subtype||'general'}:${unitBucket(item.unit)}:${shortKeyWords(technicalText(item),2)}`;
+    if(!groups.has(key)) groups.set(key,{key, cls, items:[]});
+    groups.get(key).items.push(item);
+  }
+  const rows=[...groups.values()].map(g=>{
+    const sorted=[...g.items].sort((a,b)=>libraryRepresentativeScore(b)-libraryRepresentativeScore(a));
+    return {...g, representative:sorted[0], duplicates:sorted.slice(1)};
+  }).sort((a,b)=>String(a.cls.chapter).localeCompare(String(b.cls.chapter),'ca',{numeric:true}) || String(a.cls.subtype||'').localeCompare(String(b.cls.subtype||''),'ca',{numeric:true}) || b.items.length-a.items.length);
+  const duplicates=rows.reduce((s,g)=>s+g.duplicates.length,0);
+  return {mode, rows, trash, before:(data.library||[]).length, after:rows.length, duplicates, trashCount:trash.length};
+}
+function cleanupPlanSummaryHtml(plan){
+  const preview=plan.rows.filter(g=>g.items.length>1).slice(0,120);
+  const byChapter={}; plan.rows.forEach(g=>{ const ch=g.cls.chapter||'Altres / revisar'; (byChapter[ch] ||= []).push(g); });
+  const chapterSummary=Object.keys(byChapter).sort((a,b)=>a.localeCompare(b,'ca',{numeric:true})).map(ch=>`<tr><td><strong>${esc(ch)}</strong></td><td>${byChapter[ch].length}</td><td>${byChapter[ch].reduce((s,g)=>s+g.items.length,0)}</td></tr>`).join('');
+  return `
+    <div class="grid four">
+      <div class="kpi"><span>Partides actuals</span><strong>${plan.before}</strong></div>
+      <div class="kpi good"><span>Partides tipus resultants</span><strong>${plan.after}</strong></div>
+      <div class="kpi"><span>Duplicades agrupables</span><strong>${plan.duplicates}</strong></div>
+      <div class="kpi ${plan.trashCount?'bad':'good'}"><span>No partides evidents</span><strong>${plan.trashCount}</strong></div>
+    </div>
+    <div class="card notice-blue"><strong>V09.5:</strong> la classificació ja no utilitza el capítol/origen antic de l’Excel. Només llegeix el text real de la partida. Això evita que feines com “protegir amb cartrons”, “lloguer de camió grua” o “formació d’esgraons” acabin dins “Impermeabilització de la terrassa”.</div>
+    <details class="chapter-group" open><summary><strong>Resum de capítols proposats</strong><span>${Object.keys(byChapter).length}</span></summary><div class="table-wrap"><table><thead><tr><th>Capítol tècnic</th><th>Partides tipus</th><th>Originals agrupades</th></tr></thead><tbody>${chapterSummary}</tbody></table></div></details>
+    ${preview.length?`<div class="table-wrap"><table><thead><tr><th>Capítol proposat</th><th>Subgrup</th><th>Es conserva</th><th>S’agrupen</th><th>Representant</th></tr></thead><tbody>${preview.map(g=>`<tr><td>${esc(g.cls.chapter)}</td><td>${esc(g.cls.subtype||g.key)}</td><td>1</td><td>${g.duplicates.length}</td><td><strong>${esc(g.representative.concept||'')}</strong><br><span class="muted">${esc(g.representative.unit||'')} · ${money(g.representative.unitPrice||libFinal(g.representative))}</span></td></tr>`).join('')}</tbody></table></div>`:`<div class="empty">No hi ha grups duplicats segons el criteri actual.</div>`}
+    ${plan.trashCount?`<details class="chapter-group"><summary><strong>Textos que es descartarien com a no partides</strong><span>${plan.trashCount}</span></summary><div class="small-text">${plan.trash.slice(0,100).map(x=>esc(x.item.concept||x.item.longDesc||x.item.code||'')).join('<br>')}</div></details>`:''}
+  `;
+}
+function openLibraryCleanupModal(){
+  const plan=buildLibraryCleanupPlan('strong');
+  openModal(`<h2>Depurar llibreria per capítols tècnics</h2>
+    <div class="card">
+      <p>Aquesta eina recapitula les partides importades i agrupa similars. El criteri ara és per feina real: geotèxtil, làmines asfàltiques, formació de pendents, mitges canyes, paviments, runes, mitjans auxiliars, etc.</p>
+      <div class="form-grid">
+        <label>Mode de depuració<select id="cleanupMode"><option value="strong" selected>Fort recomanat · separa subtipus principals</option><option value="superstrong">Molt fort · menys partides tipus</option><option value="conservative">Conservador · separa més variants</option></select></label>
+        <label>Resultat estimat<input id="cleanupEstimate" readonly value="${plan.before} → ${plan.after} partides tipus"></label>
+      </div>
+      <div id="cleanupPreview">${cleanupPlanSummaryHtml(plan)}</div>
+      <div class="actions"><button class="primary" id="applyLibraryCleanup">Aplicar depuració tècnica</button><button class="ghost" id="refreshCleanupPreview">Recalcular previsualització</button>${(data.libraryCleanupBackups||[]).length?'<button class="ghost" id="restoreLibraryCleanup">Restaurar última depuració</button>':''}</div>
+    </div>`);
+}
+function applyLibraryCleanup(){
+  const mode=document.getElementById('cleanupMode')?.value || 'strong';
+  const plan=buildLibraryCleanupPlan(mode);
+  if(!confirm(`Aplicar depuració tècnica?\n\nPartides actuals: ${plan.before}\nPartides resultants: ${plan.after}\nDuplicades agrupades: ${plan.duplicates}\nNo partides descartades: ${plan.trashCount}\n\nEs guardarà una còpia interna per poder restaurar.`)) return;
+  data.libraryCleanupBackups = Array.isArray(data.libraryCleanupBackups) ? data.libraryCleanupBackups : [];
+  data.libraryCleanupBackups.push({id:uid('LIBBACK'), date:new Date().toISOString(), mode, before:JSON.parse(JSON.stringify(data.library)), note:`Depuració tècnica ${plan.before} → ${plan.after}`});
+  if(data.libraryCleanupBackups.length>3) data.libraryCleanupBackups=data.libraryCleanupBackups.slice(-3);
+  const idMap={};
+  const next=[];
+  for(const g of plan.rows){
+    const rep={...g.representative};
+    rep.chapter=g.cls.chapter || rep.chapter || 'Altres / revisar';
+    rep.status=strip(rep.status).includes('valid') ? rep.status : 'Partida tipus agrupada';
+    const origins=[rep.origin, ...g.duplicates.map(x=>x.origin)].filter(Boolean);
+    rep.origin=[...new Set(origins)].slice(0,10).join(' · ');
+    rep.groupKey=g.key;
+    rep.groupSubtype=g.cls.subtype || '';
+    rep.groupedCount=g.items.length;
+    rep.aliases=[...new Set(g.items.map(x=>cleanText(x.concept||'')).filter(Boolean))].slice(0,50);
+    rep.history=[...(rep.history||[])];
+    for(const dup of g.duplicates){
+      idMap[dup.id]=rep.id;
+      rep.history.push({origin:dup.origin||'Agrupada', concept:dup.concept, unit:dup.unit, unitPrice:dup.unitPrice, total:dup.total, status:dup.status, chapterBefore:dup.chapter, date:today()});
+    }
+    next.push(rep);
+  }
+  for(const b of data.budgets||[]){
+    for(const l of (b.lines||[])){
+      const cls=classifyLibraryFamily(l);
+      if(cls && !cls.trash && (!l.chapter || l.chapter==='Històric importat' || /impermeabilitzaci[oó] de la terrassa/i.test(l.chapter||''))) l.chapter=cls.chapter;
+      if(l.libraryId && idMap[l.libraryId]) l.libraryId=idMap[l.libraryId];
+    }
+  }
+  data.library=next.sort((a,b)=>String(a.chapter||'').localeCompare(String(b.chapter||''),'ca',{numeric:true}) || String(a.concept||'').localeCompare(String(b.concept||''),'ca',{numeric:true}));
+  data.importLogs=data.importLogs||[];
+  data.importLogs.push({id:uid('CLEAN'),date:new Date().toISOString(),type:'Depuració tècnica llibreria V09.5',before:plan.before,after:plan.after,duplicates:plan.duplicates,trash:plan.trashCount,mode});
+  saveData(); closeModal(); state.libChapterFilter=''; state.libSearch=''; renderLibrary();
+}
+
+// Afegeix també un botó explícit de recategoritzar a la llibreria.
+const __teimorBaseBindViewEvents_V095 = bindViewEvents;
+bindViewEvents = function(){
+  __teimorBaseBindViewEvents_V095();
+  if(state.view==='library'){
+    const right=document.querySelector('#content .card .toolbar .right');
+    if(right && !document.getElementById('smartCleanLibraryV095')){
+      right.insertAdjacentHTML('afterbegin','<button class="primary" id="smartCleanLibraryV095">Depurar per capítols tècnics</button>');
+    }
+    const smart=document.getElementById('smartCleanLibraryV095'); if(smart) smart.onclick=openLibraryCleanupModal;
+    const old=document.getElementById('smartCleanLibrary'); if(old) old.remove();
+  }
+};
