@@ -3402,3 +3402,347 @@ bindModalEvents = function(){
   const apply=document.getElementById('applyLibraryCleanup'); if(apply) apply.onclick=applyLibraryCleanup;
   const restore=document.getElementById('restoreLibraryCleanup'); if(restore) restore.onclick=restoreLibraryCleanup;
 };
+
+/* ============================================================
+   TEIMOR V09.8 · ordre per any + numeració seqüencial + depuració automàtica visible
+   - Ordenar pressupostos no perd el filtre d'any actiu.
+   - Es crea una numeració nova per any (1,2,3...) segons data ascendent.
+   - Es conserva el número antic/importat de l'Excel en columna separada.
+   - Si ja hi ha una depuració aplicada, la llibreria mostra automàticament només partides tipus.
+   ============================================================ */
+(function(){
+  data.meta = data.meta || {};
+  data.meta.version = '9.8.0-ordre-any-depuracio-auto';
+  try{ saveData?.(); }catch(e){}
+})();
+
+function budgetOldNumberV098(b){
+  return cleanText(b.oldNumber || b.originalNumber || b.excelNumber || b.importedNumber || b.sourceNumber || b.number || '');
+}
+function budgetSeqNumberV098(b){
+  return b.seqNumber || b.yearSeq || b.internalNumber || '';
+}
+function normalizeBudgetSequentialNumbersV098(){
+  if(!Array.isArray(data.budgets)) return;
+  let changed=false;
+  const byYear={};
+  for(const b of data.budgets){
+    const y = budgetYear(b) || Number((parseDateValue(b.date)||today()).slice(0,4));
+    (byYear[y] ||= []).push(b);
+    if(!b.oldNumber && b.number){ b.oldNumber=String(b.number); changed=true; }
+  }
+  for(const y of Object.keys(byYear)){
+    byYear[y].sort((a,b)=>{
+      const da=parseDateValue(a.date)||'9999-12-31';
+      const db=parseDateValue(b.date)||'9999-12-31';
+      return da.localeCompare(db) || String(budgetOldNumberV098(a)).localeCompare(String(budgetOldNumberV098(b)), 'ca', {numeric:true, sensitivity:'base'});
+    });
+    byYear[y].forEach((b,i)=>{
+      const n=i+1;
+      if(Number(b.seqNumber)!==n){ b.seqNumber=n; changed=true; }
+      if(String(b.seqYear||'')!==String(y)){ b.seqYear=Number(y)||y; changed=true; }
+    });
+  }
+  if(changed){ try{ saveData(); }catch(e){} }
+}
+
+function nextBudgetNumber(date=today()){
+  normalizeBudgetSequentialNumbersV098();
+  const year = Number((parseDateValue(date)||today()).slice(0,4));
+  const nums = (data.budgets||[])
+    .filter(b => Number(budgetYear(b)) === year)
+    .map(b => Number(b.seqNumber || b.yearSeq || b.internalNumber || 0))
+    .filter(Boolean);
+  return String((nums.length ? Math.max(...nums) : 0) + 1);
+}
+
+function sortByBudgetField(rows){
+  const field = state.budgetSortField || 'date';
+  const dir = state.budgetSortDir || 'desc';
+  const val = b => {
+    const j=byId(data.jobs,b.jobId)||{}; const c=byId(data.clients,b.clientId)||{};
+    if(field==='year') return budgetYear(b)||'';
+    if(field==='date') return parseDateValue(b.date)||'';
+    if(field==='number') return Number(budgetSeqNumberV098(b) || 0);
+    if(field==='oldNumber') return budgetOldNumberV098(b);
+    if(field==='client') return c.name||'';
+    if(field==='title') return b.title||j.title||'';
+    if(field==='status') return b.status||'';
+    if(field==='base') return budgetBase(b);
+    if(field==='total') return budgetTotal(b);
+    if(field==='type') return budgetLineSum(b)>0 ? 'Suma de partides' : (num(b.importedBase)>0 ? 'Total importat Excel' : 'Sense import');
+    if(field==='lines') return (b.lines||[]).length;
+    return b.date||'';
+  };
+  return [...rows].sort((a,b)=> compareMixed(val(a), val(b), dir) || compareMixed(parseDateValue(a.date)||'',parseDateValue(b.date)||'','asc') || compareMixed(budgetOldNumberV098(a),budgetOldNumberV098(b),'asc'));
+}
+
+function budgetRowsFiltered(){
+  const q=strip(document.getElementById('budgetSearch')?.value ?? state.budgetSearch ?? '');
+  const yearState = (document.getElementById('budgetYearFilter')?.value ?? state.budgetYearFilter ?? activeYear?.('budget') ?? 'all');
+  const status=strip(document.getElementById('budgetStatusFilter')?.value ?? state.budgetStatusFilter ?? '');
+  const client=document.getElementById('budgetClientFilter')?.value ?? state.budgetClientFilter ?? '';
+  const rows=(data.budgets||[]).filter(b=>{
+    const j=byId(data.jobs,b.jobId);
+    const c=byId(data.clients,b.clientId);
+    const blob=[b.id,b.seqNumber,b.oldNumber,b.number,b.date,b.title,b.status,b.source,b.notes,c?.name,c?.nif,c?.phone,c?.email,j?.title,j?.address,j?.city,budgetYear(b)].join(' ');
+    const yearOk = !yearState || yearState==='all' || String(budgetYear(b))===String(yearState);
+    return (!q || strip(blob).includes(q)) && yearOk && (!status || strip(b.status)===status) && (!client || b.clientId===client);
+  });
+  return sortByBudgetField(rows);
+}
+
+function filterBudgets(){
+  const searchEl=document.getElementById('budgetSearch'); if(searchEl) state.budgetSearch=searchEl.value||'';
+  const yearEl=document.getElementById('budgetYearFilter'); if(yearEl) state.budgetYearFilter=yearEl.value||''; // en V09.8 normalment no existeix: es conserva el xip d'any actiu
+  const clientEl=document.getElementById('budgetClientFilter'); if(clientEl) state.budgetClientFilter=clientEl.value||'';
+  const statusEl=document.getElementById('budgetStatusFilter'); if(statusEl) state.budgetStatusFilter=statusEl.value||'';
+  const rows=budgetRowsFiltered();
+  const tableEl=document.getElementById('budgetsTable');
+  const currentYear = (typeof activeYear==='function') ? activeYear('budget') : (state.budgetYearFilter||'all');
+  if(tableEl) tableEl.innerHTML = currentYear==='all' ? budgetsGroupedByYear(rows) : budgetsTable(rows);
+  const info=document.getElementById('budgetFilterInfo'); if(info) info.textContent=`Mostrant ${rows.length} de ${data.budgets.length} pressupostos.`;
+  bindViewEvents();
+}
+
+function budgetsTable(rows){
+  normalizeBudgetSequentialNumbersV098();
+  if(!rows.length) return empty();
+  const headers=[
+    '<th>Sel.</th>', sortableTh('Any','budget','year'), sortableTh('Data','budget','date'), sortableTh('Núm. any','budget','number'), sortableTh('Núm. antic Excel','budget','oldNumber'), sortableTh('Client','budget','client'), sortableTh('Concepte / obra','budget','title'), sortableTh('Estat','budget','status'), sortableTh('Base s/IVA','budget','base'), sortableTh('Total IVA incl.','budget','total'), sortableTh('Tipus import','budget','type'), sortableTh('Partides','budget','lines'), '<th>Accions</th>'
+  ].join('');
+  return `<div class="table-wrap"><table><thead><tr>${headers}</tr></thead><tbody>${rows.map(b=>{
+    const lineSum = budgetLineSum(b);
+    const calcType = lineSum>0 ? 'Suma de partides' : (num(b.importedBase)>0 ? 'Total importat Excel' : 'Sense import');
+    const job=byId(data.jobs,b.jobId);
+    const title=cleanText(b.title || job?.title || '');
+    const addr=cleanText(job?.address || '');
+    return `<tr class="clickable-row" data-open-budget="${esc(b.id)}">
+      <td><input type="checkbox" class="select-budget" value="${esc(b.id)}" data-no-row-open></td>
+      <td>${esc(budgetYear(b)||'')}</td>
+      <td>${dateDisplay(b.date)}</td>
+      <td><strong>${esc(budgetSeqNumberV098(b)||'')}</strong></td>
+      <td>${esc(budgetOldNumberV098(b)||'')}</td>
+      <td>${esc(clientName(b.clientId))}</td>
+      <td><strong>${esc(title)}</strong>${addr && strip(addr)!==strip(title)?`<br><span class="muted">${esc(addr)}</span>`:''}</td>
+      <td><select class="status-select" data-budget-status="${esc(b.id)}" data-no-row-open>${budgetStatusOptions(b.status||'Esborrany')}</select></td>
+      <td class="num">${money(budgetBase(b))}</td>
+      <td class="num"><strong>${money(budgetTotal(b))}</strong></td>
+      <td>${esc(calcType)}</td>
+      <td class="num">${(b.lines||[]).length}</td>
+      <td class="nowrap"><button class="ghost small" data-edit-budget="${esc(b.id)}" data-no-row-open>Veure / editar</button> <button class="ghost small" data-preview-budget="${esc(b.id)}" data-no-row-open>Previsualitzar A4</button> <button class="danger small" data-delete-budget="${esc(b.id)}" data-no-row-open>Eliminar</button></td>
+    </tr>`;}).join('')}</tbody></table></div>`;
+}
+
+function renderBudgets(editId=''){
+  normalizeBudgetSequentialNumbersV098();
+  setHeader('Pressupostos','Llistat complet agrupable per any, amb numeració nova anual i número antic importat de l’Excel. Les fletxes ordenen sense perdre l’any actiu.');
+  if(editId) { state.editBudgetId=editId; state.selectedBudgetId=editId === '__new' ? '' : editId; }
+  const currentYear=activeYear('budget');
+  const statuses=[...new Set((data.budgets||[]).map(b=>b.status).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const rows=budgetRowsFiltered();
+  setContent(`
+    <div class="grid four">
+      <div class="kpi"><span>Pressupostos</span><strong>${rows.length}</strong></div>
+      <div class="kpi"><span>Total s/IVA any actiu</span><strong>${money(rows.reduce((s,b)=>s+budgetBase(b),0))}</strong></div>
+      <div class="kpi"><span>Acceptats / fets</span><strong>${rows.filter(b=>strip(b.status).includes('acceptat')||strip(b.status).includes('fet')).length}</strong></div>
+      <div class="kpi"><span>Rebutjats / anul·lats</span><strong>${rows.filter(b=>strip(b.status).includes('rebutjat')||strip(b.status).includes('anul')).length}</strong></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h2>Pressupostos ${currentYear==='all'?'· tots els anys':'· '+esc(currentYear)}</h2><div class="right"><button class="ghost" id="renumberBudgetsByYear">Recalcular numeració anual</button><button class="ghost" id="selectAllBudgets">Seleccionar tot</button><button class="ghost" id="clearSelectedBudgets">Desmarcar</button><button class="danger" id="deleteSelectedBudgets">Eliminar seleccionats</button><button class="primary" id="newBudgetBtn">+ Nou pressupost</button><button class="ghost" id="exportBudgetCsv">Exportar CSV del seleccionat</button></div></div>
+      ${yearSelectorHtml(currentYear,'budget')}
+      <div class="filter-grid compact-filters">
+        <label>Cerca<input id="budgetSearch" placeholder="Client, obra, núm. anual, núm. antic, adreça, any..." value="${esc(state.budgetSearch||'')}"></label>
+        <label>Client<select id="budgetClientFilter"><option value="">Tots</option>${options(data.clients,state.budgetClientFilter||'')}</select></label>
+        <label>Estat<select id="budgetStatusFilter"><option value="">Tots</option>${statuses.map(x=>`<option ${strip(x)===strip(state.budgetStatusFilter||'')?'selected':''}>${esc(x)}</option>`).join('')}</select></label>
+      </div>
+      <div class="sort-help small-text">Ordre actual: <strong>${esc(state.budgetSortField||'data')}</strong> ${esc(state.budgetSortDir==='asc'?'ascendent':'descendent')} · prem una capçalera per canviar. La columna <strong>Núm. any</strong> és la numeració nova 1, 2, 3... dins de cada any segons data; <strong>Núm. antic Excel</strong> conserva el número detectat de l’arxiu original.</div>
+      <div id="budgetFilterInfo" class="small-text" style="margin:10px 0">Mostrant ${rows.length} de ${data.budgets.length} pressupostos.</div>
+      <div id="budgetsTable">${currentYear==='all' ? budgetsGroupedByYear(rows) : budgetsTable(rows)}</div>
+    </div>
+  `);
+}
+
+function budgetFormCard(formBudget,isNew=false){
+  const d=formBudget.date||today();
+  const autoSeq = isNew ? nextBudgetNumber(d) : (formBudget.seqNumber || formBudget.yearSeq || formBudget.internalNumber || nextBudgetNumber(d));
+  const old = isNew ? '' : budgetOldNumberV098(formBudget);
+  return `<div class="card"><h2>${isNew?'Nou pressupost':'Editar pressupost'}</h2>
+      <form id="budgetForm" class="form-grid budget-form-wide">
+        <input type="hidden" name="id" value="${esc(formBudget.id||uid('P'))}">
+        <label>Núm. nou anual<input name="seqNumber" id="budgetNumberInput" value="${esc(autoSeq)}" data-auto-number="${isNew?'1':'0'}"></label>
+        <label>Núm. antic / Excel<input name="oldNumber" value="${esc(old)}" placeholder="Número original detectat a l’Excel"></label>
+        <label>Data<input name="date" id="budgetDateInput" type="date" value="${esc(d)}"></label>
+        <label class="wide">Client<select name="clientId" required><option value="">Selecciona client</option>${options(data.clients,formBudget.clientId)}</select></label>
+        <label class="wide">Feina<select name="jobId"><option value="">Sense feina</option>${options(data.jobs,formBudget.jobId,x=>`${x.year} · ${x.title}`)}</select></label>
+        <label class="full concept-field">Títol / concepte del pressupost<input name="title" value="${esc(formBudget.title||'')}" placeholder="Concepte principal del pressupost"></label>
+        <label>Estat<select name="status">${budgetStatusOptions(formBudget.status||'Esborrany')}</select></label>
+        <label>CI %<input name="ci" type="number" step="0.01" value="${esc(formBudget.ci ?? data.settings.defaultCI)}"></label>
+        <label>DGE %<input name="dge" type="number" step="0.01" value="${esc(formBudget.dge ?? data.settings.defaultDGE)}"></label>
+        <label>BI %<input name="bi" type="number" step="0.01" value="${esc(formBudget.bi ?? data.settings.defaultBI)}"></label>
+        <label>IVA %<input name="iva" type="number" step="0.01" value="${esc(formBudget.iva ?? data.settings.defaultIVA)}"></label>
+        <label>Base importada s/IVA<input name="importedBase" type="number" step="0.01" value="${esc(formBudget.importedBase || '')}"></label>
+        <label class="full">Notes<textarea name="notes">${esc(formBudget.notes||'')}</textarea></label>
+        <div class="actions full"><button class="primary">Guardar pressupost</button><button class="ghost" type="button" data-render-budgets>Cancel·lar</button></div>
+      </form>
+    </div>`;
+}
+
+function saveBudget(e){
+  e.preventDefault();
+  const f=formObj(e.target);
+  const old=byId(data.budgets,f.id);
+  const b={...(old||{}), id:f.id, seqNumber:num(f.seqNumber)||num(old?.seqNumber)||0, oldNumber:f.oldNumber || old?.oldNumber || old?.number || '', number:f.oldNumber || old?.number || '', date:f.date, clientId:f.clientId, jobId:f.jobId, title:f.title, status:f.status, ci:num(f.ci), dge:num(f.dge), bi:num(f.bi), iva:num(f.iva), importedBase:num(f.importedBase), notes:f.notes, lines:old?.lines||[]};
+  const idx=data.budgets.findIndex(x=>x.id===b.id);
+  if(idx>=0) data.budgets[idx]=b; else data.budgets.push(b);
+  state.selectedBudgetId=b.id; state.editBudgetId='';
+  const job=byId(data.jobs,b.jobId); if(job && !job.mainBudgetId) job.mainBudgetId=b.id;
+  normalizeBudgetSequentialNumbersV098();
+  saveData(); if(isModalOpen()) closeModal(); renderBudgets();
+}
+
+function openBudgetModal(id=''){
+  normalizeBudgetSequentialNumbersV098();
+  const isNew = id === '__new' || !id;
+  const b = isNew ? {id:'', seqNumber:nextBudgetNumber(today()), oldNumber:'', number:'', lines:[], date:today(), ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, iva:data.settings.defaultIVA, status:'Esborrany'} : byId(data.budgets,id);
+  if(!b) return alert('No s’ha trobat aquest pressupost.');
+  state.editBudgetId = isNew ? '__new' : b.id;
+  state.selectedBudgetId = isNew ? '' : b.id;
+  openModal(`
+    <h2>${isNew?'Nou pressupost':'Pressupost · núm. any '+esc(budgetSeqNumberV098(b)||'')}${!isNew && budgetOldNumberV098(b)?' · antic '+esc(budgetOldNumberV098(b)):''}</h2>
+    <div class="notice-blue card-tight">${isNew?'El número anual es genera automàticament segons la data i l’ordre dels pressupostos existents. Pots canviar-lo manualment si cal.':'El número anual és el nou ordre intern per any; el número antic conserva el valor importat de l’Excel.'}</div>
+    <div class="actions" style="margin:0 0 12px">${!isNew?`<button class="ghost" type="button" data-preview-budget-modal="${esc(b.id)}">Vista preliminar A4 / PDF</button>`:''}</div>
+    ${budgetFormCard(b,isNew)}
+    ${!isNew ? budgetLinesCard(b) : ''}
+  `);
+  document.querySelectorAll('[data-preview-budget-modal]').forEach(btn=>btn.onclick=()=>openBudgetPreview(btn.dataset.previewBudgetModal));
+}
+
+function openBudgetPreview(id){
+  const b=byId(data.budgets,id); if(!b) return alert('No s’ha trobat el pressupost.');
+  const c=byId(data.clients,b.clientId)||{}; const j=byId(data.jobs,b.jobId)||{}; const s=data.settings.contractista||{};
+  const rows=(b.lines||[]).map((l,idx)=>`<tr><td>${idx+1}</td><td>${esc(l.unit||'')}</td><td><strong>${esc(l.concept||'')}</strong>${l.longDesc?`<div class="preview-desc">${esc(l.longDesc)}</div>`:''}</td><td class="num">${l.qty?num(l.qty).toLocaleString('ca-ES'):''}</td><td class="num">${l.unitPrice?money(l.unitPrice):''}</td><td class="num">${money(lineTotal(l))}</td></tr>`).join('');
+  const html=`<div class="preview-toolbar actions"><button class="primary" onclick="window.print()">Imprimir / guardar PDF</button><button class="ghost" onclick="window.close()">Tancar</button></div>
+    <div class="a4-sheet">
+      <div class="preview-colorbar"></div>
+      <div class="preview-header"><div><h1>${esc(s.name||'TEIMOR')}</h1><p>${esc(s.nif||'')}<br>${esc(s.address||'')}<br>${esc(s.city||'')}<br>${esc(s.phone||'')}</p></div><div class="client-box"><span>Client</span><strong>${esc(c.name||'Client pendent de revisar')}</strong><br>${esc(c.nif||'')}<br>${esc(c.workAddress||j.address||'')}<br>${esc(c.city||'')}</div></div>
+      <div class="preview-meta"><div><strong>Data:</strong> ${dateDisplay(b.date)}</div><div><strong>Núm. any:</strong> ${esc(budgetSeqNumberV098(b)||'')}</div>${budgetOldNumberV098(b)?`<div><strong>Núm. antic:</strong> ${esc(budgetOldNumberV098(b))}</div>`:''}</div>
+      <h2>${esc(b.title||j.title||'Pressupost')}</h2>
+      ${j.address?`<p><strong>Obra:</strong> ${esc(j.address)}</p>`:''}
+      <table class="preview-table"><thead><tr><th>Part.</th><th>Ut</th><th>Concepte / descripció</th><th>Quantitat</th><th>Preu/ut</th><th>Total</th></tr></thead><tbody>${rows || `<tr><td colspan="6">Sense línies detallades. Import detectat de l’Excel original.</td></tr>`}</tbody></table>
+      <div class="preview-totals"><div>Base s/IVA: <strong>${money(budgetBase(b))}</strong></div><div>IVA ${num(b.iva)}%: <strong>${money(budgetIVA(b))}</strong></div><div>Total: <strong>${money(budgetTotal(b))}</strong></div></div>
+      <div class="preview-notes">${esc(b.notes||'')}</div>
+    </div>`;
+  const w=window.open('', '_blank');
+  if(!w) return alert('El navegador ha bloquejat la finestra de previsualització. Permet pop-ups per aquesta app.');
+  w.document.write(`<!doctype html><html lang="ca"><head><meta charset="utf-8"><title>Pressupost ${esc(budgetSeqNumberV098(b)||budgetOldNumberV098(b)||'')}</title><style>${previewCss()}</style></head><body>${html}</body></html>`);
+  w.document.close();
+}
+function previewCss(){ return `body{font-family:Arial,sans-serif;background:#e5e7eb;margin:0;padding:18px;color:#111827}.preview-toolbar{max-width:210mm;margin:0 auto 12px}.preview-toolbar button{border:1px solid #ddd;border-radius:8px;padding:8px 12px;margin-right:8px}.preview-toolbar .primary{background:#b45309;color:white}.a4-sheet{width:210mm;min-height:297mm;margin:auto;background:white;padding:14mm 16mm 16mm;box-shadow:0 8px 30px rgba(0,0,0,.18);position:relative}.preview-colorbar{height:7mm;background:linear-gradient(90deg,#7c2d12,#c2410c,#f59e0b);margin:-14mm -16mm 12mm}.preview-header{display:grid;grid-template-columns:1fr 78mm;gap:12mm;align-items:start}.preview-header h1{font-size:24px;margin:0 0 5px;color:#7c2d12;letter-spacing:.02em}.preview-header p{font-size:12px;line-height:1.35}.client-box{border:1.5px solid #c2410c;border-radius:6px;padding:9px;min-height:34mm;font-size:12px;line-height:1.45;background:#fff7ed}.client-box span{text-transform:uppercase;font-size:9px;color:#9a3412;letter-spacing:.08em}.client-box strong{display:block;margin:2px 0 5px;font-size:13px}.preview-meta{display:flex;gap:15mm;flex-wrap:wrap;border-top:2px solid #7c2d12;border-bottom:1px solid #fed7aa;padding:8px 0;margin:8mm 0;font-size:13px}h2{font-size:17px;margin:0 0 5mm;color:#111827}.preview-table{width:100%;border-collapse:collapse;font-size:11px}.preview-table th,.preview-table td{border:1px solid #d1d5db;padding:6px;vertical-align:top}.preview-table th{background:#7c2d12;color:white}.preview-table tbody tr:nth-child(even){background:#fff7ed}.num{text-align:right;white-space:nowrap}.preview-desc{font-size:10.5px;margin-top:4px;white-space:pre-wrap;line-height:1.3;color:#374151}.preview-totals{margin-top:8mm;margin-left:auto;width:84mm;font-size:13px;border-top:2px solid #7c2d12}.preview-totals div{display:flex;justify-content:space-between;border-bottom:1px solid #fed7aa;padding:5px}.preview-totals div:last-child{font-size:15px;background:#fff7ed}.preview-notes{margin-top:10mm;font-size:10px;color:#555;white-space:pre-wrap}@media print{body{background:white;padding:0}.preview-toolbar{display:none}.a4-sheet{box-shadow:none;margin:0;width:auto;min-height:auto;padding:12mm}.preview-colorbar{margin:-12mm -12mm 10mm}@page{size:A4;margin:0}}`; }
+
+function libraryRowsCleanAutoV098(){
+  const lib=data.library||[];
+  const reps=lib.filter(x=>x.isTypeRepresentative && !x.hiddenDuplicate && !x.mergedInto && !x.discardedAsTrash && !libraryIsTrashV097(x));
+  if(reps.length) return reps;
+  return lib.filter(x=>{
+    if(x.hiddenDuplicate || x.mergedInto || x.discardedAsTrash) return false;
+    if(libraryIsTrashV097(x)) return false;
+    return true;
+  });
+}
+function autoFinalizeLibraryIfNeededV098(){
+  if(!Array.isArray(data.library) || !data.library.length) return;
+  const reps=data.library.filter(x=>x.isTypeRepresentative && !x.hiddenDuplicate && !x.mergedInto && !x.discardedAsTrash && !libraryIsTrashV097(x));
+  if(reps.length && data.library.length>reps.length+3){
+    data.library=reps.sort((a,b)=>String(a.chapter||'').localeCompare(String(b.chapter||''),'ca',{numeric:true}) || String(a.concept||'').localeCompare(String(b.concept||''),'ca',{numeric:true}));
+    state.libShowAllOriginals=false;
+    data.importLogs=data.importLogs||[];
+    data.importLogs.push({id:uid('CLEAN'),date:new Date().toISOString(),type:'Auto finalització vista neta V09.8',before:data.library.length,after:reps.length});
+    try{ saveData(); }catch(e){}
+    return;
+  }
+  const last=(data.importLogs||[]).filter(x=>String(x.type||'').includes('Depuració') && num(x.after)>0).slice(-1)[0];
+  if(last && data.library.length>num(last.after)+5 && typeof buildLibraryCleanupPlan==='function'){
+    const plan=buildLibraryCleanupPlan(last.mode || 'verystrong');
+    if(plan && plan.after<=num(last.after)+8 && plan.after<data.library.length){
+      // Aplica el mateix criteri de forma automàtica, sense demanar confirmació, perquè l'usuari ja havia depurat.
+      const idMap={}; const next=[];
+      for(const g of plan.rows){
+        const rep=JSON.parse(JSON.stringify(g.representative||{}));
+        rep.chapter=g.cls?.chapter || rep.chapter || 'Altres / revisar';
+        rep.status=strip(rep.status||'').includes('valid') ? rep.status : 'Partida tipus agrupada';
+        rep.isTypeRepresentative=true; rep.hiddenDuplicate=false; rep.mergedInto=''; rep.discardedAsTrash=false;
+        rep.groupKey=g.key; rep.groupSubtype=g.cls?.subtype || ''; rep.groupedCount=g.items?.length || 1;
+        const origins=[rep.origin, ...(g.duplicates||[]).map(x=>x.origin)].filter(Boolean);
+        rep.origin=[...new Set(origins)].slice(0,10).join(' · ');
+        rep.aliases=[...new Set((g.items||[]).map(x=>cleanText(x.concept||'')).filter(Boolean))].slice(0,120);
+        rep.history=[...(rep.history||[])];
+        for(const dup of (g.duplicates||[])){ idMap[dup.id]=rep.id; rep.history.push({origin:dup.origin||'Agrupada', concept:dup.concept, longDesc:dup.longDesc, unit:dup.unit, unitPrice:dup.unitPrice, total:dup.total, status:dup.status, chapterBefore:dup.chapter, date:today(), mergedInto:rep.id}); }
+        next.push(rep);
+      }
+      for(const b of data.budgets||[]) for(const l of (b.lines||[])) if(l.libraryId && idMap[l.libraryId]) l.libraryId=idMap[l.libraryId];
+      data.library=next.sort((a,b)=>String(a.chapter||'').localeCompare(String(b.chapter||''),'ca',{numeric:true}) || String(a.concept||'').localeCompare(String(b.concept||''),'ca',{numeric:true}));
+      state.libShowAllOriginals=false;
+      data.importLogs.push({id:uid('CLEAN'),date:new Date().toISOString(),type:'Auto finalització vista neta V09.8',before:plan.before,after:plan.after,duplicates:plan.duplicates,trash:plan.trashCount,mode:plan.mode});
+      try{ saveData(); }catch(e){}
+    }
+  }
+}
+
+function renderLibrary(){
+  autoFinalizeLibraryIfNeededV098();
+  setHeader('Llibreria de partides · V09.8','Vista neta automàtica per capítols. Un cop depurada, només es veuen les partides tipus representatives.');
+  const q=state.libSearch || '';
+  const filter=strip(q);
+  const showAll=!!state.libShowAllOriginals;
+  const baseRows=showAll ? (data.library||[]) : libraryRowsCleanAutoV098();
+  const chapters=[...new Set(baseRows.map(x=>x.chapter||'Sense capítol').filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ca',{numeric:true}));
+  const chapter=state.libChapterFilter || '';
+  const statusFilter=strip(state.libStatusFilter || '');
+  let rows=baseRows.filter(x=>{
+    const chapterOk=!chapter || (x.chapter||'Sense capítol')===chapter;
+    const statusOk=!statusFilter || strip(x.status||'').includes(statusFilter);
+    const searchOk=!filter || strip([x.code,x.chapter,x.unit,x.concept,x.longDesc,x.status,x.origin,(x.aliases||[]).join(' ')].join(' ')).includes(filter);
+    return chapterOk && statusOk && searchOk;
+  });
+  rows=sortByLibraryField(rows);
+  setContent(`
+    <div class="card">
+      <div class="toolbar"><h2>Llibreria per capítols</h2><div class="right"><button class="primary" id="smartCleanLibraryV097">Depurar per conceptes</button><button class="ghost" id="selectAllLibrary">Seleccionar tot</button><button class="ghost" id="clearSelectedLibrary">Desmarcar</button><button class="danger" id="deleteSelectedLibrary">Eliminar seleccionades</button><button class="ghost" id="exportLibraryJson">Exportar llibreria</button><label class="ghost file-label">Importar llibreria<input id="importLibraryJson" type="file" accept="application/json" hidden></label><button class="primary" id="newLibItem">Nova partida</button></div></div>
+      <div class="grid four">
+        <div class="kpi"><span>Partides visibles</span><strong>${rows.length}</strong></div>
+        <div class="kpi"><span>Total guardades</span><strong>${(data.library||[]).length}</strong></div>
+        <div class="kpi good"><span>Capítols visibles</span><strong>${chapters.length}</strong></div>
+        <div class="kpi"><span>Vista</span><strong>${showAll?'Totes':'Neta'}</strong></div>
+      </div>
+      <div class="filter-grid" style="margin-top:12px">
+        <label>Cerca<input id="libSearch" placeholder="Cercar partida, codi, origen..." value="${esc(q)}"></label>
+        <label>Capítol<select id="libChapterFilter"><option value="">Tots els capítols</option>${chapters.map(c=>`<option value="${esc(c)}" ${c===chapter?'selected':''}>${esc(c)}</option>`).join('')}</select></label>
+        <label>Estat<select id="libStatusFilter"><option value="">Tots</option>${['Validada','Validada pendent revisió','Partida tipus agrupada','Importada pendent de revisar','Històrica sense amidament','PA pendent amidament','Duplicada possible'].map(s=>`<option ${strip(s)===statusFilter?'selected':''}>${esc(s)}</option>`).join('')}</select></label>
+        <label>Vista<select id="libShowAllOriginals"><option value="0" ${!showAll?'selected':''}>Neta: només partides tipus</option><option value="1" ${showAll?'selected':''}>Totes les guardades</option></select></label>
+      </div>
+      <div class="sort-bar small-text">Ordenar llibreria: ${sortableInline('Codi','library','code')} ${sortableInline('Capítol','library','chapter')} ${sortableInline('Concepte','library','concept')} ${sortableInline('PU','library','pu')} ${sortableInline('Estat','library','status')}</div>
+      <div id="libraryTable">${libraryGroupedTable(rows)}</div>
+    </div>
+  `);
+}
+
+const __teimorBindViewEvents_V098 = bindViewEvents;
+bindViewEvents = function(){
+  __teimorBindViewEvents_V098();
+  const ren=document.getElementById('renumberBudgetsByYear'); if(ren) ren.onclick=()=>{ normalizeBudgetSequentialNumbersV098(); alert('Numeració anual recalculada segons data.'); renderBudgets(); };
+  if(state.view==='library'){
+    const show=document.getElementById('libShowAllOriginals'); if(show) show.onchange=e=>{ state.libShowAllOriginals=e.target.value==='1'; renderLibrary(); };
+  }
+};
+
+const __teimorBindModalEvents_V098 = bindModalEvents;
+bindModalEvents = function(){
+  __teimorBindModalEvents_V098();
+  const dateInput=document.getElementById('budgetDateInput');
+  const numberInput=document.getElementById('budgetNumberInput');
+  if(dateInput && numberInput && numberInput.dataset.autoNumber==='1'){
+    numberInput.addEventListener('input',()=>{ numberInput.dataset.autoNumber='0'; });
+    dateInput.addEventListener('change',()=>{ if(numberInput.dataset.autoNumber==='1') numberInput.value=nextBudgetNumber(dateInput.value); });
+  }
+};

@@ -1,1 +1,1 @@
-Versió neta V09.7. Fitxers inclosos: index.html, app.js, styles.css, render.yaml, README_TEIMOR_APP_v09_7.md.
+Carpeta neta V09.8. Fitxers necessaris: index.html, app.js, styles.css, render.yaml, README_TEIMOR_APP_v09_8.md.
