@@ -1,11 +1,11 @@
-/* TEIMOR · Gestor de pressupostos v06
+/* TEIMOR · Gestor de pressupostos v07
    App estàtica: les dades importades d'Excel/ZIP es llegeixen al navegador i es guarden localment.
 */
-const STORE_KEY = 'teimor_gestor_pressupostos_v06';
+const STORE_KEY = 'teimor_gestor_pressupostos_v07';
 const LEGACY_STORE_KEY = ''; // No carreguem automàticament dades antigues per evitar arrossegar imports bruts de prova.
-const AUTH_KEY = 'teimor_auth_v06';
-const LEGACY_AUTH_KEY = 'teimor_auth_v05';
-const DB_NAME = 'teimor_attachments_v06';
+const AUTH_KEY = 'teimor_auth_v07';
+const LEGACY_AUTH_KEY = ''; // V07 força login en cada càrrega
+const DB_NAME = 'teimor_attachments_v07';
 const DB_STORE = 'files';
 const DEFAULT_USER = 'admin';
 const DEFAULT_PASS = 'teimor2026';
@@ -39,7 +39,7 @@ const normKey = s => strip(s).replace(/[^a-z0-9]+/g,' ').trim();
 
 function defaultData(){
   return {
-    meta:{version:'6.0.0',createdAt:today(),updatedAt:today()},
+    meta:{version:'7.0.0',createdAt:today(),updatedAt:today()},
     settings:{
       appName:'TEIMOR · Base de dades de pressupostos',
       loginUser:DEFAULT_USER,
@@ -152,7 +152,8 @@ function init(){
   const exportPackageBtn=document.getElementById('exportPackage'); if(exportPackageBtn) exportPackageBtn.onclick=exportPackageZip;
   document.getElementById('exportJsonClean').onclick=()=>exportJson(false);
   document.getElementById('importJson').onchange=importJson;
-  showApp(localStorage.getItem(AUTH_KEY)==='1' || localStorage.getItem(LEGACY_AUTH_KEY)==='1');
+  localStorage.removeItem(AUTH_KEY);
+  showApp(false);
 }
 window.addEventListener('DOMContentLoaded', init);
 
@@ -583,7 +584,7 @@ function renderImporter(){
   const ready = typeof XLSX !== 'undefined';
   setContent(`
     ${!ready?'<div class="card notice-red"><strong>Llibreria Excel no carregada.</strong> Comprova connexió o inclou SheetJS localment. Sense aquesta llibreria no es poden llegir .xls/.xlsx.</div>':''}
-    <div class="card notice-blue"><strong>Criteri d’importació V06:</strong> el client guardat és el del requadre/destinatari del pressupost, no TEIMOR. Les obres es veuen integrades dins la pestanya Pressupostos. En pressupostos antics TEIMOR, l’app llegeix el requadre superior dret com a client, detecta la Data/Fecha adjacent, agafa la BASE IMPOSABLE o imports tipus “Materials i M.O.” com a total del pressupost i separa les línies de TREBALLS marcades amb * com a partides/subpartides pendents de revisar.</div>
+    <div class="card notice-blue"><strong>Criteri d’importació V07:</strong> el client guardat és el del requadre/destinatari del pressupost, no TEIMOR. Les obres es veuen integrades dins la pestanya Pressupostos. En pressupostos antics TEIMOR, l’app llegeix el requadre superior dret com a client, detecta la Data/Fecha adjacent, agafa la BASE IMPOSABLE o imports tipus “Materials i M.O.” com a total del pressupost i separa les línies de TREBALLS marcades amb * com a partides/subpartides pendents de revisar.</div>
     <div class="card"><div id="dropzone" class="dropzone">
       <h2>Importació massiva</h2><p>Arrossega aquí Excels o un ZIP, o fes servir els botons.</p>
       <div class="actions" style="justify-content:center">
@@ -907,6 +908,7 @@ function detectClient(fileName, flat){
   name = cleanClientName(name);
   if(name==='Client pendent de revisar'){
     const guessed=guessNameFromFile(fileName);
+    // Només usem el nom del fitxer si sembla clarament un client/obra, no un càlcul ni un carrer.
     name = cleanClientName(guessed);
   }
   const workAddress = recipient.address || findValueByLabels(flat, ['obra','direccion obra','direcció obra','adreça obra','situada','situat','emplaçament','emplazamiento']) || detectAddress(flat);
@@ -914,46 +916,55 @@ function detectClient(fileName, flat){
   return {id:uid('CLI'), tempKey:uid('TMPCLI'), name, nif, phone, email, contact:'', fiscalAddress:recipient.fiscalAddress||'', workAddress, city, status:'Actiu', source:fileName, notes:'Client detectat automàticament del requadre/destinatari. Revisar si cal.'};
 }
 function detectRecipientBlock(flat){
-  // Patró TEIMOR: requadre de destinatari a la part superior dreta. Cada línia sol estar a la mateixa columna:
-  // Nom client → adreça → CP/població → província o NIF/DNI.
+  // V07: el client TEIMOR és el bloc/requadre superior dret. No fem servir el cos del pressupost.
+  // Ordre habitual dins el requadre: nom client → adreça → CP/població → província o NIF/DNI/CIF.
   const blocks=[];
   const bySheet={};
-  for(const r of flat){ if(r.rowIndex>35) continue; (bySheet[r.sheet]=bySheet[r.sheet]||[]).push(r); }
+  for(const r of flat){ (bySheet[r.sheet]=bySheet[r.sheet]||[]).push(r); }
   Object.values(bySheet).forEach(rows=>{
-    for(let col=2; col<=12; col++){
+    const markerRows=rows
+      .filter(r=>r.rowIndex>4 && (r.raw||[]).some(c=>/^(\s*)?(obra|concepte|concepto|medici[oó]n?|treballs|trabajos|base imposable|base imponible)\b/i.test(cleanText(c))))
+      .map(r=>r.rowIndex);
+    const cutoff = markerRows.length ? Math.min(...markerRows) : 26;
+    for(let col=1; col<=14; col++){
       const lines=[];
       for(const r of rows){
+        if(r.rowIndex<=5 || r.rowIndex>=cutoff) continue;
         const raw=r.raw||[];
         const val=cleanText(raw[col]||'');
-        if(!val || isTeimorText(val) || isNonRecipientText(val)) continue;
-        // evitem capçalera d’empresa i imports, però mantenim línies amb NIF/DNI si són dins el requadre.
-        if(/www\.|@teimor|base imposable|iva|pressupost|presupuesto|concepte|medici[oó]|treballs/i.test(val)) continue;
-        if(r.rowIndex<=5) continue; // capçalera TEIMOR
-        if(r.rowIndex>24) continue; // fora del requadre habitual
-        // Si hi ha més text a la dreta a la mateixa fila, normalment no forma part del destinatari sinó d'una altra zona.
+        if(!val) continue;
+        if(isTeimorText(val) || isNonRecipientText(val) || looksLikeCalculationLine(val)) continue;
+        if(/www\.|@teimor|pressupost|presupuesto|concepte|concepto|medici[oó]n?|treballs|trabajos|materials?\s*i\s*m\.?o\.?/i.test(val)) continue;
+        // En el requadre real hi ha textos curts. Si és una frase llarga amb *, import, preu o descripció d'obra, no és client.
+        if(val.length>90 || /^\*/.test(val) || /[€=]/.test(val)) continue;
         lines.push({row:r.rowIndex,col,text:val});
       }
       if(lines.length>=1){
         lines.sort((a,b)=>a.row-b.row);
-        // trenquem si hi ha salts grans; el millor bloc sol tenir files consecutives o quasi consecutives.
         let chunk=[];
-        const flush=()=>{ if(chunk.length) blocks.push({col, lines:chunk.map(x=>x.text), rows:chunk.map(x=>x.row)}); chunk=[]; };
-        for(const l of lines){ if(chunk.length && l.row-chunk[chunk.length-1].row>3) flush(); chunk.push(l); }
+        const flush=()=>{
+          if(chunk.length){
+            const texts=chunk.map(x=>x.text).filter(Boolean);
+            const hasName=texts.some(isProbablyClientName);
+            const hasLocator=texts.some(looksLikeAddress) || texts.some(looksLikeCityLine) || texts.some(x=>/\b([A-HJNP-SUVW][0-9]{7}[0-9A-J]|[0-9]{8}[A-Z]|[XYZ][0-9]{7}[A-Z])\b/i.test(x));
+            if(hasName && (hasLocator || texts.length>=2)) blocks.push({col, lines:texts, rows:chunk.map(x=>x.row)});
+          }
+          chunk=[];
+        };
+        for(const l of lines){ if(chunk.length && l.row-chunk[chunk.length-1].row>2) flush(); chunk.push(l); }
         flush();
       }
     }
   });
-  // També recollim blocs etiquetats explícitament si existeixen.
+  // També recollim blocs etiquetats, però només si el valor resultant no sembla carrer/càlcul/import.
   const labelled=findValueByLabels(flat, ['client','cliente','destinatari','destinatario','senyors','sres','promotor','propietari','propiedad','comunitat','comunidad']);
-  if(labelled) blocks.push({col:99, rows:[0], lines:[labelled]});
+  if(labelled && isProbablyClientName(labelled)) blocks.push({col:99, rows:[0], lines:[labelled]});
   if(!blocks.length) return {name:'',address:'',city:'',fiscalAddress:'',text:''};
   const scored=blocks.map(b=>({...b, score:recipientBlockScore(b.lines)})).sort((a,b)=>b.score-a.score);
   const best=scored[0];
-  const lines=best.lines.map(cleanText).filter(Boolean);
+  const lines=best.lines.map(cleanText).filter(Boolean).filter(x=>!looksLikeCalculationLine(x) && !isNonRecipientText(x));
   let name='';
-  for(const l of lines){
-    if(isProbablyClientName(l)){ name=l; break; }
-  }
+  for(const l of lines){ if(isProbablyClientName(l)){ name=l; break; } }
   const address = lines.find(looksLikeAddress) || '';
   const cityLine = lines.find(looksLikeCityLine) || '';
   const fiscalAddress = lines.filter(l=>l && l!==name).join('\n');
@@ -964,20 +975,41 @@ function recipientBlockScore(lines){
   let score=0;
   const clean=lines.map(cleanText).filter(Boolean);
   const first=clean[0]||'';
-  if(isProbablyClientName(first)) score+=120;
-  if(looksLikeAddress(first)) score-=120;
-  if(clean.some(looksLikeAddress)) score+=45;
-  if(clean.some(looksLikeCityLine)) score+=35;
-  if(clean.some(x=>/\b([A-HJNP-SUVW][0-9]{7}[0-9A-J]|[0-9]{8}[A-Z]|[XYZ][0-9]{7}[A-Z])\b/i.test(x))) score+=25;
-  if(clean.some(isTeimorText)) score-=200;
-  if(clean.length>=2 && clean.length<=6) score+=20;
+  if(clean.some(looksLikeCalculationLine) || clean.some(isNonRecipientText)) score-=400;
+  if(isProbablyClientName(first)) score+=160;
+  if(looksLikeAddress(first) || looksLikeCalculationLine(first)) score-=180;
+  if(clean.some(looksLikeAddress)) score+=55;
+  if(clean.some(looksLikeCityLine)) score+=45;
+  if(clean.some(x=>/\b([A-HJNP-SUVW][0-9]{7}[0-9A-J]|[0-9]{8}[A-Z]|[XYZ][0-9]{7}[A-Z])\b/i.test(x))) score+=35;
+  if(clean.some(isTeimorText)) score-=250;
+  if(clean.length>=2 && clean.length<=6) score+=25;
+  if(!clean.some(isProbablyClientName)) score-=250;
   return score;
 }
-function isNonRecipientText(s){ return /^(data|fecha|date|pressupost|presupuesto|n[úu]m\.?|num\.?|numero|número|obra|concepte|concepto|medicio|medició|medición|medicion|treballs|trabajos|base imposable|base imponible|iva|exclos|excl[oò]s|total|subtotal)$/i.test(cleanText(s)); }
+function looksLikeCalculationLine(s){
+  const t=cleanText(s);
+  if(!t) return false;
+  if(/[€=]/.test(t) && /\d/.test(t)) return true;
+  if(/\b(materials?\s*i\s*m\.?o\.?|m\.?o\.?|unitat|base imposable|base imponible|import total|total pressupost|subtotal|iva)\b/i.test(t) && /\d|=|€/i.test(t)) return true;
+  if(/^\s*\d+[\d.,]*\s*(m2|m²|m3|m³|ml|m|ut|ud|u|kg)?\s*[x×]\s*\d+[\d.,]*\s*€?\s*=?/i.test(t)) return true;
+  return false;
+}
+function isNonRecipientText(s){
+  const t=cleanText(s);
+  return looksLikeCalculationLine(t) || /^(data|fecha|date|pressupost|presupuesto|n[úu]m\.?|num\.?|numero|número|obra|concepte|concepto|medicio|medició|medición|medicion|treballs|trabajos|base imposable|base imponible|materials?\s*i\s*m\.?o\.?|unitat|iva|exclos|excl[oò]s|total|subtotal)$/i.test(t);
+}
 function looksLikeAddress(s){ return /\b(c\/|c\.|carrer|calle|avinguda|avenida|av\.?|avda\.?|passeig|pg\.?|plaza|plaça|rambla|carretera|ctra\.?|urbanitzaci[oó]|urb\.?|travessera|cam[ií]|n[ºo]|núm|num\.?|número|numero|bloc|bloque|esc\.?|escala|baixos|pis|portal|local|edifici\s+[^a-z]*$)\b/i.test(String(s)); }
 function looksLikeCityLine(s){ return /\b(17\d{3}|08\d{3}|Girona|Barcelona|Palafrugell|Palam[oó]s|Calonge|Sant Antoni|Begur|Pals|Sant Feliu de Gu[ií]xols|S.?Agar[oó])\b/i.test(String(s)); }
 function isProvinceOnly(s){ return /^\(?\s*(girona|barcelona|tarragona|lleida|gerona)\s*\)?$/i.test(cleanText(s)); }
-function isProbablyClientName(s){ const t=cleanText(s); if(!t || t.length<3) return false; if(looksLikeAddress(t) || looksLikeCityLine(t) || isProvinceOnly(t) || isTeimorText(t) || isNonRecipientText(t)) return false; if(/@|\b(tel|telefono|telèfon|nif|dni|cif|cp|codi postal)\b/i.test(t)) return false; if(/^[0-9\s.,()\/-]+$/.test(t)) return false; return true; }
+function isProbablyClientName(s){
+  const t=cleanText(s);
+  if(!t || t.length<3) return false;
+  if(looksLikeAddress(t) || looksLikeCityLine(t) || isProvinceOnly(t) || isTeimorText(t) || isNonRecipientText(t) || looksLikeCalculationLine(t)) return false;
+  if(/@|\b(tel|telefono|telèfon|nif|dni|cif|cp|codi postal|materials?|unitat|base|import|total|iva|preu|precio|amidament|medici[oó]n?)\b/i.test(t)) return false;
+  if(/^[0-9\s.,()\/€=x×-]+$/i.test(t)) return false;
+  if(/\d+[\d.,]*\s*(m2|m²|m3|m³|ml|m|ut|ud|kg)\b/i.test(t) && /[€=x×]/.test(t)) return false;
+  return true;
+}
 function badClientName(s){ const t=cleanText(s); return !isProbablyClientName(t); }
 function clientLineScore(s){ const t=cleanText(s); if(badClientName(t)) return -100; let score=Math.min(t.length,80); if(/com\.?\s*de\s*prop|comunitat|comunidad|propietaris|propietarios|s\.?l\.?|s\.?a\.?|scp|cb|riart/i.test(t)) score+=80; if(/^[A-ZÀ-Ý0-9 .&()'-]+$/.test(t)) score+=10; if(/@|\d{8}[A-Z]|[A-Z]\d{7}/i.test(t)) score-=40; return score; }
 function extractCityFromLine(s){ const m=String(s||'').match(/(Palafrugell|Palam[oó]s|Calonge(?: i Sant Antoni)?|Sant Antoni|Begur|Pals|Sant Feliu de Gu[ií]xols|S.?Agar[oó]|Girona|Barcelona)/i); return m?m[0]:cleanText(s||''); }
@@ -1002,8 +1034,8 @@ function findValueByLabels(flat, labels){
       if(labs.some(l=>sc === l || sc.startsWith(l+':') || sc.includes(l+':'))){
         let v='';
         if(c.includes(':')) v=c.split(':').slice(1).join(':').trim();
-        if(!v) v=cells.slice(i+1).find(x=>x && !isTeimorText(x) && strip(x)!==sc && !isNonRecipientText(x)) || '';
-        if(v && !isTeimorText(v) && v.length>2) return v;
+        if(!v) v=cells.slice(i+1).find(x=>x && !isTeimorText(x) && strip(x)!==sc && !isNonRecipientText(x) && !looksLikeCalculationLine(x)) || '';
+        if(v && !isTeimorText(v) && v.length>2 && !looksLikeCalculationLine(v) && !looksLikeAddress(v)) return v;
       }
     }
   }
@@ -1314,7 +1346,7 @@ function makeItem({code,chapter,unit,desc,qty,pu,total,status,fileName,sheetName
 function confirmDraftImport(){
   const d=state.importDraft; if(!d) return;
   const clientIdByTemp=new Map();
-  for(const c of d.clients){ const existing=findExistingClient(c); const id=existing?.id || c.id || uid('CLI'); clientIdByTemp.set(c.tempKey,id); if(existing){ Object.assign(existing, mergeClient(existing,c)); } else data.clients.push({...c,id}); }
+  for(const c of d.clients){ const existing=findExistingClient(c); const id=existing?.id || c.id || uid('CLI'); for(const tk of (c._tempKeys || [c.tempKey]).filter(Boolean)) clientIdByTemp.set(tk,id); if(existing){ Object.assign(existing, mergeClient(existing,c)); } else { const copy={...c,id}; delete copy._tempKeys; data.clients.push(copy); } }
   for(const b of d.budgets){ const c=d.clients.find(x=>x.tempKey===b.clientTempKey); const clientId=c ? (clientIdByTemp.get(c.tempKey) || findExistingClient(c)?.id) : ''; const job=d.jobs.find(j=>j.id===b.jobTempKey) || d.jobs.find(j=>j.clientTempKey===b.clientTempKey); let jobId=''; if(job){ job.clientId=clientId; const existingJob=findExistingJob(job,clientId); jobId=existingJob?.id || job.id; if(existingJob) Object.assign(existingJob, {...job,id:existingJob.id,clientId}); else data.jobs.push({...job,id:jobId,clientId}); }
     const budget={...b, clientId, jobId}; delete budget.clientTempKey; delete budget.jobTempKey; budget.lines=(budget.lines||[]).map(l=>({...l,id:l.id||uid('LIN')})); data.budgets.push(budget); if(jobId){ const j=byId(data.jobs,jobId); if(j && !j.mainBudgetId) j.mainBudgetId=budget.id; }
   }
