@@ -32,3 +32,23 @@ button,input,select,textarea{font:inherit} button{cursor:pointer}.hidden{display
 .sidebar-actions [data-view="backup"]{text-align:center}
 .preview-desc{white-space:pre-wrap}
 @media(max-width:1200px){.table-wrap table{min-width:1050px}}
+
+/* V09.2: taules ordenables, llibreria per capítols i modals més grans */
+.modal-box{width:min(1500px,97vw);max-width:min(1500px,97vw)}
+.sort-th{background:none;border:0;color:#334155;font-weight:800;padding:0;display:inline-flex;gap:6px;align-items:center;text-align:left;cursor:pointer}
+.sort-th span{font-size:13px;color:var(--brand)}
+.sort-chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:5px 10px;margin:2px;color:var(--text)}
+.sort-chip:hover,.sort-th:hover{color:var(--brand)}
+.sort-bar{margin:12px 0;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.sort-help{margin-top:10px}
+.chapter-group{border:1px solid var(--line);border-radius:16px;background:#fff;margin:12px 0;overflow:hidden}
+.chapter-group summary{list-style:none;cursor:pointer;background:#fff7ed;color:#7c2d12;padding:12px 14px;display:flex;justify-content:space-between;gap:16px;align-items:center}
+.chapter-group summary::-webkit-details-marker{display:none}
+.chapter-group summary span{font-size:12px;color:#9a3412;font-weight:800}
+.library-mini-table{border-radius:0;border-left:0;border-right:0;border-bottom:0}
+.budget-form-wide .concept-field input{font-size:15px;font-weight:700;min-height:46px}
+.budget-lines .concept-col{min-width:520px;width:46%}
+.budget-lines .concept-cell{min-width:520px}.line-concept{min-height:52px;font-weight:700;line-height:1.25}
+.budget-lines table{min-width:1250px}
+.modal .form-grid{grid-template-columns:repeat(6,minmax(0,1fr))}.modal .form-grid .wide{grid-column:span 3}.modal .form-grid .full{grid-column:1/-1}
+@media(max-width:1200px){.modal .form-grid{grid-template-columns:1fr}.modal .form-grid .wide,.modal .form-grid .full{grid-column:auto}.budget-lines .concept-col,.budget-lines .concept-cell{min-width:360px}}

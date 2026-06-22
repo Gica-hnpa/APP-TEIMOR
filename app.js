@@ -1844,3 +1844,293 @@ function importPreviewHtml(d){
     <h3>Registre d’importació</h3><div class="log">${esc(d.log.join('\n'))}</div>
   </div>`;
 }
+
+/* =========================
+   V09.2 overrides: ordre columnes, llibreria agrupada i alta de pressupostos més còmoda
+   ========================= */
+(function(){
+  // Marquem la versió visual sense canviar la clau local, perquè l'usuari mantingui les dades importades.
+  if(data && data.meta){ data.meta.version = '9.2.0-ordre-llibreria'; }
+})();
+
+function sortIcon(kind, key){
+  const field = state[`${kind}SortField`] || (kind==='budget'?'date':kind==='client'?'name':'chapter');
+  const dir = state[`${kind}SortDir`] || (kind==='budget'?'desc':'asc');
+  if(field !== key) return '↕';
+  return dir === 'asc' ? '↑' : '↓';
+}
+function sortableTh(label, kind, key){
+  return `<th><button class="sort-th" type="button" data-sort-kind="${esc(kind)}" data-sort-key="${esc(key)}">${esc(label)} <span>${sortIcon(kind,key)}</span></button></th>`;
+}
+function compareMixed(a,b,dir='asc'){
+  const mult = dir === 'desc' ? -1 : 1;
+  const an = num(a), bn = num(b);
+  if((an || bn) && String(a??'').match(/[0-9]/) && String(b??'').match(/[0-9]/)) return (an-bn)*mult;
+  return String(a??'').localeCompare(String(b??''), 'ca', {numeric:true, sensitivity:'base'}) * mult;
+}
+function nextBudgetNumber(date=today()){
+  const year = Number((parseDateValue(date)||today()).slice(0,4));
+  const nums = data.budgets
+    .filter(b => Number(budgetYear(b)) === year)
+    .map(b => {
+      const m = String(b.number||'').match(/\d+/);
+      return m ? Number(m[0]) : 0;
+    })
+    .filter(Boolean);
+  const allNums = data.budgets.map(b=>{ const m=String(b.number||'').match(/\d+/); return m?Number(m[0]):0; }).filter(Boolean);
+  const next = (nums.length ? Math.max(...nums) : (allNums.length ? Math.max(...allNums) : 0)) + 1;
+  return String(next);
+}
+function sortByBudgetField(rows){
+  const field = state.budgetSortField || 'date';
+  const dir = state.budgetSortDir || 'desc';
+  const val = b => {
+    const j=byId(data.jobs,b.jobId)||{}; const c=byId(data.clients,b.clientId)||{};
+    if(field==='year') return budgetYear(b)||'';
+    if(field==='date') return parseDateValue(b.date)||'';
+    if(field==='number') return b.number||'';
+    if(field==='client') return c.name||'';
+    if(field==='title') return b.title||j.title||'';
+    if(field==='status') return b.status||'';
+    if(field==='base') return budgetBase(b);
+    if(field==='total') return budgetTotal(b);
+    if(field==='type') return budgetLineSum(b)>0 ? 'Suma de partides' : (num(b.importedBase)>0 ? 'Total importat Excel' : 'Sense import');
+    if(field==='lines') return (b.lines||[]).length;
+    return b.date||'';
+  };
+  return [...rows].sort((a,b)=> compareMixed(val(a), val(b), dir) || compareMixed(a.number,b.number,'asc'));
+}
+function sortByClientField(rows){
+  const field=state.clientSortField||'name'; const dir=state.clientSortDir||'asc';
+  const val=c=> field==='nif'?c.nif:field==='phone'?c.phone:field==='email'?c.email:field==='address'?c.workAddress:field==='city'?c.city:field==='status'?c.status:c.name;
+  return [...rows].sort((a,b)=>compareMixed(val(a),val(b),dir));
+}
+function sortByLibraryField(rows){
+  const field=state.librarySortField||'concept'; const dir=state.librarySortDir||'asc';
+  const val=x=> field==='code'?x.code:field==='unit'?x.unit:field==='pu'?(x.unitPrice||libFinal(x)):field==='status'?x.status:field==='origin'?x.origin:field==='chapter'?x.chapter:x.concept;
+  return [...rows].sort((a,b)=>compareMixed(val(a),val(b),dir));
+}
+
+function clientsTable(rows=data.clients){
+  rows=sortByClientField(rows);
+  const headers = [
+    '<th>Sel.</th>',
+    sortableTh('Client','client','name'),
+    sortableTh('NIF/DNI/CIF','client','nif'),
+    '<th>Contacte</th>',
+    sortableTh('Telèfon','client','phone'),
+    sortableTh('Email','client','email'),
+    sortableTh('Adreça obra','client','address'),
+    sortableTh('Estat','client','status'),
+    '<th>Accions</th>'
+  ].join('');
+  if(!rows.length) return empty();
+  return `<div class="table-wrap"><table><thead><tr>${headers}</tr></thead><tbody>${rows.map(c=>`
+    <tr><td><input type="checkbox" class="select-client" value="${esc(c.id)}"></td><td><strong>${esc(c.name)}</strong></td><td>${esc(c.nif||'')}</td><td>${esc(c.contact||'')}</td><td>${esc(c.phone||'')}</td><td>${esc(c.email||'')}</td><td>${esc(c.workAddress||'')}</td><td>${statusPill(c.status||'')}</td><td class="nowrap"><button class="ghost small" data-edit-client="${esc(c.id)}">Editar</button> <button class="danger small" data-delete-client="${esc(c.id)}">Eliminar</button></td></tr>`).join('')}</tbody></table></div>`;
+}
+
+function renderLibrary(){
+  setHeader('Llibreria de partides','Partides agrupades per capítol. Pots filtrar, ordenar i obrir cada partida per veure la fitxa, descripció llarga i descompost BEDEC.');
+  const q=state.libSearch || '';
+  const filter=strip(q);
+  const chapters=[...new Set(data.library.map(x=>x.chapter||'Sense capítol').filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const chapter=state.libChapterFilter || '';
+  const statusFilter=strip(state.libStatusFilter || '');
+  let rows=data.library.filter(x=>{
+    const chapterOk=!chapter || (x.chapter||'Sense capítol')===chapter;
+    const statusOk=!statusFilter || strip(x.status||'').includes(statusFilter);
+    const searchOk=!filter || strip([x.code,x.chapter,x.unit,x.concept,x.longDesc,x.status,x.origin].join(' ')).includes(filter);
+    return chapterOk && statusOk && searchOk;
+  });
+  rows=sortByLibraryField(rows);
+  setContent(`
+    <div class="card">
+      <div class="toolbar"><h2>Llibreria per capítols</h2><div class="right"><button class="ghost" id="selectAllLibrary">Seleccionar tot</button><button class="ghost" id="clearSelectedLibrary">Desmarcar</button><button class="danger" id="deleteSelectedLibrary">Eliminar seleccionades</button><button class="ghost" id="exportLibraryJson">Exportar llibreria</button><label class="ghost file-label">Importar llibreria<input id="importLibraryJson" type="file" accept="application/json" hidden></label><button class="primary" id="newLibItem">Nova partida</button></div></div>
+      <div class="filter-grid">
+        <label>Cerca<input id="libSearch" placeholder="Cercar partida, codi, origen..." value="${esc(q)}"></label>
+        <label>Capítol<select id="libChapterFilter"><option value="">Tots els capítols</option>${chapters.map(c=>`<option value="${esc(c)}" ${c===chapter?'selected':''}>${esc(c)}</option>`).join('')}</select></label>
+        <label>Estat<select id="libStatusFilter"><option value="">Tots</option>${['Validada','Validada pendent revisió','Importada pendent de revisar','Històrica sense amidament','PA pendent amidament','Duplicada possible'].map(s=>`<option ${strip(s)===statusFilter?'selected':''}>${esc(s)}</option>`).join('')}</select></label>
+        <label>Resultats<input readonly value="${rows.length} de ${data.library.length}"></label>
+      </div>
+      <div class="sort-bar small-text">Ordenar llibreria: ${sortableInline('Codi','library','code')} ${sortableInline('Capítol','library','chapter')} ${sortableInline('Concepte','library','concept')} ${sortableInline('PU','library','pu')} ${sortableInline('Estat','library','status')}</div>
+      <div id="libraryTable">${libraryGroupedTable(rows)}</div>
+    </div>
+  `);
+}
+function sortableInline(label, kind, key){ return `<button class="sort-chip" type="button" data-sort-kind="${esc(kind)}" data-sort-key="${esc(key)}">${esc(label)} ${sortIcon(kind,key)}</button>`; }
+function libraryGroupedTable(rows){
+  if(!rows.length) return empty();
+  const grouped={};
+  for(const item of rows){ const ch=item.chapter||'Sense capítol'; (grouped[ch] ||= []).push(item); }
+  return Object.keys(grouped).sort((a,b)=>a.localeCompare(b,'ca',{numeric:true})).map(ch=>`
+    <details class="chapter-group" open>
+      <summary><strong>${esc(ch)}</strong><span>${grouped[ch].length} partida/es</span></summary>
+      ${libraryTable(grouped[ch])}
+    </details>`).join('');
+}
+function libraryTable(rows){
+  if(!rows.length) return empty();
+  return `<div class="table-wrap library-mini-table"><table><thead><tr><th>Sel.</th>${sortableTh('Codi','library','code')}<th>Ut</th>${sortableTh('Descripció curta','library','concept')}${sortableTh('PU final','library','pu')}<th>Estat</th><th>Origen</th><th>Accions</th></tr></thead><tbody>${rows.map(item=>`
+    <tr>
+      <td><input type="checkbox" class="select-library" value="${esc(item.id)}"></td>
+      <td><strong>${esc(item.code||'')}</strong></td>
+      <td>${esc(item.unit||'')}</td>
+      <td><button class="linklike" data-view-lib="${esc(item.id)}"><strong>${esc(item.concept||'')}</strong></button></td>
+      <td class="num">${money(item.unitPrice || libFinal(item))}</td>
+      <td>${statusPill(item.status||'Pendent')}</td>
+      <td>${esc(item.origin||'')}</td>
+      <td class="nowrap"><button class="ghost small" data-view-lib="${esc(item.id)}">Veure / editar</button> <button class="danger small" data-delete-lib="${esc(item.id)}">Eliminar</button></td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+
+function budgetRowsFiltered(){
+  const q=strip(document.getElementById('budgetSearch')?.value ?? state.budgetSearch ?? '');
+  const year=document.getElementById('budgetYearFilter')?.value ?? state.budgetYearFilter ?? '';
+  const status=strip(document.getElementById('budgetStatusFilter')?.value ?? state.budgetStatusFilter ?? '');
+  const client=document.getElementById('budgetClientFilter')?.value ?? state.budgetClientFilter ?? '';
+  const rows=data.budgets.filter(b=>{
+    const j=byId(data.jobs,b.jobId);
+    const c=byId(data.clients,b.clientId);
+    const blob=[b.id,b.number,b.date,b.title,b.status,b.source,b.notes,c?.name,c?.nif,c?.phone,c?.email,j?.title,j?.address,j?.city,budgetYear(b)].join(' ');
+    return (!q || strip(blob).includes(q)) && (!year || String(budgetYear(b))===String(year)) && (!status || strip(b.status)===status) && (!client || b.clientId===client);
+  });
+  return sortByBudgetField(rows);
+}
+function budgetsTable(rows){
+  if(!rows.length) return empty();
+  const headers=[
+    '<th>Sel.</th>', sortableTh('Any','budget','year'), sortableTh('Data','budget','date'), sortableTh('Núm.','budget','number'), sortableTh('Client','budget','client'), sortableTh('Concepte / obra','budget','title'), sortableTh('Estat','budget','status'), sortableTh('Base s/IVA','budget','base'), sortableTh('Total IVA incl.','budget','total'), sortableTh('Tipus import','budget','type'), sortableTh('Partides','budget','lines'), '<th>Accions</th>'
+  ].join('');
+  return `<div class="table-wrap"><table><thead><tr>${headers}</tr></thead><tbody>${rows.map(b=>{
+    const lineSum = budgetLineSum(b);
+    const calcType = lineSum>0 ? 'Suma de partides' : (num(b.importedBase)>0 ? 'Total importat Excel' : 'Sense import');
+    const job=byId(data.jobs,b.jobId);
+    const title=cleanText(b.title || job?.title || '');
+    const addr=cleanText(job?.address || '');
+    return `<tr class="clickable-row" data-open-budget="${esc(b.id)}">
+      <td><input type="checkbox" class="select-budget" value="${esc(b.id)}" data-no-row-open></td>
+      <td>${esc(budgetYear(b)||'')}</td>
+      <td>${dateDisplay(b.date)}</td>
+      <td><strong>${esc(b.number||b.id)}</strong></td>
+      <td>${esc(clientName(b.clientId))}</td>
+      <td><strong>${esc(title)}</strong>${addr && strip(addr)!==strip(title)?`<br><span class="muted">${esc(addr)}</span>`:''}</td>
+      <td><select class="status-select" data-budget-status="${esc(b.id)}" data-no-row-open>${budgetStatusOptions(b.status||'Esborrany')}</select></td>
+      <td class="num">${money(budgetBase(b))}</td>
+      <td class="num"><strong>${money(budgetTotal(b))}</strong></td>
+      <td>${esc(calcType)}</td>
+      <td class="num">${(b.lines||[]).length}</td>
+      <td class="nowrap"><button class="ghost small" data-edit-budget="${esc(b.id)}" data-no-row-open>Veure / editar</button> <button class="ghost small" data-preview-budget="${esc(b.id)}" data-no-row-open>Previsualitzar A4</button> <button class="danger small" data-delete-budget="${esc(b.id)}" data-no-row-open>Eliminar</button></td>
+    </tr>`;}).join('')}</tbody></table></div>`;
+}
+function renderBudgets(editId=''){
+  setHeader('Pressupostos','Llistat complet ordenable. Clica les capçaleres per ordenar de més antic a més nou, de nou a antic o per qualsevol columna.');
+  if(editId) { state.editBudgetId=editId; state.selectedBudgetId=editId === '__new' ? '' : editId; }
+  const years=[...new Set(data.budgets.map(b=>budgetYear(b)).filter(Boolean))].sort((a,b)=>b-a);
+  const statuses=[...new Set(data.budgets.map(b=>b.status).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const rows=budgetRowsFiltered();
+  setContent(`
+    <div class="grid four">
+      <div class="kpi"><span>Pressupostos</span><strong>${data.budgets.length}</strong></div>
+      <div class="kpi"><span>Total pressupostos s/IVA</span><strong>${money(data.budgets.reduce((s,b)=>s+budgetBase(b),0))}</strong></div>
+      <div class="kpi"><span>Acceptats / fets</span><strong>${data.budgets.filter(b=>strip(b.status).includes('acceptat')||strip(b.status).includes('fet')).length}</strong></div>
+      <div class="kpi"><span>Rebutjats / anul·lats</span><strong>${data.budgets.filter(b=>strip(b.status).includes('rebutjat')||strip(b.status).includes('anul')).length}</strong></div>
+    </div>
+    <div class="card"><div class="toolbar"><h2>Tots els pressupostos</h2><div class="right"><button class="ghost" id="selectAllBudgets">Seleccionar tot</button><button class="ghost" id="clearSelectedBudgets">Desmarcar</button><button class="danger" id="deleteSelectedBudgets">Eliminar seleccionats</button><button class="primary" id="newBudgetBtn">+ Nou pressupost</button><button class="ghost" id="exportBudgetCsv">Exportar CSV del seleccionat</button></div></div>
+      <div class="filter-grid">
+        <label>Cerca<input id="budgetSearch" placeholder="Client, obra, núm., adreça, any..." value="${esc(state.budgetSearch||'')}"></label>
+        <label>Any<select id="budgetYearFilter"><option value="">Tots</option>${years.map(y=>`<option value="${y}" ${String(y)===String(state.budgetYearFilter||'')?'selected':''}>${y}</option>`).join('')}</select></label>
+        <label>Client<select id="budgetClientFilter"><option value="">Tots</option>${options(data.clients,state.budgetClientFilter||'')}</select></label>
+        <label>Estat<select id="budgetStatusFilter"><option value="">Tots</option>${statuses.map(x=>`<option ${strip(x)===strip(state.budgetStatusFilter||'')?'selected':''}>${esc(x)}</option>`).join('')}</select></label>
+      </div>
+      <div class="sort-help small-text">Ordre actual: <strong>${esc(state.budgetSortField||'data')}</strong> ${esc(state.budgetSortDir==='asc'?'ascendent':'descendent')} · prem una capçalera per canviar.</div>
+      <div id="budgetFilterInfo" class="small-text" style="margin:10px 0">Mostrant ${rows.length} de ${data.budgets.length} pressupostos.</div>
+      <div id="budgetsTable">${budgetsTable(rows)}</div>
+    </div>
+    <div class="empty">Clica sobre qualsevol pressupost o al botó “Veure / editar” per obrir-ne la fitxa completa en una finestra superior.</div>
+  `);
+}
+function budgetFormCard(formBudget,isNew=false){
+  const autoNumber = isNew ? nextBudgetNumber(formBudget.date || today()) : (formBudget.number||'');
+  return `<div class="card"><h2>${isNew?'Nou pressupost':'Editar pressupost'}</h2>
+      <form id="budgetForm" class="form-grid budget-form-wide">
+        <input type="hidden" name="id" value="${esc(formBudget.id||uid('P'))}">
+        <label>Número<input name="number" id="budgetNumberInput" value="${esc(autoNumber)}" data-auto-number="${isNew?'1':'0'}"></label>
+        <label>Data<input name="date" id="budgetDateInput" type="date" value="${esc(formBudget.date||today())}"></label>
+        <label class="wide">Client<select name="clientId" required><option value="">Selecciona client</option>${options(data.clients,formBudget.clientId)}</select></label>
+        <label class="wide">Feina<select name="jobId"><option value="">Sense feina</option>${options(data.jobs,formBudget.jobId,x=>`${x.year} · ${x.title}`)}</select></label>
+        <label class="full concept-field">Títol / concepte del pressupost<input name="title" value="${esc(formBudget.title||'')}" placeholder="Concepte principal del pressupost"></label>
+        <label>Estat<select name="status">${budgetStatusOptions(formBudget.status||'Esborrany')}</select></label>
+        <label>CI %<input name="ci" type="number" step="0.01" value="${esc(formBudget.ci ?? data.settings.defaultCI)}"></label>
+        <label>DGE %<input name="dge" type="number" step="0.01" value="${esc(formBudget.dge ?? data.settings.defaultDGE)}"></label>
+        <label>BI %<input name="bi" type="number" step="0.01" value="${esc(formBudget.bi ?? data.settings.defaultBI)}"></label>
+        <label>IVA %<input name="iva" type="number" step="0.01" value="${esc(formBudget.iva ?? data.settings.defaultIVA)}"></label>
+        <label>Base importada s/IVA<input name="importedBase" type="number" step="0.01" value="${esc(formBudget.importedBase || '')}"></label>
+        <label class="full">Notes<textarea name="notes">${esc(formBudget.notes||'')}</textarea></label>
+        <div class="actions full"><button class="primary">Guardar pressupost</button><button class="ghost" type="button" data-render-budgets>Cancel·lar</button></div>
+      </form>
+    </div>`;
+}
+function openBudgetModal(id=''){
+  const isNew = id === '__new' || !id;
+  const b = isNew ? {id:'', number:nextBudgetNumber(today()), lines:[], date:today(), ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, iva:data.settings.defaultIVA, status:'Esborrany'} : byId(data.budgets,id);
+  if(!b) return alert('No s’ha trobat aquest pressupost.');
+  state.editBudgetId = isNew ? '__new' : b.id;
+  state.selectedBudgetId = isNew ? '' : b.id;
+  openModal(`
+    <h2>${isNew?'Nou pressupost':'Pressupost · '+esc(b.number||b.id)}</h2>
+    <div class="notice-blue card-tight">${isNew?'El número es genera automàticament segons l’ordre dels pressupostos existents. Pots canviar-lo manualment si cal. Primer guarda la capçalera; després podràs afegir partides de la llibreria o crear-ne de noves.':'Pots editar la capçalera, revisar partides i obrir una previsualització A4 per imprimir o guardar en PDF.'}</div>
+    <div class="actions" style="margin:0 0 12px">${!isNew?`<button class="ghost" type="button" data-preview-budget-modal="${esc(b.id)}">Vista preliminar A4 / PDF</button>`:''}</div>
+    ${budgetFormCard(b,isNew)}
+    ${!isNew ? budgetLinesCard(b) : ''}
+  `);
+  document.querySelectorAll('[data-preview-budget-modal]').forEach(btn=>btn.onclick=()=>openBudgetPreview(btn.dataset.previewBudgetModal));
+}
+function budgetLinesCard(b){
+  return `<div class="card"><div class="toolbar"><h2>Partides del pressupost</h2><div class="right"><button class="ghost" id="selectAllBudgetLines">Seleccionar tot</button><button class="ghost" id="clearSelectedBudgetLines">Desmarcar</button><button class="danger" id="deleteSelectedBudgetLines">Eliminar línies seleccionades</button><button class="primary" id="addLineFromLibrary">Afegir de llibreria</button><button class="ghost" id="addManualLine">Afegir partida nova</button></div></div>
+    <div class="table-wrap budget-lines"><table><thead><tr><th>Sel.</th><th>Codi</th><th>Ut</th><th class="concept-col">Concepte / descripció</th><th>Quantitat</th><th>Preu/ut</th><th>Total</th><th>Estat</th><th></th></tr></thead><tbody>${(b.lines||[]).map(l=>`
+      <tr><td><input type="checkbox" class="select-budget-line" value="${esc(l.id)}"></td><td><input data-line-field="code" data-line-id="${esc(l.id)}" value="${esc(l.code||'')}"></td><td><input data-line-field="unit" data-line-id="${esc(l.id)}" value="${esc(l.unit||'')}"></td><td class="concept-cell"><textarea data-line-field="concept" data-line-id="${esc(l.id)}" class="line-concept">${esc(l.concept||'')}</textarea>${l.longDesc?`<div class="long muted">${esc(l.longDesc||'')}</div>`:''}</td><td><input class="num" data-line-field="qty" data-line-id="${esc(l.id)}" type="number" step="0.0001" value="${esc(l.qty||'')}"></td><td><input class="num" data-line-field="unitPrice" data-line-id="${esc(l.id)}" type="number" step="0.01" value="${esc(l.unitPrice||'')}"></td><td class="num"><strong>${money(lineTotal(l))}</strong></td><td>${statusPill(l.status||'')}</td><td><button class="danger small" data-delete-line="${esc(l.id)}">Eliminar</button></td></tr>`).join('')}</tbody></table></div>
+    <div class="budget-total"><div>Base: <strong>${money(budgetBase(b))}</strong></div><div>IVA: <strong>${money(budgetIVA(b))}</strong></div><div>Total: <strong>${money(budgetTotal(b))}</strong></div></div>
+    ${budgetLineSum(b)===0 && num(b.importedBase)>0 ? `<div class="small-text" style="text-align:right;margin-top:6px">Base presa del total detectat a l’Excel original; les línies separades per * queden pendents de preu/amidament.</div>` : ''}
+  </div>`;
+}
+function openAddLineFromLibrary(){
+  const b=byId(data.budgets,state.selectedBudgetId); if(!b) return;
+  const html=`<h2>Afegir partida de llibreria</h2><div class="toolbar"><input id="addLibSearch" placeholder="Cercar partida, capítol, codi..." style="max-width:620px"></div><div id="addLibResults">${addLibResultsHtml(data.library.slice(0,120), b)}</div>`;
+  openModal(html);
+  document.getElementById('addLibSearch').oninput=e=>{ const q=strip(e.target.value); const rows=data.library.filter(x=>strip([x.code,x.chapter,x.unit,x.concept,x.longDesc].join(' ')).includes(q)).slice(0,180); document.getElementById('addLibResults').innerHTML=addLibResultsHtml(rows,b); bindAddLibButtons(b); };
+  bindAddLibButtons(b);
+}
+function addLibResultsHtml(rows,b){
+  rows=sortByLibraryField(rows);
+  if(!rows.length) return empty('No hi ha partides que coincideixin amb la cerca.');
+  const grouped={}; rows.forEach(x=>{ const ch=x.chapter||'Sense capítol'; (grouped[ch] ||= []).push(x); });
+  return Object.keys(grouped).sort((a,b)=>a.localeCompare(b,'ca',{numeric:true})).map(ch=>`
+    <details class="chapter-group" open><summary><strong>${esc(ch)}</strong><span>${grouped[ch].length} partida/es</span></summary>
+    <div class="table-wrap"><table><thead><tr><th>Codi</th><th>Ut</th><th class="concept-col">Concepte</th><th>PU segons pressupost</th><th>Estat</th><th>Acció</th></tr></thead><tbody>${grouped[ch].map(x=>`<tr><td>${esc(x.code||'')}</td><td>${esc(x.unit||'')}</td><td><strong>${esc(x.concept||'')}</strong><div class="long muted">${esc(x.longDesc||'')}</div></td><td class="num">${money(x.unitPrice || libFinal(x,b))}</td><td>${statusPill(x.status||'')}</td><td><button class="primary small" data-add-lib-to-budget="${esc(x.id)}">Afegir</button></td></tr>`).join('')}</tbody></table></div></details>`).join('');
+}
+
+const __teimorBaseBindViewEvents_V092 = bindViewEvents;
+bindViewEvents = function(){
+  __teimorBaseBindViewEvents_V092();
+  document.querySelectorAll('[data-sort-kind][data-sort-key]').forEach(btn=>{
+    btn.onclick=()=>{
+      const kind=btn.dataset.sortKind, key=btn.dataset.sortKey;
+      const f=`${kind}SortField`, d=`${kind}SortDir`;
+      if(state[f]===key) state[d] = state[d]==='asc' ? 'desc' : 'asc';
+      else { state[f]=key; state[d]=(key==='date'||key==='base'||key==='total'||key==='year'||key==='lines')?'desc':'asc'; }
+      if(kind==='budget') filterBudgets();
+      else if(kind==='client') filterClients();
+      else if(kind==='library') renderLibrary();
+    };
+  });
+};
+const __teimorBaseBindModalEvents_V092 = bindModalEvents;
+bindModalEvents = function(){
+  __teimorBaseBindModalEvents_V092();
+  const dateInput=document.getElementById('budgetDateInput');
+  const numberInput=document.getElementById('budgetNumberInput');
+  if(dateInput && numberInput && numberInput.dataset.autoNumber==='1'){
+    numberInput.addEventListener('input',()=>{ numberInput.dataset.autoNumber='0'; });
+    dateInput.addEventListener('change',()=>{ if(numberInput.dataset.autoNumber==='1') numberInput.value=nextBudgetNumber(dateInput.value); });
+  }
+};
