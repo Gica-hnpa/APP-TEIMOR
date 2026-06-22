@@ -1,11 +1,11 @@
-/* TEIMOR · Gestor de pressupostos v07
+/* TEIMOR · Gestor de pressupostos v08
    App estàtica: les dades importades d'Excel/ZIP es llegeixen al navegador i es guarden localment.
 */
-const STORE_KEY = 'teimor_gestor_pressupostos_v07';
+const STORE_KEY = 'teimor_gestor_pressupostos_v08';
 const LEGACY_STORE_KEY = ''; // No carreguem automàticament dades antigues per evitar arrossegar imports bruts de prova.
-const AUTH_KEY = 'teimor_auth_v07';
-const LEGACY_AUTH_KEY = ''; // V07 força login en cada càrrega
-const DB_NAME = 'teimor_attachments_v07';
+const AUTH_KEY = 'teimor_auth_v08';
+const LEGACY_AUTH_KEY = ''; // V08 força login en cada càrrega
+const DB_NAME = 'teimor_attachments_v08';
 const DB_STORE = 'files';
 const DEFAULT_USER = 'admin';
 const DEFAULT_PASS = 'teimor2026';
@@ -17,6 +17,12 @@ const strip = s => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g,'
 const cleanText = s => String(s ?? '').replace(/\s+/g,' ').trim();
 const cleanLongText = s => String(s ?? '').replace(/\r/g,'').split(/\n+/).map(x=>cleanText(x)).filter(Boolean).join('\n');
 const money = v => new Intl.NumberFormat('ca-ES',{style:'currency',currency:'EUR'}).format(num(v));
+function dateDisplay(v){
+  const iso=parseDateValue(v);
+  if(!iso) return esc(v||'');
+  const [y,m,d]=iso.split('-');
+  return `${d}/${m}/${y}`;
+}
 const num = v => {
   if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
   if (v == null) return 0;
@@ -39,7 +45,7 @@ const normKey = s => strip(s).replace(/[^a-z0-9]+/g,' ').trim();
 
 function defaultData(){
   return {
-    meta:{version:'7.0.0',createdAt:today(),updatedAt:today()},
+    meta:{version:'8.0.0',createdAt:today(),updatedAt:today()},
     settings:{
       appName:'TEIMOR · Base de dades de pressupostos',
       loginUser:DEFAULT_USER,
@@ -232,7 +238,7 @@ function renderClients(editId=''){
     </div>
     <div class="card"><div class="toolbar">
       <div class="left"><h2>Llistat de clients</h2></div>
-      <div class="right"><button class="danger" id="deleteSelectedClients">Eliminar seleccionats</button><button class="primary" id="newClientBtn">+ Nou client</button></div>
+      <div class="right"><button class="ghost" id="selectAllClients">Seleccionar tot</button><button class="ghost" id="clearSelectedClients">Desmarcar</button><button class="danger" id="deleteSelectedClients">Eliminar seleccionats</button><button class="primary" id="newClientBtn">+ Nou client</button></div>
     </div>
     <div class="filter-grid">
       <label>Cerca intel·ligent<input id="clientSearch" placeholder="Escriu lletres del nom, NIF, telèfon, email, obra..."></label>
@@ -303,7 +309,7 @@ function renderLibrary(){
   });
   setContent(`
     <div class="card">
-      <div class="toolbar"><h2>Llibreria</h2><div class="right"><button class="danger" id="deleteSelectedLibrary">Eliminar seleccionades</button><button class="primary" id="newLibItem">Nova partida</button></div></div>
+      <div class="toolbar"><h2>Llibreria</h2><div class="right"><button class="ghost" id="selectAllLibrary">Seleccionar tot</button><button class="ghost" id="clearSelectedLibrary">Desmarcar</button><button class="danger" id="deleteSelectedLibrary">Eliminar seleccionades</button><button class="ghost" id="exportLibraryJson">Exportar llibreria</button><label class="ghost file-label">Importar llibreria<input id="importLibraryJson" type="file" accept="application/json" hidden></label><button class="primary" id="newLibItem">Nova partida</button></div></div>
       <div class="filter-grid">
         <label>Cerca<input id="libSearch" placeholder="Cercar partida, codi, origen..." value="${esc(q)}"></label>
         <label>Capítol<select id="libChapterFilter"><option value="">Tots els capítols</option>${chapters.map(c=>`<option value="${esc(c)}" ${c===chapter?'selected':''}>${esc(c)}</option>`).join('')}</select></label>
@@ -382,7 +388,6 @@ function openLibModal(id=''){
       </div>
       <div class="full modal-panel" data-modal-panel="descripcio">
         <label class="full">Descripció llarga<textarea name="longDesc" class="large-textarea">${esc(item.longDesc||'')}</textarea></label>
-        <div class="detail-box"><h3>Vista llegible</h3><pre class="desc-preview">${esc(item.longDesc||'Sense descripció llarga.')}</pre></div>
       </div>
       <div class="full modal-panel" data-modal-panel="descompost">
         <div class="detail-box"><div class="toolbar"><h3>Descompost BEDEC estructurat</h3><button class="ghost small" type="button" id="addDecompLine">Afegir línia</button></div>
@@ -429,23 +434,31 @@ function budgetRowsFiltered(){
     const c=byId(data.clients,b.clientId);
     const blob=[b.id,b.number,b.date,b.title,b.status,b.source,b.notes,c?.name,c?.nif,c?.phone,c?.email,j?.title,j?.address,j?.city,budgetYear(b)].join(' ');
     return (!q || strip(blob).includes(q)) && (!year || String(budgetYear(b))===String(year)) && (!status || strip(b.status)===status) && (!client || b.clientId===client);
-  }).sort((a,b)=>(String(b.date||'').localeCompare(String(a.date||'')) || String(b.number||'').localeCompare(String(a.number||''))));
+  }).sort((a,b)=>{
+    const db=parseDateValue(b.date) || `${budgetYear(b)||0}-01-01`;
+    const da=parseDateValue(a.date) || `${budgetYear(a)||0}-01-01`;
+    return db.localeCompare(da) || String(b.number||'').localeCompare(String(a.number||''), 'ca', {numeric:true});
+  });
 }
 function budgetsTable(rows){
-  return table(['Sel.','Any','Data','Núm.','Client','Obra / feina','Estat','Import s/IVA','Total IVA incl.','Partides','Accions'], rows.map(b=>`
-    <tr>
-      <td><input type="checkbox" class="select-budget" value="${esc(b.id)}"></td>
+  return table(['Sel.','Any','Data','Núm.','Client','Obra / feina','Estat','Import s/IVA','Total IVA incl.','Tipus import','Partides','Accions'], rows.map(b=>{
+    const lineSum = budgetLineSum(b);
+    const calcType = lineSum>0 ? 'Suma de partides' : (num(b.importedBase)>0 ? 'Total importat Excel' : 'Sense import');
+    return `
+    <tr class="clickable-row" data-open-budget="${esc(b.id)}">
+      <td><input type="checkbox" class="select-budget" value="${esc(b.id)}" data-no-row-open></td>
       <td>${esc(budgetYear(b)||'')}</td>
-      <td>${esc(b.date||'')}</td>
+      <td>${dateDisplay(b.date)}</td>
       <td><strong>${esc(b.number||b.id)}</strong><br><span class="muted">${esc(b.source||'')}</span></td>
       <td>${esc(clientName(b.clientId))}</td>
       <td><strong>${esc(b.title||jobName(b.jobId)||'')}</strong><br><span class="muted">${esc(byId(data.jobs,b.jobId)?.address||'')}</span></td>
-      <td><select class="status-select" data-budget-status="${esc(b.id)}">${budgetStatusOptions(b.status||'Esborrany')}</select></td>
+      <td><select class="status-select" data-budget-status="${esc(b.id)}" data-no-row-open>${budgetStatusOptions(b.status||'Esborrany')}</select></td>
       <td class="num">${money(budgetBase(b))}</td>
       <td class="num"><strong>${money(budgetTotal(b))}</strong></td>
+      <td>${esc(calcType)}</td>
       <td class="num">${(b.lines||[]).length}</td>
-      <td class="nowrap"><button class="ghost small" data-edit-budget="${esc(b.id)}">Editar</button> <button class="danger small" data-delete-budget="${esc(b.id)}">Eliminar</button></td>
-    </tr>`));
+      <td class="nowrap"><button class="ghost small" data-edit-budget="${esc(b.id)}" data-no-row-open>Veure / editar</button> <button class="danger small" data-delete-budget="${esc(b.id)}" data-no-row-open>Eliminar</button></td>
+    </tr>`}));
 }
 function renderBudgets(editId=''){
   setHeader('Pressupostos','Llistat complet de pressupostos importats o creats, amb any, client, feina, estat i partides.');
@@ -461,7 +474,7 @@ function renderBudgets(editId=''){
       <div class="kpi"><span>Acceptats / fets</span><strong>${data.budgets.filter(b=>strip(b.status).includes('acceptat')||strip(b.status).includes('fet')).length}</strong></div>
       <div class="kpi"><span>Rebutjats / anul·lats</span><strong>${data.budgets.filter(b=>strip(b.status).includes('rebutjat')||strip(b.status).includes('anul')).length}</strong></div>
     </div>
-    <div class="card"><div class="toolbar"><h2>Tots els pressupostos</h2><div class="right"><button class="danger" id="deleteSelectedBudgets">Eliminar seleccionats</button><button class="primary" id="newBudgetBtn">+ Nou pressupost</button><button class="ghost" id="exportBudgetCsv">Exportar CSV del seleccionat</button></div></div>
+    <div class="card"><div class="toolbar"><h2>Tots els pressupostos</h2><div class="right"><button class="ghost" id="selectAllBudgets">Seleccionar tot</button><button class="ghost" id="clearSelectedBudgets">Desmarcar</button><button class="danger" id="deleteSelectedBudgets">Eliminar seleccionats</button><button class="primary" id="newBudgetBtn">+ Nou pressupost</button><button class="ghost" id="exportBudgetCsv">Exportar CSV del seleccionat</button></div></div>
       <div class="filter-grid">
         <label>Cerca<input id="budgetSearch" placeholder="Client, obra, núm., adreça, any..." value="${esc(state.budgetSearch||'')}"></label>
         <label>Any<select id="budgetYearFilter"><option value="">Tots</option>${years.map(y=>`<option value="${y}" ${String(y)===String(state.budgetYearFilter||'')?'selected':''}>${y}</option>`).join('')}</select></label>
@@ -471,8 +484,7 @@ function renderBudgets(editId=''){
       <div id="budgetFilterInfo" class="small-text" style="margin:10px 0">Mostrant ${rows.length} de ${data.budgets.length} pressupostos.</div>
       <div id="budgetsTable">${budgetsTable(rows)}</div>
     </div>
-    ${editing ? budgetFormCard(editing, state.editBudgetId==='__new') : '<div class="empty">Selecciona “Editar” en un pressupost o crea’n un de nou per veure la fitxa i les partides.</div>'}
-    ${editing && editing.id ? budgetLinesCard(editing) : ''}
+    <div class="empty">Clica sobre qualsevol pressupost o al botó “Veure / editar” per obrir-ne la fitxa completa en una finestra superior.</div>
   `);
 }
 function budgetFormCard(formBudget,isNew=false){
@@ -506,12 +518,25 @@ function filterBudgets(){
   bindViewEvents();
 }
 function budgetLinesCard(b){
-  return `<div class="card"><div class="toolbar"><h2>Partides del pressupost</h2><div class="right"><button class="danger" id="deleteSelectedBudgetLines">Eliminar línies seleccionades</button><button class="primary" id="addLineFromLibrary">Afegir de llibreria</button><button class="ghost" id="addManualLine">Afegir partida nova</button></div></div>
+  return `<div class="card"><div class="toolbar"><h2>Partides del pressupost</h2><div class="right"><button class="ghost" id="selectAllBudgetLines">Seleccionar tot</button><button class="ghost" id="clearSelectedBudgetLines">Desmarcar</button><button class="danger" id="deleteSelectedBudgetLines">Eliminar línies seleccionades</button><button class="primary" id="addLineFromLibrary">Afegir de llibreria</button><button class="ghost" id="addManualLine">Afegir partida nova</button></div></div>
     <div class="table-wrap budget-lines"><table><thead><tr><th>Sel.</th><th>Codi</th><th>Ut</th><th>Concepte / descripció</th><th>Quantitat</th><th>Preu/ut</th><th>Total</th><th>Estat</th><th></th></tr></thead><tbody>${(b.lines||[]).map(l=>`
       <tr><td><input type="checkbox" class="select-budget-line" value="${esc(l.id)}"></td><td><input data-line-field="code" data-line-id="${esc(l.id)}" value="${esc(l.code||'')}"></td><td><input data-line-field="unit" data-line-id="${esc(l.id)}" value="${esc(l.unit||'')}"></td><td><input data-line-field="concept" data-line-id="${esc(l.id)}" value="${esc(l.concept||'')}"><div class="long muted">${esc(l.longDesc||'')}</div></td><td><input class="num" data-line-field="qty" data-line-id="${esc(l.id)}" type="number" step="0.0001" value="${esc(l.qty||'')}"></td><td><input class="num" data-line-field="unitPrice" data-line-id="${esc(l.id)}" type="number" step="0.01" value="${esc(l.unitPrice||'')}"></td><td class="num"><strong>${money(lineTotal(l))}</strong></td><td>${statusPill(l.status||'')}</td><td><button class="danger small" data-delete-line="${esc(l.id)}">Eliminar</button></td></tr>`).join('')}</tbody></table></div>
     <div class="budget-total"><div>Base: <strong>${money(budgetBase(b))}</strong></div><div>IVA: <strong>${money(budgetIVA(b))}</strong></div><div>Total: <strong>${money(budgetTotal(b))}</strong></div></div>
     ${budgetLineSum(b)===0 && num(b.importedBase)>0 ? `<div class="small-text" style="text-align:right;margin-top:6px">Base presa del total detectat a l’Excel original; les línies separades per * queden pendents de preu/amidament.</div>` : ''}
   </div>`;
+}
+function openBudgetModal(id=''){
+  const isNew = id === '__new' || !id;
+  const b = isNew ? {id:'', lines:[], date:today(), ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, iva:data.settings.defaultIVA, status:'Esborrany'} : byId(data.budgets,id);
+  if(!b) return alert('No s’ha trobat aquest pressupost.');
+  state.editBudgetId = isNew ? '__new' : b.id;
+  state.selectedBudgetId = isNew ? '' : b.id;
+  openModal(`
+    <h2>${isNew?'Nou pressupost':'Pressupost · '+esc(b.number||b.id)}</h2>
+    <div class="notice-blue card-tight">${isNew?'Primer guarda la capçalera del pressupost. Després podràs afegir partides de la llibreria o crear-ne de noves.':'Pots editar la capçalera i revisar les partides. Si un import prové del total de l’Excel, queda marcat com a total importat i no com a PU fiable.'}</div>
+    ${budgetFormCard(b,isNew)}
+    ${!isNew ? budgetLinesCard(b) : ''}
+  `);
 }
 function renderInvoices(editId=''){
   setHeader('Factures','Factures associades a pressupostos i feines per calcular rendiment.');
@@ -584,7 +609,7 @@ function renderImporter(){
   const ready = typeof XLSX !== 'undefined';
   setContent(`
     ${!ready?'<div class="card notice-red"><strong>Llibreria Excel no carregada.</strong> Comprova connexió o inclou SheetJS localment. Sense aquesta llibreria no es poden llegir .xls/.xlsx.</div>':''}
-    <div class="card notice-blue"><strong>Criteri d’importació V07:</strong> el client guardat és el del requadre/destinatari del pressupost, no TEIMOR. Les obres es veuen integrades dins la pestanya Pressupostos. En pressupostos antics TEIMOR, l’app llegeix el requadre superior dret com a client, detecta la Data/Fecha adjacent, agafa la BASE IMPOSABLE o imports tipus “Materials i M.O.” com a total del pressupost i separa les línies de TREBALLS marcades amb * com a partides/subpartides pendents de revisar.</div>
+    <div class="card notice-blue"><strong>Criteri d’importació V08:</strong> el client guardat és el del requadre/destinatari del pressupost, no TEIMOR. Les obres es veuen integrades dins la pestanya Pressupostos. En pressupostos antics TEIMOR, l’app llegeix el requadre superior dret com a client, detecta la Data/Fecha adjacent, agafa la BASE IMPOSABLE o imports tipus “Materials i M.O.” com a total del pressupost i separa les línies de TREBALLS marcades amb * com a partides/subpartides pendents de revisar.</div>
     <div class="card"><div id="dropzone" class="dropzone">
       <h2>Importació massiva</h2><p>Arrossega aquí Excels o un ZIP, o fes servir els botons.</p>
       <div class="actions" style="justify-content:center">
@@ -650,6 +675,8 @@ function bindViewEvents(){
   ['clientSearch','clientYearFilter','clientCityFilter','clientStatusFilter'].forEach(id=>{ const el=document.getElementById(id); if(el) el.oninput=filterClients; if(el) el.onchange=filterClients; });
   document.querySelectorAll('[data-edit-client]').forEach(b=>b.onclick=()=>renderClients(b.dataset.editClient));
   document.querySelectorAll('[data-delete-client]').forEach(b=>b.onclick=()=>deleteClient(b.dataset.deleteClient));
+  const selAllClients=document.getElementById('selectAllClients'); if(selAllClients) selAllClients.onclick=()=>setChecked('.select-client',true);
+  const clearClients=document.getElementById('clearSelectedClients'); if(clearClients) clearClients.onclick=()=>setChecked('.select-client',false);
   const delSelClients=document.getElementById('deleteSelectedClients'); if(delSelClients) delSelClients.onclick=deleteSelectedClients;
   document.querySelectorAll('[data-render-clients]').forEach(b=>b.onclick=()=>renderClients());
 
@@ -662,16 +689,24 @@ function bindViewEvents(){
   const libSearch=document.getElementById('libSearch'); if(libSearch) libSearch.oninput=e=>{ state.libSearch=e.target.value; renderLibrary(); };
   const libChapter=document.getElementById('libChapterFilter'); if(libChapter) libChapter.onchange=e=>{ state.libChapterFilter=e.target.value; renderLibrary(); };
   const libStatus=document.getElementById('libStatusFilter'); if(libStatus) libStatus.onchange=e=>{ state.libStatusFilter=e.target.value; renderLibrary(); };
+  const selAllLibrary=document.getElementById('selectAllLibrary'); if(selAllLibrary) selAllLibrary.onclick=()=>setChecked('.select-library',true);
+  const clearLibrary=document.getElementById('clearSelectedLibrary'); if(clearLibrary) clearLibrary.onclick=()=>setChecked('.select-library',false);
   const delSelLib=document.getElementById('deleteSelectedLibrary'); if(delSelLib) delSelLib.onclick=deleteSelectedLibrary;
+  const exportLib=document.getElementById('exportLibraryJson'); if(exportLib) exportLib.onclick=exportLibraryJson;
+  const importLib=document.getElementById('importLibraryJson'); if(importLib) importLib.onchange=importLibraryJson;
   const newLib=document.getElementById('newLibItem'); if(newLib) newLib.onclick=()=>openLibModal('');
   document.querySelectorAll('[data-view-lib]').forEach(b=>b.onclick=()=>openLibModal(b.dataset.viewLib));
   document.querySelectorAll('[data-delete-lib]').forEach(b=>b.onclick=()=>deleteLibraryItem(b.dataset.deleteLib));
 
-  const newBudget=document.getElementById('newBudgetBtn'); if(newBudget) newBudget.onclick=()=>{ state.editBudgetId='__new'; state.selectedBudgetId=''; renderBudgets('__new'); };
+  const newBudget=document.getElementById('newBudgetBtn'); if(newBudget) newBudget.onclick=()=>openBudgetModal('__new');
   const budgetForm=document.getElementById('budgetForm'); if(budgetForm) budgetForm.onsubmit=saveBudget;
+  document.querySelectorAll('[data-render-budgets]').forEach(b=>b.onclick=()=>{ closeModal(); state.editBudgetId=''; renderBudgets(); });
   ['budgetSearch','budgetYearFilter','budgetClientFilter','budgetStatusFilter'].forEach(id=>{ const el=document.getElementById(id); if(el) el.oninput=filterBudgets; if(el) el.onchange=filterBudgets; });
-  document.querySelectorAll('[data-edit-budget]').forEach(b=>b.onclick=()=>{ state.editBudgetId=b.dataset.editBudget; state.selectedBudgetId=b.dataset.editBudget; renderBudgets(b.dataset.editBudget); });
+  document.querySelectorAll('[data-edit-budget]').forEach(b=>b.onclick=()=>openBudgetModal(b.dataset.editBudget));
+  document.querySelectorAll('[data-open-budget]').forEach(row=>row.onclick=e=>{ if(e.target.closest('[data-no-row-open]') || e.target.closest('button') || e.target.closest('select') || e.target.closest('input')) return; openBudgetModal(row.dataset.openBudget); });
   document.querySelectorAll('[data-delete-budget]').forEach(b=>b.onclick=()=>deleteBudget(b.dataset.deleteBudget));
+  const selAllBudgets=document.getElementById('selectAllBudgets'); if(selAllBudgets) selAllBudgets.onclick=()=>setChecked('.select-budget',true);
+  const clearBudgets=document.getElementById('clearSelectedBudgets'); if(clearBudgets) clearBudgets.onclick=()=>setChecked('.select-budget',false);
   const delSelBudgets=document.getElementById('deleteSelectedBudgets'); if(delSelBudgets) delSelBudgets.onclick=deleteSelectedBudgets;
   document.querySelectorAll('[data-budget-status]').forEach(sel=>sel.onchange=e=>updateBudgetStatus(e.target.dataset.budgetStatus,e.target.value));
   document.querySelectorAll('[data-render-budgets]').forEach(b=>b.onclick=()=>{ state.editBudgetId=''; renderBudgets(); });
@@ -680,6 +715,8 @@ function bindViewEvents(){
   const exportBudgetCsv=document.getElementById('exportBudgetCsv'); if(exportBudgetCsv) exportBudgetCsv.onclick=downloadBudgetCsv;
   document.querySelectorAll('[data-line-field]').forEach(inp=>inp.onchange=updateBudgetLine);
   document.querySelectorAll('[data-delete-line]').forEach(b=>b.onclick=()=>deleteBudgetLine(b.dataset.deleteLine));
+  const selAllLines=document.getElementById('selectAllBudgetLines'); if(selAllLines) selAllLines.onclick=()=>setChecked('.select-budget-line',true);
+  const clearLines=document.getElementById('clearSelectedBudgetLines'); if(clearLines) clearLines.onclick=()=>setChecked('.select-budget-line',false);
   const delSelLines=document.getElementById('deleteSelectedBudgetLines'); if(delSelLines) delSelLines.onclick=deleteSelectedBudgetLines;
 
   const invoiceForm=document.getElementById('invoiceForm'); if(invoiceForm) invoiceForm.onsubmit=saveInvoice;
@@ -711,20 +748,22 @@ function formObj(form){ return Object.fromEntries(new FormData(form).entries());
 function saveClient(e){ e.preventDefault(); const f=formObj(e.target); const c={id:f.id,name:f.name,nif:f.nif,phone:f.phone,email:f.email,contact:f.contact,fiscalAddress:f.fiscalAddress,workAddress:f.workAddress,city:f.city,status:f.status,notes:f.notes}; const idx=data.clients.findIndex(x=>x.id===f.editId || x.id===c.id); if(idx>=0) data.clients[idx]=c; else data.clients.push(c); saveData(); renderClients(); }
 function deleteClient(id){ if(!confirm('Eliminar aquest client? Les feines i pressupostos vinculats quedaran sense client.')) return; data.clients=data.clients.filter(x=>x.id!==id); data.jobs.forEach(j=>{ if(j.clientId===id) j.clientId=''; }); data.budgets.forEach(b=>{ if(b.clientId===id) b.clientId=''; }); data.invoices.forEach(i=>{ if(i.clientId===id) i.clientId=''; }); saveData(); renderClients(); }
 function selectedValues(selector){ return [...document.querySelectorAll(selector+':checked')].map(x=>x.value); }
+function setChecked(selector, checked=true){ document.querySelectorAll(selector).forEach(x=>{ x.checked=checked; }); }
+function isModalOpen(){ return !document.getElementById('modal')?.classList.contains('hidden'); }
 function deleteSelectedClients(){ const ids=selectedValues('.select-client'); if(!ids.length) return alert('No has seleccionat cap client.'); if(!confirm(`Eliminar ${ids.length} client/s seleccionat/s? Les feines i pressupostos vinculats quedaran sense client.`)) return; data.clients=data.clients.filter(x=>!ids.includes(x.id)); data.jobs.forEach(j=>{ if(ids.includes(j.clientId)) j.clientId=''; }); data.budgets.forEach(b=>{ if(ids.includes(b.clientId)) b.clientId=''; }); data.invoices.forEach(i=>{ if(ids.includes(i.clientId)) i.clientId=''; }); saveData(); renderClients(); }
 
 function saveJob(e){ e.preventDefault(); const f=formObj(e.target); const j={id:f.id,year:Number(f.year)||new Date().getFullYear(),clientId:f.clientId,title:f.title,address:f.address,city:f.city,status:f.status,notes:f.notes,mainBudgetId:byId(data.jobs,f.editId)?.mainBudgetId||''}; const idx=data.jobs.findIndex(x=>x.id===f.editId || x.id===j.id); if(idx>=0) data.jobs[idx]=j; else data.jobs.push(j); saveData(); renderJobs(); }
 function deleteJob(id){ if(!confirm('Eliminar aquesta feina/obra? Els pressupostos vinculats quedaran sense feina.')) return; data.jobs=data.jobs.filter(x=>x.id!==id); data.budgets.forEach(b=>{ if(b.jobId===id) b.jobId=''; }); data.invoices.forEach(i=>{ if(i.jobId===id) i.jobId=''; }); saveData(); renderJobs(); }
-function saveBudget(e){ e.preventDefault(); const f=formObj(e.target); const old=byId(data.budgets,f.id); const b={...(old||{}), id:f.id, number:f.number, date:f.date, clientId:f.clientId, jobId:f.jobId, title:f.title, status:f.status, ci:num(f.ci), dge:num(f.dge), bi:num(f.bi), iva:num(f.iva), importedBase:num(f.importedBase), notes:f.notes, lines:old?.lines||[]}; const idx=data.budgets.findIndex(x=>x.id===b.id); if(idx>=0) data.budgets[idx]=b; else data.budgets.push(b); state.selectedBudgetId=b.id; state.editBudgetId=b.id; const job=byId(data.jobs,b.jobId); if(job && !job.mainBudgetId) job.mainBudgetId=b.id; saveData(); renderBudgets(b.id); }
+function saveBudget(e){ e.preventDefault(); const f=formObj(e.target); const old=byId(data.budgets,f.id); const b={...(old||{}), id:f.id, number:f.number, date:f.date, clientId:f.clientId, jobId:f.jobId, title:f.title, status:f.status, ci:num(f.ci), dge:num(f.dge), bi:num(f.bi), iva:num(f.iva), importedBase:num(f.importedBase), notes:f.notes, lines:old?.lines||[]}; const idx=data.budgets.findIndex(x=>x.id===b.id); if(idx>=0) data.budgets[idx]=b; else data.budgets.push(b); state.selectedBudgetId=b.id; state.editBudgetId=''; const job=byId(data.jobs,b.jobId); if(job && !job.mainBudgetId) job.mainBudgetId=b.id; saveData(); if(isModalOpen()) closeModal(); renderBudgets(); }
 function updateBudgetStatus(id,status){ const b=byId(data.budgets,id); if(!b) return; b.status=status; saveData(); filterBudgets(); }
 function deleteBudget(id){ if(!confirm('Eliminar aquest pressupost i les seves partides?')) return; data.budgets=data.budgets.filter(x=>x.id!==id); data.jobs.forEach(j=>{ if(j.mainBudgetId===id) j.mainBudgetId=''; }); data.invoices.forEach(i=>{ if(i.budgetId===id) i.budgetId=''; }); if(state.selectedBudgetId===id) state.selectedBudgetId=''; if(state.editBudgetId===id) state.editBudgetId=''; saveData(); renderBudgets(); }
 function deleteSelectedBudgets(){ const ids=selectedValues('.select-budget'); if(!ids.length) return alert('No has seleccionat cap pressupost.'); if(!confirm(`Eliminar ${ids.length} pressupost/os seleccionat/s?`)) return; data.budgets=data.budgets.filter(x=>!ids.includes(x.id)); data.jobs.forEach(j=>{ if(ids.includes(j.mainBudgetId)) j.mainBudgetId=''; }); data.invoices.forEach(i=>{ if(ids.includes(i.budgetId)) i.budgetId=''; }); if(ids.includes(state.selectedBudgetId)) state.selectedBudgetId=''; if(ids.includes(state.editBudgetId)) state.editBudgetId=''; saveData(); renderBudgets(); }
 
-function updateBudgetLine(e){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; const l=(b.lines||[]).find(x=>x.id===e.target.dataset.lineId); if(!l) return; const field=e.target.dataset.lineField; l[field]=['qty','unitPrice'].includes(field)?num(e.target.value):e.target.value; l.total=num(l.qty)*num(l.unitPrice); saveData(); renderBudgets(); }
-function deleteBudgetLine(id){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; b.lines=(b.lines||[]).filter(x=>x.id!==id); saveData(); renderBudgets(); }
-function deleteSelectedBudgetLines(){ const ids=selectedValues('.select-budget-line'); if(!ids.length) return alert('No has seleccionat cap línia.'); const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; if(!confirm(`Eliminar ${ids.length} línia/es seleccionada/es del pressupost?`)) return; b.lines=(b.lines||[]).filter(l=>!ids.includes(l.id)); saveData(); renderBudgets(b.id); }
+function updateBudgetLine(e){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; const l=(b.lines||[]).find(x=>x.id===e.target.dataset.lineId); if(!l) return; const field=e.target.dataset.lineField; l[field]=['qty','unitPrice'].includes(field)?num(e.target.value):e.target.value; if(field==='qty' || field==='unitPrice') l.total=num(l.qty)*num(l.unitPrice); saveData(); if(isModalOpen()) openBudgetModal(b.id); else renderBudgets(); }
+function deleteBudgetLine(id){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; b.lines=(b.lines||[]).filter(x=>x.id!==id); saveData(); if(isModalOpen()) openBudgetModal(b.id); else renderBudgets(); }
+function deleteSelectedBudgetLines(){ const ids=selectedValues('.select-budget-line'); if(!ids.length) return alert('No has seleccionat cap línia.'); const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; if(!confirm(`Eliminar ${ids.length} línia/es seleccionada/es del pressupost?`)) return; b.lines=(b.lines||[]).filter(l=>!ids.includes(l.id)); saveData(); if(isModalOpen()) openBudgetModal(b.id); else renderBudgets(b.id); }
 
-function addManualLine(){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; b.lines=b.lines||[]; b.lines.push({id:uid('LIN'),code:'',chapter:'',unit:'',concept:'Nova partida',longDesc:'',qty:1,unitPrice:0,total:0,status:'Manual pendent revisar',origin:'Manual'}); saveData(); renderBudgets(); }
+function addManualLine(){ const b=byId(data.budgets,state.selectedBudgetId); if(!b) return; b.lines=b.lines||[]; b.lines.push({id:uid('LIN'),code:'',chapter:'',unit:'',concept:'Nova partida',longDesc:'',qty:1,unitPrice:0,total:0,status:'Manual pendent revisar',origin:'Manual'}); saveData(); if(isModalOpen()) openBudgetModal(b.id); else renderBudgets(); }
 function openAddLineFromLibrary(){
   const b=byId(data.budgets,state.selectedBudgetId); if(!b) return;
   openModal(`<h2>Afegir partida de llibreria</h2><div class="toolbar"><input id="addLibSearch" placeholder="Cercar partida..." style="max-width:420px"></div><div id="addLibResults">${addLibResultsHtml(data.library.slice(0,60), b)}</div>`);
@@ -744,6 +783,15 @@ function bindModalEvents(){
   const close=document.getElementById('closeModalBtn'); if(close) close.onclick=closeModal;
   document.querySelectorAll('[data-modal-tab]').forEach(btn=>btn.onclick=()=>{ const key=btn.dataset.modalTab; document.querySelectorAll('[data-modal-tab]').forEach(b=>b.classList.toggle('active', b===btn)); document.querySelectorAll('[data-modal-panel]').forEach(p=>p.classList.toggle('active', p.dataset.modalPanel===key)); });
   const libForm=document.getElementById('libForm'); if(libForm) libForm.onsubmit=saveLibraryItem;
+  const budgetForm=document.getElementById('budgetForm'); if(budgetForm) budgetForm.onsubmit=saveBudget;
+  document.querySelectorAll('[data-render-budgets]').forEach(b=>b.onclick=()=>{ closeModal(); state.editBudgetId=''; renderBudgets(); });
+  document.querySelectorAll('[data-line-field]').forEach(inp=>inp.onchange=updateBudgetLine);
+  document.querySelectorAll('[data-delete-line]').forEach(b=>b.onclick=()=>deleteBudgetLine(b.dataset.deleteLine));
+  const selAllLines=document.getElementById('selectAllBudgetLines'); if(selAllLines) selAllLines.onclick=()=>setChecked('.select-budget-line',true);
+  const clearLines=document.getElementById('clearSelectedBudgetLines'); if(clearLines) clearLines.onclick=()=>setChecked('.select-budget-line',false);
+  const delSelLines=document.getElementById('deleteSelectedBudgetLines'); if(delSelLines) delSelLines.onclick=deleteSelectedBudgetLines;
+  const addLib=document.getElementById('addLineFromLibrary'); if(addLib) addLib.onclick=openAddLineFromLibrary;
+  const addManual=document.getElementById('addManualLine'); if(addManual) addManual.onclick=()=>addManualLine();
   const add=document.getElementById('addDecompLine'); if(add) add.onclick=()=>{ const tbody=document.querySelector('#decompTable tbody'); const i=tbody.querySelectorAll('[data-decomp-row]').length; tbody.insertAdjacentHTML('beforeend', decompRow({},i)); bindModalEvents(); };
   document.querySelectorAll('[data-remove-decomp]').forEach(b=>b.onclick=()=>b.closest('tr').remove());
 }
@@ -760,6 +808,27 @@ function saveLibraryItem(e){
 }
 function deleteLibraryItem(id){ if(!confirm('Eliminar aquesta partida de la llibreria? Les línies ja inserides en pressupostos no s’esborraran.')) return; data.library=data.library.filter(x=>x.id!==id); saveData(); renderLibrary(); }
 function deleteSelectedLibrary(){ const ids=selectedValues('.select-library'); if(!ids.length) return alert('No has seleccionat cap partida.'); if(!confirm(`Eliminar ${ids.length} partida/es de la llibreria? Les línies ja inserides en pressupostos no s’esborraran.`)) return; data.library=data.library.filter(x=>!ids.includes(x.id)); saveData(); renderLibrary(); }
+function exportLibraryJson(){
+  const payload={type:'TEIMOR_LIBRARY',version:data.meta?.version||'8.0.0',exportedAt:new Date().toISOString(),library:data.library||[]};
+  downloadText(JSON.stringify(payload,null,2), `TEIMOR_llibreria_partides_${today()}.json`, 'application/json');
+}
+async function importLibraryJson(e){
+  const file=e.target.files?.[0]; if(!file) return;
+  try{
+    const obj=JSON.parse(await file.text());
+    const rows=Array.isArray(obj) ? obj : (obj.library || obj.partides || []);
+    if(!rows.length) return alert('Aquest JSON no conté partides de llibreria.');
+    let added=0, merged=0;
+    for(const raw of rows){
+      const item={...raw,id:raw.id||uid('LIB'),decomp:raw.decomp||[],history:raw.history||[]};
+      const existing=findExistingLibraryItem(item) || data.library.find(x=>x.id===item.id);
+      if(existing){ Object.assign(existing,{...existing,...item,id:existing.id}); merged++; }
+      else { data.library.push(item); added++; }
+    }
+    saveData(); alert(`Llibreria importada. Noves: ${added}. Actualitzades/possibles duplicades: ${merged}.`); renderLibrary();
+  }catch(err){ console.error(err); alert('No s’ha pogut importar la llibreria JSON.'); }
+  e.target.value='';
+}
 
 
 function openIdb(){
@@ -785,7 +854,7 @@ async function deleteAttachment(id){ if(!confirm('Eliminar arxiu local?')) retur
 async function exportPackageZip(){
   if(typeof JSZip === 'undefined') return alert('No s’ha carregat JSZip. Prova exportar JSON complet o revisa la connexió.');
   const zip=new JSZip();
-  const payload={...data, exportedAt:new Date().toISOString(), packageType:'TEIMOR_V06_COMPLET'};
+  const payload={...data, exportedAt:new Date().toISOString(), packageType:'TEIMOR_V08_COMPLET'};
   zip.file('teimor_dades_completes.json', JSON.stringify(payload,null,2));
   zip.file('README.txt', 'Paquet exportat des de TEIMOR Gestor. Aquest ZIP és compatible amb WinRAR. Per seguretat, pot contenir dades personals si has exportat la còpia completa.');
   const folder=zip.folder('arxius_incrustats');
@@ -916,7 +985,7 @@ function detectClient(fileName, flat){
   return {id:uid('CLI'), tempKey:uid('TMPCLI'), name, nif, phone, email, contact:'', fiscalAddress:recipient.fiscalAddress||'', workAddress, city, status:'Actiu', source:fileName, notes:'Client detectat automàticament del requadre/destinatari. Revisar si cal.'};
 }
 function detectRecipientBlock(flat){
-  // V07: el client TEIMOR és el bloc/requadre superior dret. No fem servir el cos del pressupost.
+  // V08: el client TEIMOR és el bloc/requadre superior dret. No fem servir el cos del pressupost.
   // Ordre habitual dins el requadre: nom client → adreça → CP/població → província o NIF/DNI/CIF.
   const blocks=[];
   const bySheet={};
