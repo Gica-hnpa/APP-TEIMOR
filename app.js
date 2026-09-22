@@ -4448,3 +4448,362 @@ bindModalEvents=function(){
   const chapterForm=document.getElementById('libraryChapterForm');
   if(chapterForm) chapterForm.onsubmit=saveLibraryChapterV099;
 };
+
+/* =========================================================
+   TEIMOR V09.10 · FUSIÓ CONTROLADA DE CLIENTS I IMPORTACIÓ NETA
+   - Fusiona duplicats segurs mantenint una única fitxa de client.
+   - Reassigna obres, pressupostos, factures i adjunts sense perdre dades.
+   - Conserva totes les adreces d’obra i els fitxers d’origen.
+   - No incorpora files sense preu ni línies de mesurament com a partides.
+   - Evita duplicar partides quan el mateix Excel té pestanyes repetides.
+   ========================================================= */
+
+data.meta = data.meta || {};
+data.meta.version = '9.10.0-fusio-clients-importacio-neta';
+data.clientMergeBackups = Array.isArray(data.clientMergeBackups) ? data.clientMergeBackups : [];
+
+function teimor0910Clone(value){
+  return JSON.parse(JSON.stringify(value));
+}
+function teimor0910MeaningfulName(client){
+  const name=cleanText(client?.name);
+  return !!name && !/^client pendent de revisar$/i.test(name) && (typeof teimor099MeaningfulClientName==='function' ? teimor099MeaningfulClientName(client) : name.length>2);
+}
+function teimor0910Nif(client){
+  const source=cleanText(client?.nif || client?.fiscalAddress || '');
+  const match=source.match(/\b(?!B55271159\b)([A-HJNP-SUVW][0-9]{7}[0-9A-J]|[0-9]{8}[A-Z]|[XYZ][0-9]{7}[A-Z])\b/i);
+  return (match ? match[0] : client?.nif || '').toUpperCase().replace(/[^A-Z0-9]/g,'');
+}
+function teimor0910Email(client){
+  return strip(client?.email || '').replace(/\s+/g,'');
+}
+function teimor0910Phone(client){
+  const value=String(client?.phone || '').replace(/\D/g,'');
+  return value.length>=8 ? value.slice(-9) : '';
+}
+function teimor0910NormName(value){
+  return normKey(value).replace(/\b(s\s*l\s*u|s\s*l|s\s*a|slu|sl|sa)\b/g,'').replace(/\s+/g,' ').trim();
+}
+function teimor0910NormAddress(value){
+  return normKey(value).replace(/\b(puerta|porta|piso|planta|esc|escalera|escala)\b/g,'').replace(/\s+/g,' ').trim();
+}
+function teimor0910ClientIdentity(client){
+  return {
+    name:teimor0910NormName(client?.name),
+    nif:teimor0910Nif(client),
+    email:teimor0910Email(client),
+    phone:teimor0910Phone(client),
+    fiscal:teimor0910NormAddress(client?.fiscalAddress),
+    work:teimor0910NormAddress(client?.workAddress),
+    city:normKey(client?.city)
+  };
+}
+function teimor0910ClientRelation(a,b){
+  const left=teimor0910ClientIdentity(a), right=teimor0910ClientIdentity(b);
+  if(left.nif && left.nif===right.nif) return 'Mateix NIF/CIF/DNI';
+  if(left.email && left.email===right.email && (left.name===right.name || !left.name || !right.name)) return 'Mateix email i nom';
+  if(left.phone && left.phone===right.phone && (left.name===right.name || !left.name || !right.name)) return 'Mateix telèfon i nom';
+  if(left.name && left.name===right.name && left.fiscal && left.fiscal===right.fiscal) return 'Mateix nom i dades fiscals';
+  if(left.name && left.name===right.name && left.work && left.work===right.work) return 'Mateix nom i adreça d’obra';
+  return '';
+}
+function teimor0910DuplicateGroups(list){
+  const items=(list||[]).filter(Boolean);
+  const parent=items.map((_,index)=>index);
+  const findRoot=index=>{
+    let root=index;
+    while(parent[root]!==root) root=parent[root];
+    while(parent[index]!==index){ const next=parent[index]; parent[index]=root; index=next; }
+    return root;
+  };
+  const union=(a,b)=>{
+    const ra=findRoot(a), rb=findRoot(b);
+    if(ra!==rb) parent[rb]=ra;
+  };
+  for(let i=0;i<items.length;i++){
+    for(let j=i+1;j<items.length;j++){
+      const reason=teimor0910ClientRelation(items[i],items[j]);
+      if(!reason) continue;
+      union(i,j);
+    }
+  }
+  const grouped=new Map();
+  items.forEach((item,index)=>{
+    const root=findRoot(index);
+    if(!grouped.has(root)) grouped.set(root,[]);
+    grouped.get(root).push(item);
+  });
+  return [...grouped.entries()]
+    .filter(([,members])=>members.length>1)
+    .map(([,members])=>{
+      const reasons=[];
+      for(let i=0;i<members.length;i++) for(let j=i+1;j<members.length;j++){
+        const reason=teimor0910ClientRelation(members[i],members[j]);
+        if(reason && !reasons.includes(reason)) reasons.push(reason);
+      }
+      return {members,reason:(reasons.length?reasons:['Dades d’identificació coincidents']).join(' · ')};
+    });
+}
+function teimor0910ClientScore(client){
+  let score=0;
+  if(teimor0910MeaningfulName(client)) score+=100;
+  if(teimor0910Nif(client)) score+=50;
+  if(teimor0910Email(client)) score+=25;
+  if(teimor0910Phone(client)) score+=20;
+  if(teimor0910NormAddress(client?.fiscalAddress)) score+=15;
+  if(teimor0910NormAddress(client?.workAddress)) score+=5;
+  score+=Math.min(20,(client?.sourceFiles||[]).length);
+  score+=Math.min(20,(data.budgets||[]).filter(b=>b.clientId===client.id).length*2);
+  return score;
+}
+function teimor0910MergeClientFields(target,source){
+  const targetName=teimor0910MeaningfulName(target);
+  const sourceName=teimor0910MeaningfulName(source);
+  if(!targetName && sourceName) target.name=source.name;
+  for(const field of ['nif','email','phone','contact','fiscalAddress','city','status']){
+    if(!cleanText(target[field]) && cleanText(source[field])) target[field]=source[field];
+  }
+  const names=[...(target.alternateNames||[]),target.name,source.name].filter(name=>teimor0910MeaningfulName({name}));
+  target.alternateNames=[...new Set(names.map(cleanText).filter(Boolean))];
+  const workAddresses=[...(target.workAddresses||[]),target.workAddress,...(source.workAddresses||[]),source.workAddress].map(cleanText).filter(Boolean);
+  target.workAddresses=[...new Set(workAddresses)];
+  if(!target.workAddress) target.workAddress=target.workAddresses[0]||'';
+  const fiscalAddresses=[...(target.fiscalAddresses||[]),target.fiscalAddress,...(source.fiscalAddresses||[]),source.fiscalAddress].map(cleanText).filter(Boolean);
+  target.fiscalAddresses=[...new Set(fiscalAddresses)];
+  if(!target.fiscalAddress) target.fiscalAddress=target.fiscalAddresses[0]||'';
+  const sources=[...(target.sourceFiles||[]),target.source,...(source.sourceFiles||[]),source.source].filter(Boolean);
+  target.sourceFiles=[...new Set(sources.flatMap(value=>String(value).split(' | ').map(cleanText).filter(Boolean)))];
+  target.source=target.sourceFiles.join(' | ');
+  target.notes=[target.notes,source.notes].filter(Boolean).join('\n');
+  target.reviewIssues=[...new Set([...(target.reviewIssues||[]),...(source.reviewIssues||[])])];
+  target.needsReview=!teimor0910MeaningfulName(target) || target.reviewIssues.length>0;
+  target.duplicateReview='validat';
+  target.duplicateReviewDate=today();
+  target.mergedFromIds=[...new Set([...(target.mergedFromIds||[]),source.id].filter(Boolean))];
+  return target;
+}
+function teimor0910ReferenceCollections(){
+  return ['jobs','budgets','invoices','attachments','agenda','certifications','certificates','payments'];
+}
+function teimor0910SnapshotReferences(ids){
+  const snapshot={};
+  for(const collection of teimor0910ReferenceCollections()){
+    if(!Array.isArray(data[collection])) continue;
+    const affected=data[collection].filter(item=>ids.includes(item?.clientId));
+    if(affected.length) snapshot[collection]=affected.map(item=>({id:item.id,data:teimor0910Clone(item)}));
+  }
+  return snapshot;
+}
+function teimor0910RepointReferences(ids,newId){
+  for(const collection of teimor0910ReferenceCollections()){
+    if(!Array.isArray(data[collection])) continue;
+    data[collection].forEach(item=>{
+      if(ids.includes(item?.clientId)) item.clientId=newId;
+    });
+  }
+}
+function teimor0910MergeGroup(group){
+  const members=[...(group.members||[])].sort((a,b)=>teimor0910ClientScore(b)-teimor0910ClientScore(a));
+  const canonical=members[0];
+  const oldIds=members.slice(1).map(client=>client.id).filter(Boolean);
+  members.slice(1).forEach(client=>teimor0910MergeClientFields(canonical,client));
+  const workFromJobs=(data.jobs||[]).filter(job=>[canonical.id,...oldIds].includes(job.clientId)).map(job=>job.address).filter(Boolean);
+  canonical.workAddresses=[...new Set([...(canonical.workAddresses||[]),...workFromJobs.map(cleanText).filter(Boolean)])];
+  if(!canonical.workAddress) canonical.workAddress=canonical.workAddresses[0]||'';
+  teimor0910RepointReferences(oldIds,canonical.id);
+  data.clients=data.clients.filter(client=>!oldIds.includes(client.id));
+  canonical.mergedDuplicateCount=(canonical.mergedDuplicateCount||0)+oldIds.length;
+  canonical.mergeStatus='Fusionat automàticament';
+  canonical.mergeGroupReason=group.reason;
+  canonical.notes=[canonical.notes,'Clients duplicats fusionats automàticament el '+today()+'. Motiu: '+group.reason+'.'].filter(Boolean).join('\n');
+  return {canonicalId:canonical.id,removedIds:oldIds};
+}
+function teimor0910MergeSafeDuplicateClients(){
+  const groups=teimor0910DuplicateGroups(data.clients||[]);
+  if(!groups.length) return alert('No hi ha duplicats segurs per fusionar.');
+  data.clientMergeBackups=Array.isArray(data.clientMergeBackups) ? data.clientMergeBackups : [];
+  const allIds=groups.flatMap(group=>group.members.map(client=>client.id)).filter(Boolean);
+  const backup={
+    id:uid('CLIBACK'),
+    date:new Date().toISOString(),
+    beforeClients:teimor0910Clone(data.clients||[]),
+    beforeReferences:teimor0910SnapshotReferences(allIds),
+    groups:groups.map(group=>({reason:group.reason,ids:group.members.map(client=>client.id)}))
+  };
+  if(!confirm('Fusionar '+groups.length+' grup/s de clients i conservar una sola fitxa per client?\\n\\nNo es perdran pressupostos ni obres: es reassociaran a la fitxa principal.')) return;
+  const result=groups.map(teimor0910MergeGroup);
+  data.clientMergeBackups.push(backup);
+  if(data.clientMergeBackups.length>5) data.clientMergeBackups=data.clientMergeBackups.slice(-5);
+  data.importLogs=data.importLogs||[];
+  data.importLogs.push({id:uid('CLIENTMERGE'),date:new Date().toISOString(),type:'Fusió automàtica de clients duplicats',groups:groups.length,removedClients:result.reduce((sum,item)=>sum+item.removedIds.length,0),reasons:groups.map(group=>group.reason)});
+  state.selectedClientId='';
+  saveData();
+  alert('Depuració completada: '+result.reduce((sum,item)=>sum+item.removedIds.length,0)+' fitxes duplicades fusionades en '+groups.length+' client/s principals.');
+  renderClients();
+}
+function teimor0910RestoreLastClientMerge(){
+  const backup=data.clientMergeBackups?.[data.clientMergeBackups.length-1];
+  if(!backup) return alert('No hi ha cap fusió de clients per restaurar.');
+  if(!confirm('Restaurar la darrera fusió de clients? Es tornaran a crear les fitxes duplicades i es reassignaran els pressupostos al seu estat anterior.')) return;
+  data.clients=teimor0910Clone(backup.beforeClients||[]);
+  for(const [collection,items] of Object.entries(backup.beforeReferences||{})){
+    if(!Array.isArray(data[collection])) continue;
+    for(const snapshot of items){
+      const index=data[collection].findIndex(item=>item.id===snapshot.id);
+      if(index>=0) data[collection][index]=teimor0910Clone(snapshot.data);
+      else data[collection].push(teimor0910Clone(snapshot.data));
+    }
+  }
+  data.clientMergeBackups.pop();
+  data.importLogs=data.importLogs||[];
+  data.importLogs.push({id:uid('CLIENTRESTORE'),date:new Date().toISOString(),type:'Restauració de fusió de clients',backupId:backup.id});
+  saveData();
+  renderClients();
+}
+
+const __teimorBaseMergeClientDataV0910=teimor099MergeClientData;
+teimor099CanMergeClients=function(a,b){
+  return !!teimor0910ClientRelation(a,b);
+};
+teimor099MergeClientData=function(target,source){
+  const merged={...target};
+  return teimor0910MergeClientFields(merged,source);
+};
+
+const __teimorBaseClientDiagnosticsHtmlV0910=teimor099ClientDiagnosticsHtml;
+teimor099ClientDiagnosticsHtml=function(){
+  const groups=teimor0910DuplicateGroups(data.clients||[]);
+  const restore=data.clientMergeBackups?.length ? '<button class="ghost small" data-restore-client-merge>Restaurar darrera fusió</button>' : '';
+  const action=groups.length
+    ? '<div class="card notice-blue"><strong>Depuració automàtica disponible:</strong> he trobat '+groups.length+' grup/s amb dades d’identificació coincidents. La fusió mantindrà totes les obres, pressupostos, orígens i adreces d’obra dins d’un únic client.<div class="actions"><button class="primary" data-merge-safe-clients>Fusionar duplicats segurs</button>'+restore+'</div></div>'
+    : (restore ? '<div class="card notice-blue"><strong>Última depuració de clients guardada.</strong><div class="actions">'+restore+'</div></div>' : '');
+  return action+__teimorBaseClientDiagnosticsHtmlV0910();
+};
+const __teimorBaseBindClientDiagnosticEventsV0910=teimor099BindClientDiagnosticEvents;
+teimor099BindClientDiagnosticEvents=function(){
+  __teimorBaseBindClientDiagnosticEventsV0910();
+  document.querySelectorAll('[data-merge-safe-clients]').forEach(button=>button.onclick=teimor0910MergeSafeDuplicateClients);
+  document.querySelectorAll('[data-restore-client-merge]').forEach(button=>button.onclick=teimor0910RestoreLastClientMerge);
+};
+
+const __teimorBaseDetectItemsFromSheetV0910=detectItemsFromSheet;
+let teimor0910CurrentItemStats=null;
+function teimor0910IsMeasurementSheet(sheetName){
+  return /(amidament|amidaments|medicio|medició|medicion|mediciones|measurement|mesurament)/i.test(strip(sheetName));
+}
+function teimor0910IsSummaryItem(item){
+  const concept=strip([item?.concept,item?.longDesc].filter(Boolean).join(' '));
+  return /^(sub)?total\b|^base\s+(imposable|imponible)\b|^iva\b|^impostos?\b|^impuestos?\b|^resum\b/.test(concept) && !item?.unit && !num(item?.qty);
+}
+function teimor0910HasRealPrice(item){
+  return num(item?.unitPrice)>0 || num(item?.total)>0;
+}
+function teimor0910LooksMeasurementOnly(item){
+  const unit=strip(item?.unit);
+  const qty=num(item?.qty), pu=num(item?.unitPrice), total=num(item?.total);
+  const text=strip([item?.concept,item?.longDesc].filter(Boolean).join(' '));
+  if(!unit) return false;
+  if(!pu && !total) return true;
+  if(!pu && /(amidament|medicio|medicion|measurement|mesurament)/.test(text)) return true;
+  if(!pu && total && !qty && !/^pa$|^u$|^ud$|^ut$/.test(unit) && !/(€|preu|precio|import|total)/.test(text)) return true;
+  return false;
+}
+function teimor0910HasStructuredHeader(aoa){
+  const rows=(aoa||[]).slice(0,100).map(row=>(row||[]).map(teimor099CellText));
+  return rows.some(row=>{
+    const map=headerMapV099(row);
+    const score=['desc','unit','qty','pu','total'].filter(key=>map[key]!==undefined).length;
+    return score>=3 && (map.desc!==undefined || map.total!==undefined);
+  });
+}
+function teimor0910DetectItemsFromSheet(fileName,sheetName,aoa){
+  const rows=(aoa||[]).map(row=>(row||[]).map(teimor099CellText));
+  const candidates=(teimor0910HasStructuredHeader(aoa) ? parseWithHeader(rows,fileName,sheetName) : __teimorBaseDetectItemsFromSheetV0910(fileName,sheetName,aoa))||[];
+  const kept=[];
+  for(const item of candidates){
+    const enriched={...item,importSheet:sheetName};
+    if(teimor0910CurrentItemStats) teimor0910CurrentItemStats.candidates++;
+    const keep=teimor0910HasRealPrice(enriched) && !teimor0910IsSummaryItem(enriched) && !teimor0910LooksMeasurementOnly(enriched);
+    if(keep) kept.push(enriched);
+    else if(teimor0910CurrentItemStats){
+      if(!teimor0910HasRealPrice(enriched)) teimor0910CurrentItemStats.ignoredNoPrice++;
+      else if(teimor0910IsSummaryItem(enriched)) teimor0910CurrentItemStats.ignoredSummary++;
+      else if(teimor0910LooksMeasurementOnly(enriched)) teimor0910CurrentItemStats.ignoredMeasurementRows++;
+    }
+  }
+  if(teimor0910CurrentItemStats) teimor0910CurrentItemStats.accepted+=kept.length;
+  return kept;
+}
+detectItemsFromSheet=teimor0910DetectItemsFromSheet;
+
+const __teimorBaseParseWorkbookV0910=parseWorkbook;
+function teimor0910MeasurementSheetNames(arrayBuffer){
+  const names=new Set();
+  const wb=XLSX.read(arrayBuffer,{type:'array',cellDates:true,raw:true,cellNF:true,cellText:true});
+  for(const sheetName of wb.SheetNames||[]){
+    if(teimor0910IsMeasurementSheet(sheetName)){ names.add(sheetName); continue; }
+    const rows=XLSX.utils.sheet_to_json(wb.Sheets[sheetName],{header:1,defval:'',raw:true,blankrows:false});
+    const headerText=rows.slice(0,25).flat().map(teimor099CellText).join(' ');
+    if(/(amidament|medicio|medicion|measurement|mesurament)/i.test(strip(headerText)) && !/\b(preu|precio|price|p\.?u\.?|import|importe|total)\b/i.test(strip(headerText))) names.add(sheetName);
+  }
+  return names;
+}
+parseWorkbook=function(fileName,arrayBuffer){
+  const stats={candidates:0,accepted:0,ignoredNoPrice:0,ignoredSummary:0,ignoredMeasurementRows:0,ignoredMeasurementSheetItems:0,duplicatesAcrossSheets:0};
+  const measurementSheetNames=teimor0910MeasurementSheetNames(arrayBuffer);
+  teimor0910CurrentItemStats=stats;
+  const parsed=__teimorBaseParseWorkbookV0910(fileName,arrayBuffer);
+  teimor0910CurrentItemStats=null;
+  let items=(parsed.items||[]).map(item=>({...item,importSheet:item.importSheet||''}));
+  const isMeasurementItem=item=>measurementSheetNames.has(item.importSheet) || teimor0910IsMeasurementSheet(item.importSheet);
+  const measurementItems=items.filter(isMeasurementItem);
+  const normalItems=items.filter(item=>!isMeasurementItem(item));
+  if(normalItems.length && measurementItems.length){
+    stats.ignoredMeasurementSheetItems=measurementItems.length;
+    items=normalItems;
+  }
+  const seen=new Set();
+  const unique=[];
+  for(const item of items){
+    const key=[
+      normKey(item.code||''),
+      normKey(item.chapter||''),
+      normKey(item.unit||''),
+      normKey(item.concept||item.longDesc||''),
+      num(item.qty).toFixed(4),
+      num(item.unitPrice).toFixed(4),
+      num(item.total).toFixed(4)
+    ].join('|');
+    if(seen.has(key)){
+      stats.duplicatesAcrossSheets++;
+      continue;
+    }
+    seen.add(key);
+    unique.push(item);
+  }
+  parsed.items=unique;
+  parsed.budget.lines=unique.map(item=>({...item,id:uid('LIN')}));
+  parsed.parseStats=stats;
+  parsed.budget.parseStats=stats;
+  if(stats.ignoredNoPrice) parsed.warnings.push(fileName+': s’han ignorat '+stats.ignoredNoPrice+' línia/es sense preu o import.');
+  if(stats.ignoredMeasurementRows || stats.ignoredMeasurementSheetItems) parsed.warnings.push(fileName+': s’han ignorat '+(stats.ignoredMeasurementRows+stats.ignoredMeasurementSheetItems)+' línia/es de mesurament.');
+  if(stats.ignoredSummary) parsed.warnings.push(fileName+': s’han ignorat '+stats.ignoredSummary+' subtotal/s o línia/es de resum.');
+  if(stats.duplicatesAcrossSheets) parsed.warnings.push(fileName+': s’han eliminat '+stats.duplicatesAcrossSheets+' duplicat/s detectat/s entre pestanyes.');
+  return parsed;
+};
+
+const __teimorBaseImportPreviewHtmlV0910=importPreviewHtml;
+importPreviewHtml=function(d){
+  const stats=(d.budgets||[]).map(b=>b.parseStats).filter(Boolean);
+  const totalStats=stats.reduce((acc,item)=>{
+    for(const key of Object.keys(acc)) acc[key]+=num(item[key]);
+    return acc;
+  },{ignoredNoPrice:0,ignoredMeasurementRows:0,ignoredMeasurementSheetItems:0,ignoredSummary:0,duplicatesAcrossSheets:0});
+  const notices=[];
+  if(totalStats.ignoredNoPrice) notices.push('Files sense preu/import ignorades: '+totalStats.ignoredNoPrice);
+  if(totalStats.ignoredMeasurementRows || totalStats.ignoredMeasurementSheetItems) notices.push('Línies de mesurament ignorades: '+(totalStats.ignoredMeasurementRows+totalStats.ignoredMeasurementSheetItems));
+  if(totalStats.ignoredSummary) notices.push('Subtotals/resums ignorats: '+totalStats.ignoredSummary);
+  if(totalStats.duplicatesAcrossSheets) notices.push('Duplicats entre pestanyes eliminats: '+totalStats.duplicatesAcrossSheets);
+  const notice=notices.length ? '<div class="card notice-green"><strong>Neteja aplicada abans de confirmar:</strong><ul>'+notices.map(textValue=>'<li>'+esc(textValue)+'</li>').join('')+'</ul></div>' : '';
+  return __teimorBaseImportPreviewHtmlV0910(d).replace('<div class="import-summary">',notice+'<div class="import-summary">');
+};
