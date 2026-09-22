@@ -48,7 +48,7 @@ button,input,select,textarea{font:inherit} button{cursor:pointer}.hidden{display
 .library-mini-table{border-radius:0;border-left:0;border-right:0;border-bottom:0}
 .budget-form-wide .concept-field input{font-size:15px;font-weight:700;min-height:46px}
 .budget-lines .concept-col{min-width:520px;width:46%}
-.budget-lines .concept-cell{min-width:520px}.line-concept{min-height:52px;font-weight:700;line-height:1.25}
+.budget-lines .concept-cell{min-width:520px}.line-concept{min-height:52px;font-weight:700;line-height:1.25}.line-longdesc{min-height:52px;margin-top:5px;font-size:12px;line-height:1.25}
 .budget-lines table{min-width:1250px}
 .modal .form-grid{grid-template-columns:repeat(6,minmax(0,1fr))}.modal .form-grid .wide{grid-column:span 3}.modal .form-grid .full{grid-column:1/-1}
 @media(max-width:1200px){.modal .form-grid{grid-template-columns:1fr}.modal .form-grid .wide,.modal .form-grid .full{grid-column:auto}.budget-lines .concept-col,.budget-lines .concept-cell{min-width:360px}}

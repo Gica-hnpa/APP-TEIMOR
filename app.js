@@ -4807,3 +4807,389 @@ importPreviewHtml=function(d){
   const notice=notices.length ? '<div class="card notice-green"><strong>Neteja aplicada abans de confirmar:</strong><ul>'+notices.map(textValue=>'<li>'+esc(textValue)+'</li>').join('')+'</ul></div>' : '';
   return __teimorBaseImportPreviewHtmlV0910(d).replace('<div class="import-summary">',notice+'<div class="import-summary">');
 };
+
+/* =========================================================
+   TEIMOR V09.11 · LECTURA ESTRICTA DEL QUADRE DEL CLIENT
+   - Client, fiscal, població, CP i NIF/DNI només del quadre superior dret.
+   - Concepte només de l’etiqueta exacta Concepte / Concepto.
+   - Obra separada de les dades fiscals.
+   - La importació no crea ni actualitza partides de la llibreria.
+   ========================================================= */
+
+data.meta = data.meta || {};
+data.meta.version = '9.11.0-lectura-quadre-client-llibreria-manual';
+
+function teimor0911CellRecords(flat){
+  const out=[];
+  for(const record of flat||[]){
+    (record.raw||[]).forEach((value,col)=>{
+      const text=teimor099CellText(value);
+      if(text) out.push({sheet:record.sheet,rowIndex:record.rowIndex,col,text,raw:record.raw||[]});
+    });
+  }
+  return out;
+}
+function teimor0911TopRightRecords(flat){
+  const bySheet={};
+  for(const record of flat||[]){ (bySheet[record.sheet] ||= []).push(record); }
+  const out=[];
+  for(const rows of Object.values(bySheet)){
+    const maxCol=rows.reduce((max,record)=>Math.max(max,(record.raw||[]).length-1),0);
+    const firstBody=rows.filter(record=>record.rowIndex>4 && (record.raw||[]).some(value=>/^\s*(codi|codigo|partida|concepte|concepto|unitat|unidad|quantitat|cantidad|preu|precio|total)\b/i.test(teimor099CellText(value)))).map(record=>record.rowIndex)[0] ?? 31;
+    const lastRow=Math.min(31,firstBody-1);
+    const rightStart=maxCol>=5 ? Math.max(1,Math.floor(maxCol*0.35)) : 0;
+    for(const record of rows){
+      if(record.rowIndex>lastRow) continue;
+      (record.raw||[]).forEach((value,col)=>{
+        if(col<rightStart && col<maxCol-6) return;
+        const text=teimor099CellText(value);
+        if(text) out.push({sheet:record.sheet,rowIndex:record.rowIndex,col,text,raw:record.raw||[]});
+      });
+    }
+  }
+  return out;
+}
+function teimor0911TableHeaderRow(record){
+  const labels=(record?.raw||[]).map(teimor099LabelNorm);
+  const hits=labels.filter(label=>/^(codi|codigo|partida|item|ut|ud|unitat|unidad|quantitat|cantidad|amidament|medicio|medicion|preu|precio|p\.?u\.?|import|importe|total)$/.test(label));
+  return hits.length>=2;
+}
+function teimor0911Accept(value,validator){
+  const text=cleanText(value);
+  return text && !isTeimorText(text) && !looksLikeCalculationLine(text) && !isNonRecipientText(text) && (!validator || validator(text)) ? text : '';
+}
+function teimor0911LabelValue(records,aliases,validator){
+  const list=teimor099Aliases(aliases);
+  for(const record of records||[]){
+    const cell=teimor099CellText(record.text);
+    if(!cell || teimor0911TableHeaderRow(record)) continue;
+    const inline=teimor0911Accept(teimor099InlineValue(cell,list),validator);
+    if(inline) return inline;
+    if(!teimor099IsExactLabel(cell,list)) continue;
+    const rowValues=(records||[])
+      .filter(other=>other.sheet===record.sheet && other.rowIndex===record.rowIndex && other.col>record.col)
+      .sort((a,b)=>a.col-b.col)
+      .map(other=>other.text);
+    const sameRow=rowValues.map(value=>teimor0911Accept(value,validator)).find(Boolean);
+    if(sameRow) return sameRow;
+    for(const next of (records||[])){
+      if(next.sheet!==record.sheet || next.rowIndex<=record.rowIndex || next.rowIndex>record.rowIndex+4) continue;
+      if(next.col===record.col || next.col>record.col){
+        const value=teimor0911Accept(next.text,validator);
+        if(value) return value;
+      }
+    }
+  }
+  return '';
+}
+function teimor0911NifFromText(text){
+  return firstRegex(text,/\b(?!B55271159\b)([A-HJNP-SUVW][0-9]{7}[0-9A-J]|[0-9]{8}[A-Z]|[XYZ][0-9]{7}[A-Z])\b/i);
+}
+function teimor0911PostalFromText(text){
+  return firstRegex(text,/\b(?:0[1-9]|[1-4][0-9]|5[0-2])[0-9]{3}\b/);
+}
+function teimor0911CityFromText(text,postalCode){
+  const raw=cleanText(text);
+  const labelled=raw.match(/\b(?:0[1-9]|[1-4][0-9]|5[0-2])[0-9]{3}\s+([^,(]+)(?:\s*\([^)]*\))?/i);
+  if(labelled) return cleanText(labelled[1]);
+  const source=raw.replace(new RegExp('\\b'+(postalCode||'00000')+'\\b','i'),'').trim();
+  const known=extractCityFromLine(source);
+  return known && known!==source ? known : '';
+}
+function teimor0911BoxLines(records){
+  const byColumn={};
+  for(const record of records||[]){
+    if(teimor0911TableHeaderRow(record) || isTeimorText(record.text) || looksLikeCalculationLine(record.text)) continue;
+    (byColumn[record.col] ||= []).push(record);
+  }
+  const candidates=[];
+  for(const [column,rows] of Object.entries(byColumn)){
+    rows.sort((a,b)=>a.rowIndex-b.rowIndex);
+    let chunk=[];
+    const flush=()=>{
+      if(!chunk.length) return;
+      const lines=chunk.map(record=>cleanText(record.text)).filter(Boolean);
+      const joined=lines.join('\n');
+      const hasName=lines.some(line=>isProbablyClientName(line) && !/^client(?:e)?$/i.test(line));
+      const hasAddress=lines.some(line=>looksLikeAddress(line));
+      const hasId=!!teimor0911NifFromText(joined) || !!teimor0911PostalFromText(joined);
+      const score=(hasName?100:0)+(hasAddress?45:0)+(hasId?35:0)+Math.min(lines.length,6)*3;
+      if(hasName && (hasAddress || hasId || lines.length>=2)) candidates.push({column:Number(column),lines,score});
+      chunk=[];
+    };
+    for(const row of rows){
+      if(chunk.length && row.rowIndex-chunk[chunk.length-1].rowIndex>2) flush();
+      chunk.push(row);
+    }
+    flush();
+  }
+  candidates.sort((a,b)=>b.score-a.score);
+  return candidates[0]?.lines || [];
+}
+function teimor0911RecipientBox(flat){
+  const records=teimor0911TopRightRecords(flat);
+  const name=teimor0911LabelValue(records,['client / empresa','client','cliente','destinatari','destinatario','senyors','sres','promotor','propietari','propiedad','comunitat','comunidad'],v=>isProbablyClientName(v) && !/^client(?:e)?$/i.test(v));
+  const fiscalAddress=teimor0911LabelValue(records,['adreça fiscal','direcció fiscal','direccion fiscal','domicili fiscal','domicilio fiscal','adreça','direcció','direccion','domicili','domicilio'],v=>looksLikeAddress(v) || v.length>5);
+  const postalCode=teimor0911LabelValue(records,['codi postal','codigo postal','cp','c.p.'],v=>/^(?:0[1-9]|[1-4][0-9]|5[0-2])[0-9]{3}$/.test(v.replace(/\s/g,''))) || '';
+  const nif=teimor0911LabelValue(records,['nif','dni','cif','nif/cif','nif / cif','nif/dni','nif / dni','nif/dni/cif','nif / dni / cif','identificació fiscal','identificacion fiscal'],v=>!!teimor0911NifFromText(v)) || '';
+  const city=teimor0911LabelValue(records,['població','poblacion','població / ciutat','poblacion / ciudad','municipi','municipio','localitat','localidad','ciutat','ciudad'],v=>!looksLikeAddress(v) && !/^\d{5}$/.test(v)) || '';
+  const lines=teimor0911BoxLines(records);
+  const joined=lines.join('\n');
+  const finalPostal=postalCode || teimor0911PostalFromText(joined);
+  const finalNif=nif ? teimor0911NifFromText(nif) : teimor0911NifFromText(joined);
+  const finalName=name || cleanClientName(lines.find(line=>isProbablyClientName(line) && !/^client(?:e)?$/i.test(line) && !looksLikeAddress(line) && !looksLikeCityLine(line) && !teimor0911NifFromText(line) && !/^\d/.test(line)) || '');
+  const finalAddress=fiscalAddress || lines.filter(line=>looksLikeAddress(line)).join(' · ');
+  const cityFromBox=city ? (teimor0911CityFromText(city,finalPostal) || cleanText(city).replace(new RegExp('\\b'+(finalPostal||'00000')+'\\b','i'),'').trim()) : '';
+  const finalCity=cityFromBox || teimor0911CityFromText(lines.find(line=>finalPostal && line.includes(finalPostal)) || joined,finalPostal);
+  return {name:finalName==='Client pendent de revisar'?'':finalName,fiscalAddress:finalAddress,city:cleanText(finalCity),postalCode:finalPostal,nif:finalNif,lines};
+}
+function teimor0911FindWorkValue(flat,aliases,validator){
+  return teimor0911LabelValue(teimor0911CellRecords(flat),aliases,validator);
+}
+function teimor0911StrictConcept(flat){
+  const records=teimor0911CellRecords(flat);
+  return teimor0911LabelValue(records,['concepte','concepto'],v=>v.length>1 && !isNonRecipientText(v));
+}
+function teimor0911WorkData(flat){
+  const address=teimor0911FindWorkValue(flat,['adreça obra','adreça de l’obra',"adreça de l'obra",'adreça de la obra','direcció obra','direccion obra','dirección de la obra','emplaçament','emplazamiento','ubicació','ubicacion','domicili obra','domicilio obra'],v=>looksLikeAddress(v) || v.length>5)
+    || teimor0911FindWorkValue(flat,['obra'],v=>looksLikeAddress(v));
+  const postalCode=teimor0911FindWorkValue(flat,['codi postal obra','codigo postal obra','cp obra'],v=>/^(?:0[1-9]|[1-4][0-9]|5[0-2])[0-9]{3}$/.test(v.replace(/\s/g,''))) || teimor0911PostalFromText(address);
+  const cityValue=teimor0911FindWorkValue(flat,['població obra','poblacion obra','municipi obra','municipio obra','localitat obra','localidad obra','ciutat obra','ciudad obra'],v=>!looksLikeAddress(v));
+  const city=cityValue ? (teimor0911CityFromText(cityValue,postalCode) || cleanText(cityValue).replace(new RegExp('\\b'+(postalCode||'00000')+'\\b','i'),'').trim()) : teimor0911CityFromText(address,postalCode);
+  return {address,city:cleanText(city),postalCode};
+}
+function detectClientV0911(fileName,flat){
+  const box=teimor0911RecipientBox(flat);
+  const work=teimor0911WorkData(flat);
+  const name=cleanClientName(box.name||'');
+  const reviewIssues=[];
+  if(name==='Client pendent de revisar') reviewIssues.push('No s’ha detectat el nom dins del quadre superior dret.');
+  if(!box.fiscalAddress) reviewIssues.push('No s’ha detectat l’adreça fiscal dins del quadre superior dret.');
+  if(!box.city) reviewIssues.push('No s’ha detectat la població del client dins del quadre superior dret.');
+  if(!box.postalCode) reviewIssues.push('No s’ha detectat el codi postal del client dins del quadre superior dret.');
+  if(!box.nif) reviewIssues.push('No s’ha detectat NIF/DNI/CIF dins del quadre superior dret.');
+  if(!work.address) reviewIssues.push('No s’ha detectat l’adreça de l’obra en un camp d’obra.');
+  return {
+    id:uid('CLI'),tempKey:uid('TMPCLI'),name,nif:box.nif||'',phone:'',email:'',contact:'',
+    fiscalAddress:box.fiscalAddress||'',postalCode:box.postalCode||'',city:box.city||'',
+    workAddress:work.address||'',workCity:work.city||'',workPostalCode:work.postalCode||'',
+    status:'Actiu',source:fileName,sourceFiles:[fileName],reviewIssues,
+    needsReview:reviewIssues.length>0,notes:'Client llegit exclusivament del quadre superior dret. Revisar els camps marcats si cal.'
+  };
+}
+detectClientV099=detectClientV0911;
+detectClient=detectClientV0911;
+function detectBudgetConceptV0911(fileName,flat){
+  return teimor0911StrictConcept(flat);
+}
+detectBudgetConceptV099=detectBudgetConceptV0911;
+detectBudgetConcept=detectBudgetConceptV0911;
+detectJobTitle=function(fileName,flat){ return teimor0911StrictConcept(flat); };
+
+const __teimorBaseParseWorkbookV0911=parseWorkbook;
+parseWorkbook=function(fileName,arrayBuffer){
+  const parsed=__teimorBaseParseWorkbookV0911(fileName,arrayBuffer);
+  const client=parsed.client||{};
+  const title=parsed.budget?.title || parsed.job?.title || '';
+  parsed.job.address=client.workAddress||'';
+  parsed.job.city=client.workCity||'';
+  parsed.job.postalCode=client.workPostalCode||'';
+  if(!title){
+    parsed.job.title='Concepte pendent de revisar';
+    parsed.budget.title='Concepte pendent de revisar';
+    parsed.warnings.push(fileName+': no s’ha trobat cap valor segur a la cel·la etiquetada Concepte/Concepto.');
+  }
+  if(client.reviewIssues?.length) parsed.warnings.push(fileName+': '+client.reviewIssues.join(' '));
+  parsed.client=client;
+  return parsed;
+};
+
+function confirmDraftImportV0911(){
+  const draft=state.importDraft;
+  if(!draft) return;
+  const clientIdByTemp=new Map();
+  let duplicateCount=0;
+  for(const client of draft.clients||[]){
+    const matches=teimor099FindExistingClients(client);
+    const reusable=matches.find(existing=>teimor099CanMergeClients(existing,client) && client.duplicateReview!=='pendent');
+    let id='';
+    if(reusable){
+      Object.assign(reusable,teimor099MergeClientData(reusable,client));
+      id=reusable.id;
+    }else{
+      const copy={...client,id:client.id||uid('CLI')};
+      delete copy._tempKeys;
+      delete copy.tempKey;
+      copy.sourceFiles=copy.sourceFiles||[copy.source].filter(Boolean);
+      copy.source=copy.sourceFiles.join(' | ');
+      if(matches.length || copy.duplicateReview==='pendent'){
+        copy.duplicateReview='pendent';
+        duplicateCount++;
+        const ids=matches.map(existing=>existing.id).filter(Boolean);
+        copy.duplicateCandidateIds=[...(copy.duplicateCandidateIds||[]),...ids].filter(Boolean);
+        matches.forEach(existing=>teimor099AppendDuplicateLink(existing,copy.id));
+      }
+      data.clients.push(copy);
+      id=copy.id;
+    }
+    for(const temp of (client._tempKeys||[client.tempKey]).filter(Boolean)) clientIdByTemp.set(temp,id);
+  }
+  for(const client of draft.clients||[]){
+    const id=clientIdByTemp.get(client.tempKey);
+    const record=byId(data.clients,id);
+    if(!record) continue;
+    for(const temp of client.duplicateCandidateTempKeys||[]){
+      const otherId=clientIdByTemp.get(temp);
+      if(otherId && otherId!==record.id) teimor099AppendDuplicateLink(record,otherId);
+    }
+  }
+  for(const job of draft.jobs||[]){
+    const clientId=clientIdByTemp.get(job.clientTempKey)||'';
+    const existingJob=findExistingJob(job,clientId);
+    if(existingJob) Object.assign(existingJob,{...job,id:existingJob.id,clientId});
+    else data.jobs.push({...job,id:job.id||uid('F'),clientId});
+  }
+  for(const budgetDraft of draft.budgets||[]){
+    const clientId=clientIdByTemp.get(budgetDraft.clientTempKey)||'';
+    const jobDraft=(draft.jobs||[]).find(job=>job.id===budgetDraft.jobTempKey);
+    let jobId='';
+    if(jobDraft){
+      const jobExisting=findExistingJob(jobDraft,clientId);
+      jobId=jobExisting?.id || jobDraft.id;
+    }
+    const budget={...budgetDraft,clientId,jobId};
+    delete budget.clientTempKey;
+    delete budget.jobTempKey;
+    budget.lines=(budget.lines||[]).map(line=>({...line,id:line.id||uid('LIN')}));
+    data.budgets.push(budget);
+    if(jobId){
+      const job=byId(data.jobs,jobId);
+      if(job && !job.mainBudgetId) job.mainBudgetId=budget.id;
+    }
+  }
+  const reviewCount=(data.clients||[]).filter(teimor099ClientNeedsReview).length;
+  data.importLogs=data.importLogs||[];
+  data.importLogs.push({id:uid('IMP'),date:new Date().toISOString(),files:draft.files,countClients:draft.clients?.length||0,countBudgets:draft.budgets?.length||0,countItems:draft.items?.length||0,libraryAdded:0,libraryManualOnly:true,clientDuplicates:duplicateCount});
+  state.importDraft=null;
+  saveData();
+  alert('Importació confirmada. Partides importades al pressupost: '+(draft.items?.length||0)+'. La llibreria no s’ha modificat. Clients pendents de revisar: '+reviewCount+'.');
+  state.view='budgets';
+  render();
+}
+confirmDraftImport=confirmDraftImportV0911;
+
+const __teimorBaseImportPreviewHtmlV0911=importPreviewHtml;
+importPreviewHtml=function(d){
+  let html=__teimorBaseImportPreviewHtmlV0911(d);
+  const manualNotice='<div class="card notice-blue"><strong>Llibreria manual:</strong> les partides llegides d’aquest Excel només entraran dins del pressupost. No s’afegirà cap partida a la llibreria automàticament.</div>';
+  html=html.replace('<div class="import-summary">',manualNotice+'<div class="import-summary">');
+  const start=html.indexOf('<h3>Clients detectats</h3>');
+  const end=html.indexOf('<h3>Partides detectades</h3>');
+  if(start>=0 && end>start){
+    const clientsTable=table(['Client','Adreça fiscal','CP','Població','NIF/DNI/CIF','Adreça obra','Població obra','Origen'],(d.clients||[]).slice(0,50).map(client=>'<tr>'+
+      '<td><strong>'+esc(client.name||'Client pendent de revisar')+'</strong></td>'+
+      '<td>'+esc(client.fiscalAddress||'')+'</td>'+
+      '<td>'+esc(client.postalCode||'')+'</td>'+
+      '<td>'+esc(client.city||'')+'</td>'+
+      '<td>'+esc(client.nif||'')+'</td>'+
+      '<td>'+esc(client.workAddress||'')+'</td>'+
+      '<td>'+esc(client.workCity||'')+'</td>'+
+      '<td>'+esc(client.source||'')+'</td>'+
+    '</tr>'));
+    html=html.slice(0,start)+'<h3>Clients interpretats</h3>'+clientsTable+html.slice(end);
+  }
+  return html;
+};
+
+const __teimorBaseRenderImporterV0911=renderImporter;
+renderImporter=function(){
+  __teimorBaseRenderImporterV0911();
+  const dropzone=document.getElementById('dropzone');
+  const card=dropzone?.closest('.card');
+  if(card) card.insertAdjacentHTML('beforebegin','<div class="card notice-blue" id="v0911ImportRule"><strong>Criteri V09.11:</strong> client i dades fiscals del quadre superior dret; concepte només de l’etiqueta Concepte/Concepto; obra separada; cap partida importada passa automàticament a la llibreria.</div>');
+};
+
+clientsTable=function(rows=data.clients){
+  rows=sortByClientField(rows);
+  if(!rows.length) return empty();
+  return table(['Sel.','Client','NIF/DNI/CIF','Adreça fiscal','CP','Població','Adreça obra','Revisió','Origen','Accions'],rows.map(client=>'<tr>'+
+    '<td><input type="checkbox" class="select-client" value="'+esc(client.id)+'"></td>'+
+    '<td><strong>'+esc(client.name||'Client pendent de revisar')+'</strong><br><span class="muted">'+esc(client.id||'')+'</span></td>'+
+    '<td>'+esc(client.nif||'')+'</td>'+
+    '<td>'+esc(client.fiscalAddress||'')+'</td>'+
+    '<td>'+esc(client.postalCode||'')+'</td>'+
+    '<td>'+esc(client.city||'')+'</td>'+
+    '<td>'+esc(client.workAddress||'')+(client.workPostalCode||client.workCity?'<br><span class="small-text">'+esc([client.workPostalCode,client.workCity].filter(Boolean).join(' · '))+'</span>':'')+'</td>'+
+    '<td>'+teimor099ClientReviewPill(client)+'</td>'+
+    '<td><span class="small-text">'+esc(teimor099ClientSource(client))+'</span></td>'+
+    '<td class="nowrap"><button class="ghost small" data-edit-client="'+esc(client.id)+'">Editar</button> <button class="danger small" data-delete-client="'+esc(client.id)+'">Eliminar</button></td>'+
+  '</tr>'));
+};
+saveClient=function(e){
+  e.preventDefault();
+  const f=formObj(e.target);
+  const old=byId(data.clients,f.editId)||{};
+  const client={...old,id:f.id,name:f.name,nif:f.nif,phone:f.phone,email:f.email,contact:f.contact,fiscalAddress:f.fiscalAddress,postalCode:f.postalCode,workAddress:f.workAddress,workPostalCode:f.workPostalCode,workCity:f.workCity,city:f.city,status:f.status,notes:f.notes};
+  const index=data.clients.findIndex(item=>item.id===f.editId || item.id===client.id);
+  if(index>=0) data.clients[index]=client; else data.clients.push(client);
+  saveData();
+  renderClients();
+};
+
+const __teimorBaseRenderClientsV0911=renderClients;
+renderClients=function(editId=''){
+  __teimorBaseRenderClientsV0911(editId);
+  if(editId){
+    const form=document.getElementById('clientForm');
+    if(form && !form.querySelector('[name="postalCode"]')){
+      const status=form.querySelector('[name="status"]')?.closest('label');
+      const client=byId(data.clients,editId)||{};
+      const field='<label>Codi postal fiscal<input name="postalCode" value="'+esc(client.postalCode||'')+'"></label>'+
+        '<label>Codi postal obra<input name="workPostalCode" value="'+esc(client.workPostalCode||'')+'"></label>'+
+        '<label>Població obra<input name="workCity" value="'+esc(client.workCity||'')+'"></label>';
+      if(status) status.insertAdjacentHTML('beforebegin',field);
+      else form.insertAdjacentHTML('beforeend',field);
+    }
+  }
+};
+
+const __teimorBaseOpenBudgetModalV0911=openBudgetModal;
+openBudgetModal=function(id=''){
+  __teimorBaseOpenBudgetModalV0911(id);
+  const budget=id ? byId(data.budgets,id) : null;
+  if(!budget) return;
+  document.querySelectorAll('.budget-lines tbody tr').forEach(row=>{
+    const lineInput=row.querySelector('[data-line-id]');
+    const line=lineInput ? (budget.lines||[]).find(item=>item.id===lineInput.dataset.lineId) : null;
+    const conceptCell=row.querySelector('.concept-cell');
+    if(!line || !conceptCell || conceptCell.querySelector('[data-line-field="longDesc"]')) return;
+    const detail=document.createElement('textarea');
+    detail.className='line-longdesc';
+    detail.dataset.lineField='longDesc';
+    detail.dataset.lineId=line.id;
+    detail.placeholder='Descripció llarga / abast de la partida';
+    detail.value=line.longDesc||'';
+    detail.onchange=updateBudgetLine;
+    conceptCell.appendChild(detail);
+  });
+};
+
+budgetLinesCard=function(b){
+  return '<div class="card"><div class="toolbar"><h2>Partides del pressupost</h2><div class="right"><button class="ghost" id="selectAllBudgetLines">Seleccionar tot</button><button class="ghost" id="clearSelectedBudgetLines">Desmarcar</button><button class="danger" id="deleteSelectedBudgetLines">Eliminar línies seleccionades</button><button class="primary" id="addLineFromLibrary">Afegir de llibreria</button><button class="ghost" id="addManualLine">Afegir partida nova</button></div></div>'+
+    '<div class="table-wrap budget-lines"><table><thead><tr><th>Sel.</th><th>Capítol</th><th>Codi</th><th>Ut</th><th class="concept-col">Concepte / descripció</th><th>Quantitat</th><th>Preu/ut</th><th>Total</th><th>Estat</th><th></th></tr></thead><tbody>'+
+    (b.lines||[]).map(l=>'<tr><td><input type="checkbox" class="select-budget-line" value="'+esc(l.id)+'"></td><td><input data-line-field="chapter" data-line-id="'+esc(l.id)+'" value="'+esc(l.chapter||'')+'" placeholder="Capítol"></td><td><input data-line-field="code" data-line-id="'+esc(l.id)+'" value="'+esc(l.code||'')+'"></td><td><input data-line-field="unit" data-line-id="'+esc(l.id)+'" value="'+esc(l.unit||'')+'"></td><td class="concept-cell"><textarea data-line-field="concept" data-line-id="'+esc(l.id)+'" class="line-concept">'+esc(l.concept||'')+'</textarea><textarea data-line-field="longDesc" data-line-id="'+esc(l.id)+'" class="line-longdesc" placeholder="Descripció llarga / abast de la partida">'+esc(l.longDesc||'')+'</textarea></td><td><input class="num" data-line-field="qty" data-line-id="'+esc(l.id)+'" type="number" step="0.0001" value="'+esc(l.qty||'')+'"></td><td><input class="num" data-line-field="unitPrice" data-line-id="'+esc(l.id)+'" type="number" step="0.01" value="'+esc(l.unitPrice||'')+'"></td><td class="num"><strong>'+money(lineTotal(l))+'</strong></td><td>'+statusPill(l.status||'')+'</td><td><button class="danger small" data-delete-line="'+esc(l.id)+'">Eliminar</button></td></tr>').join('')+
+    '</tbody></table></div><div class="budget-total"><div>Base: <strong>'+money(budgetBase(b))+'</strong></div><div>IVA: <strong>'+money(budgetIVA(b))+'</strong></div><div>Total: <strong>'+money(budgetTotal(b))+'</strong></div></div>'+((budgetLineSum(b)===0 && num(b.importedBase)>0)?'<div class="small-text" style="text-align:right;margin-top:6px">Base presa del total detectat a l’Excel original; les línies separades per * queden pendents de preu/amidament.</div>':'')+'</div>';
+};
+
+const __teimorBaseSaveLibraryItemV0911=saveLibraryItem;
+saveLibraryItem=function(e){
+  const f=formObj(e.target);
+  const existing=!f.editId ? findExistingLibraryItem({concept:f.concept,longDesc:f.longDesc,unit:f.unit}) : null;
+  if(existing && existing.id!==f.id){
+    if(!confirm('Ja existeix una partida semblant a la llibreria: '+(existing.code||existing.concept)+'. No es crearà una duplicada.')) return;
+    closeModal();
+    openLibModal(existing.id);
+    return;
+  }
+  return __teimorBaseSaveLibraryItemV0911(e);
+};
