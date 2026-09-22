@@ -5193,3 +5193,177 @@ saveLibraryItem=function(e){
   }
   return __teimorBaseSaveLibraryItemV0911(e);
 };
+
+/* =========================================================
+   TEIMOR V09.12 · TREBALLS GENÈRICS PER PUNTS I CLIENT 2024
+   - Els pressupostos antics amb un únic import global poden contenir un bloc
+     TREBALLS amb frases iniciades per ., *, · o •.
+   - Cada marcador obre un treball i les línies següents continuen el mateix
+     treball fins al marcador següent.
+   - El total/base del pressupost es conserva separat; no es reparteix entre
+     treballs que no tenen preu individual.
+   ========================================================= */
+
+data.meta = data.meta || {};
+data.meta.version = '9.12.0-treballs-generics-client-2024';
+
+function teimor0912IsStructuredSheet(aoa){
+  return typeof teimor0910HasStructuredHeader==='function' && teimor0910HasStructuredHeader(aoa);
+}
+function teimor0912WorkHeader(value){
+  const label=strip(value).replace(/[：:;]+$/,'').trim();
+  return /^(treballs|trabajos|descripcio treballs|descripció treballs|descripcion trabajos|descripción trabajos)$/.test(label);
+}
+function teimor0912InlineWorkHeader(value){
+  const text=cleanText(value);
+  const match=text.match(/^\s*(?:treballs|trabajos|descripcio treballs|descripció treballs|descripcion trabajos|descripción trabajos)\s*[:：\-–—]\s*(.+)$/i);
+  return match ? cleanText(match[1]) : '';
+}
+function teimor0912RowFragments(row){
+  const rawPieces=[];
+  for(const cellValue of row||[]){
+    const source=String(cellValue??'').replace(/\r/g,'');
+    for(const rawLine of source.split(/\n+/)){
+      const line=cleanText(rawLine);
+      if(!line) continue;
+      const split=line.split(/\s+(?=[.*•·]\s*)/g).map(cleanText).filter(Boolean);
+      rawPieces.push(...(split.length?split:[line]));
+    }
+  }
+  const fragments=[];
+  let markerOnly='';
+  for(const piece of rawPieces){
+    if(/^[.*•·]\s*$/.test(piece)){
+      markerOnly=piece;
+      continue;
+    }
+    if(markerOnly){ fragments.push(markerOnly+' '+piece); markerOnly=''; }
+    else fragments.push(piece);
+  }
+  if(markerOnly) fragments.push(markerOnly);
+  return fragments;
+}
+function teimor0912MarkerText(value){
+  const text=cleanText(value);
+  const match=text.match(/^[.*•·]\s*(.*)$/);
+  return match ? cleanText(match[1]) : null;
+}
+function teimor0912IsStopRow(row){
+  const text=strip((row||[]).map(teimor099CellText).filter(Boolean).join(' '));
+  if(!text) return false;
+  if(teimor0912MarkerText(text)!==null) return false;
+  return /(^|\s)(base imposable|base imponible|materials?\s+i\s+m\.?o\.?|materiales?\s+y\s+m\.?o\.?|import total|importe total|total pressupost|total presupuesto|forma de pago|forma de pagament|condicions|condiciones|observacions|observaciones|signatura|firma|iva)\b/i.test(text)
+    || /(^|\s)total\s*[:=]/i.test(text);
+}
+function teimor0912IsWorkNoise(text){
+  const value=cleanText(text);
+  if(!value) return true;
+  if(isTeimorText(value) || looksLikeCalculationLine(value)) return true;
+  return /^(treballs|trabajos|base imposable|base imponible|materials?\s+i\s+m\.?o\.?|materiales?\s+y\s+m\.?o\.?|iva|total|subtotal)$/i.test(value);
+}
+function teimor0912GenericWorkItems(fileName,sheetName,aoa){
+  if(teimor0912IsStructuredSheet(aoa)) return [];
+  const rows=(aoa||[]).map(row=>(row||[]).map(teimor099CellText));
+  let headerRow=-1;
+  let headerCol=-1;
+  let inlineFirst='';
+  for(let rowIndex=0;rowIndex<Math.min(rows.length,120);rowIndex++){
+    const row=rows[rowIndex]||[];
+    const found=row.findIndex(teimor0912WorkHeader);
+    if(found>=0){ headerRow=rowIndex; headerCol=found; break; }
+    const inline=row.findIndex(value=>!!teimor0912InlineWorkHeader(value));
+    if(inline>=0){ headerRow=rowIndex; headerCol=inline; inlineFirst=teimor0912InlineWorkHeader(row[inline]); break; }
+  }
+  if(headerRow<0) return [];
+  const texts=[];
+  let current='';
+  const flush=()=>{
+    const value=cleanLongText(current);
+    if(value && value.length>4 && !teimor0912IsWorkNoise(value)) texts.push(value);
+    current='';
+  };
+  const consume=(fragment)=>{
+    const value=cleanText(fragment);
+    if(!value || teimor0912IsWorkNoise(value)) return;
+    const marker=teimor0912MarkerText(value);
+    if(marker!==null){
+      flush();
+      if(marker && !teimor0912IsWorkNoise(marker)) current=marker;
+      return;
+    }
+    if(current) current=cleanText(current+' '+value);
+  };
+  if(inlineFirst) consume(inlineFirst);
+  const headerRemainder=headerRow>=0 ? (rows[headerRow]||[]).slice(headerCol+1) : [];
+  for(const fragment of teimor0912RowFragments(headerRemainder)) consume(fragment);
+  for(let rowIndex=headerRow+1;rowIndex<rows.length;rowIndex++){
+    const row=rows[rowIndex]||[];
+    if(teimor0912IsStopRow(row)) break;
+    for(const fragment of teimor0912RowFragments(row)) consume(fragment);
+  }
+  flush();
+  return texts.map((text,index)=>{
+    const item=makeItem({
+      code:'TR-'+String(index+1).padStart(2,'0'),
+      chapter:'Treballs',
+      unit:'',
+      desc:shortenBullet(text),
+      qty:'',
+      pu:'',
+      total:'',
+      status:'Treball genèric importat · preu global del pressupost',
+      fileName,
+      sheetName,
+      longDescOverride:text
+    });
+    item.genericWork=true;
+    item.genericWorkIndex=index+1;
+    return item;
+  });
+}
+
+const __teimorBaseDetectItemsFromSheetV0912=detectItemsFromSheet;
+detectItemsFromSheet=function(fileName,sheetName,aoa){
+  const generic=teimor0912GenericWorkItems(fileName,sheetName,aoa);
+  if(generic.length){
+    if(typeof teimor0910CurrentItemStats!=='undefined' && teimor0910CurrentItemStats){
+      teimor0910CurrentItemStats.candidates += generic.length;
+      teimor0910CurrentItemStats.accepted += generic.length;
+    }
+    return generic;
+  }
+  return __teimorBaseDetectItemsFromSheetV0912(fileName,sheetName,aoa);
+};
+
+const __teimorBaseParseWorkbookV0912=parseWorkbook;
+parseWorkbook=function(fileName,arrayBuffer){
+  const parsed=__teimorBaseParseWorkbookV0912(fileName,arrayBuffer);
+  const genericItems=(parsed.items||[]).filter(item=>item.genericWork);
+  if(genericItems.length){
+    parsed.budget.workItemsMode='generic-dot-lines';
+    parsed.budget.workItemsCount=genericItems.length;
+    parsed.budget.notes=[parsed.budget.notes,'Treballs separats per marcador; el preu es conserva com a import global del pressupost.'].filter(Boolean).join('\n');
+    parsed.parseStats=parsed.parseStats||{};
+    parsed.parseStats.genericWorkItems=genericItems.length;
+    parsed.budget.parseStats=parsed.parseStats;
+    parsed.warnings.push(fileName+': s’han separat '+genericItems.length+' treball/s genèric/s del bloc Treballs.');
+  }
+  return parsed;
+};
+
+const __teimorBaseImportPreviewHtmlV0912=importPreviewHtml;
+importPreviewHtml=function(d){
+  const generic=(d.items||[]).filter(item=>item.genericWork).length;
+  const notice=generic ? '<div class="card notice-green"><strong>Treballs genèrics separats:</strong> '+generic+' treball/s detectat/s. No tenen preu individual perquè l’Excel només porta un import total; aquest total queda conservat en el pressupost.</div>' : '';
+  return __teimorBaseImportPreviewHtmlV0912(d).replace('<div class="import-summary">',notice+'<div class="import-summary">');
+};
+
+const __teimorBaseRenderImporterV0912=renderImporter;
+renderImporter=function(){
+  __teimorBaseRenderImporterV0912();
+  const rule=document.getElementById('v0911ImportRule');
+  if(rule) rule.innerHTML='<strong>Criteri V09.12:</strong> client i dades fiscals del quadre superior dret; concepte només de l’etiqueta Concepte/Concepto; Treballs separats pels punts, asteriscs o vinyetes inicials; cap partida importada passa automàticament a la llibreria.';
+  const dropzone=document.getElementById('dropzone');
+  const card=dropzone?.closest('.card');
+  if(card) card.insertAdjacentHTML('afterbegin','<div class="small-text" style="margin-bottom:10px"><strong>Pressupostos amb Treballs:</strong> les línies iniciades per punt, asterisc o vinyeta es separen com a treballs; les línies següents continuen el mateix treball fins al marcador següent.</div>');
+};
