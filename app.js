@@ -176,7 +176,7 @@ function table(headers, rows){
   return `<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
 }
 function renderDashboard(){
-  setHeader('Inici','Resum de clients, pressupostos, llibreria, factures, rendiment i importació local. La pestanya Feines s’ha integrat dins Pressupostos per evitar repeticions.');
+  setHeader('Inici','Resum de clients, pressupostos, llibreria, factures, certificacions i traçabilitat local.');
   const totalB=data.budgets.reduce((sum,b)=>sum+budgetBase(b),0), totalI=data.invoices.reduce((sum,i)=>sum+invoiceTotal(i),0);
   const valid=data.library.filter(x=>strip(x.status).includes('valid')).length;
   const hist=data.library.filter(x=>strip(x.status).includes('historic') || strip(x.status).includes('sense')).length;
@@ -5366,4 +5366,623 @@ renderImporter=function(){
   const dropzone=document.getElementById('dropzone');
   const card=dropzone?.closest('.card');
   if(card) card.insertAdjacentHTML('afterbegin','<div class="small-text" style="margin-bottom:10px"><strong>Pressupostos amb Treballs:</strong> les línies iniciades per punt, asterisc o vinyeta es separen com a treballs; les línies següents continuen el mateix treball fins al marcador següent.</div>');
+};
+
+/* =========================================================
+   TEIMOR V09.13 · FACTURES, CERTIFICACIONS I TRAÇABILITAT
+   - Importa factures i certificacions des d'Excel/CSV/ZIP.
+   - Busca coincidències amb clients, obres i pressupostos, però conserva
+     els casos dubtosos com a pendents de validar.
+   - No importa cap partida a la llibreria: la llibreria continua sent manual.
+   - Centralitza la relació obra → pressupostos → factures → certificacions.
+   ========================================================= */
+
+data.meta = data.meta || {};
+data.meta.version = '9.13.0-factures-certificacions-tracabilitat';
+data.certifications = Array.isArray(data.certifications) ? data.certifications : [];
+data.importLogs = Array.isArray(data.importLogs) ? data.importLogs : [];
+state.financialDraft = state.financialDraft || null;
+
+const __teimorBaseLooksLikeAddressV0913 = looksLikeAddress;
+looksLikeAddress = function(value){
+  return /(^|\s)(?:c\s*\/|c\.\s*|carrer|calle|avinguda|avenida|av\.?|avda\.?|passeig|pg\.?|pla[cç]a|plaza|rambla|carretera|ctra\.?|urbanitzaci[oó]|urb\.?|travessera|cam[ií])/i.test(String(value||'')) || __teimorBaseLooksLikeAddressV0913(value);
+};
+
+function teimor0913EnsureData(){
+  data.clients = Array.isArray(data.clients) ? data.clients : [];
+  data.jobs = Array.isArray(data.jobs) ? data.jobs : [];
+  data.budgets = Array.isArray(data.budgets) ? data.budgets : [];
+  data.invoices = Array.isArray(data.invoices) ? data.invoices : [];
+  data.certifications = Array.isArray(data.certifications) ? data.certifications : [];
+  data.attachments = Array.isArray(data.attachments) ? data.attachments : [];
+  data.importLogs = Array.isArray(data.importLogs) ? data.importLogs : [];
+}
+
+const __teimorBaseSaveDataV0913 = saveData;
+saveData = function(){
+  teimor0913EnsureData();
+  return __teimorBaseSaveDataV0913();
+};
+
+const __teimorBaseInvoiceTotalV0913 = invoiceTotal;
+invoiceTotal = function(invoice){
+  return num(invoice?.total)>0 ? num(invoice.total) : __teimorBaseInvoiceTotalV0913(invoice);
+};
+
+function teimor0913KindLabel(kind){ return kind === 'certificacio' ? 'Certificació' : 'Factura'; }
+function teimor0913DocTypeLabel(doc){ return doc?.kind === 'certificacio' ? 'Certificació' : 'Factura'; }
+function teimor0913DocTotal(doc){
+  if(num(doc?.total)>0) return num(doc.total);
+  return num(doc?.base) * (1 + num(doc?.iva)/100);
+}
+function teimor0913CertTotal(doc){ return teimor0913DocTotal(doc); }
+function teimor0913Norm(value){
+  return strip(value).replace(/[ºª]/g,' ').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();
+}
+function teimor0913Tokens(value){
+  const stop=new Set(['de','del','la','las','los','el','els','les','i','y','amb','con','per','para','en','al','a','un','una','obra','pressupost','presupuesto','factura','certificacio','certificacion','numero','num','n']);
+  return [...new Set(teimor0913Norm(value).split(' ').filter(x=>x.length>2 && !stop.has(x)))];
+}
+function teimor0913Overlap(a,b){
+  const aa=new Set(teimor0913Tokens(a)); const bb=new Set(teimor0913Tokens(b));
+  if(!aa.size || !bb.size) return 0;
+  let hit=0; aa.forEach(x=>{ if(bb.has(x)) hit++; });
+  return hit/Math.max(aa.size,bb.size);
+}
+function teimor0913Nif(value){ return cleanText(value).toUpperCase().replace(/[^A-Z0-9]/g,''); }
+function teimor0913NormId(value){ return teimor0913Norm(value).replace(/\s+/g,''); }
+function teimor0913SourceName(fileName){ return String(fileName||'').split('/').pop(); }
+function teimor0913Year(value){ const m=String(value||'').match(/\b(19|20)\d{2}\b/); return m ? Number(m[0]) : 0; }
+
+function teimor0913FinancialRows(fileName,arrayBuffer){
+  const wb=XLSX.read(arrayBuffer,{type:'array',cellDates:true,raw:false});
+  const sheets=wb.SheetNames.map(name=>({name,aoa:XLSX.utils.sheet_to_json(wb.Sheets[name],{header:1,defval:'',raw:false,blankrows:false})}));
+  const flat=[];
+  sheets.forEach(sheet=>sheet.aoa.forEach((row,rowIndex)=>flat.push({sheet:sheet.name,rowIndex,cells:row.map(v=>cleanText(v)).filter(Boolean),raw:row})));
+  return {wb,sheets,flat,text:flat.map(row=>row.cells.join(' | ')).join('\n')};
+}
+
+function teimor0913LabelMatch(text,aliases){
+  const value=teimor0913Norm(text);
+  return (aliases||[]).some(alias=>{
+    const a=teimor0913Norm(alias);
+    return a && (value===a || value.startsWith(a+' '));
+  });
+}
+function teimor0913InlineValue(text,aliases){
+  const source=cleanText(text);
+  if(!source) return '';
+  for(const alias of (aliases||[]).slice().sort((a,b)=>String(b).length-String(a).length)){
+    const pattern=String(alias).replace(/[.*+?^${}()|[\]\\]/g,'\\$&').replace(/\s+/g,'\\s+');
+    const match=source.match(new RegExp('^\\s*'+pattern+'\\s*(?:[:=]|[-–—])\\s*(.+?)\\s*$','i'));
+    if(match && cleanText(match[1])) return cleanText(match[1]);
+  }
+  return '';
+}
+function teimor0913FindLabelValue(flat,aliases,validator){
+  if(typeof teimor099FindValue==='function'){
+    const found=teimor099FindValue(flat,aliases,v=>!validator || validator(v));
+    if(found) return found;
+  }
+  for(const record of flat||[]){
+    const row=record.raw||[];
+    for(let i=0;i<row.length;i++){
+      const text=cleanText(row[i]);
+      if(!teimor0913LabelMatch(text,aliases)) continue;
+      const inline=teimor0913InlineValue(text,aliases);
+      if(inline && (!validator || validator(inline))) return inline;
+      const sameRow=row.slice(i+1).map(cleanText).find(value=>value && (!validator || validator(value)));
+      if(sameRow) return sameRow;
+      for(const next of flat||[]){
+        if(next.sheet!==record.sheet || next.rowIndex<=record.rowIndex || next.rowIndex>record.rowIndex+3) continue;
+        const value=cleanText((next.raw||[])[i]);
+        if(value && (!validator || validator(value))) return value;
+      }
+    }
+  }
+  return '';
+}
+function teimor0913NumericValues(value){
+  const text=cleanText(value);
+  if(!text || /\b(19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\b/.test(text)) return [];
+  const matches=text.match(/-?\d{1,3}(?:[.\s]\d{3})*(?:,\d+)?|-?\d+(?:[.,]\d+)?/g)||[];
+  return matches.map(num).filter(value=>Number.isFinite(value));
+}
+function teimor0913FindAmount(flat,aliases){
+  const hits=[];
+  for(const record of flat||[]){
+    const row=record.raw||[];
+    for(let i=0;i<row.length;i++){
+      const cell=cleanText(row[i]);
+      if(!teimor0913LabelMatch(cell,aliases)) continue;
+      const candidates=[];
+      const inline=teimor0913InlineValue(cell,aliases);
+      if(inline) candidates.push(...teimor0913NumericValues(inline));
+      row.slice(i+1,i+7).forEach(value=>candidates.push(...teimor0913NumericValues(value)));
+      if(candidates.length) hits.push(candidates[candidates.length-1]);
+      for(const next of flat||[]){
+        if(next.sheet!==record.sheet || next.rowIndex<=record.rowIndex || next.rowIndex>record.rowIndex+2) continue;
+        const values=(next.raw||[]).flatMap(teimor0913NumericValues);
+        if(values.length){ hits.push(values[values.length-1]); break; }
+      }
+    }
+  }
+  return hits.find(value=>value>0) || 0;
+}
+function teimor0913FindIvaRate(flat){
+  for(const record of flat||[]){
+    const row=record.raw||[];
+    if(!row.some(cell=>/\biva\b|\bimpuesto\b|\bimpost\b/i.test(cleanText(cell)))) continue;
+    const rowText=row.map(cleanText).join(' ');
+    const percent=rowText.match(/(\d{1,2}(?:[.,]\d+)?)\s*%/);
+    if(percent && num(percent[1])>=0 && num(percent[1])<=100) return num(percent[1]);
+    const values=row.flatMap(teimor0913NumericValues).filter(value=>value>=0 && value<=100 && value!==new Date().getFullYear());
+    if(values.length) return values[0];
+  }
+  return num(data.settings?.defaultIVA || 21);
+}
+function teimor0913FindCertificationPercent(flat){
+  const aliases=['percentatge certificacio','porcentaje certificacion','percentatge certificat','porcentaje certificado','% certificat','% certificado'];
+  const value=teimor0913FindAmount(flat,aliases);
+  return value>0 && value<=100 ? value : 0;
+}
+function teimor0913FindDocumentNumber(flat,kind,fileName){
+  const aliases=kind==='certificacio'
+    ? ['numero certificacio','número certificació','nº certificacio','nº certificació','num certificacio','num certificació','certificacio nº','certificació nº','certificado nº','certificació']
+    : ['numero factura','número factura','nº factura','num factura','factura nº','factura no','invoice number'];
+  const source=flat.slice(0,180).map(row=>row.cells.join(' ')).join(' | ');
+  const pattern=kind==='certificacio'
+    ? /(?:certificaci[oó]n?|certificado)\s*(?:n[ºo°]?|num(?:ero)?|#)?\s*[:#\-]?\s*([A-Z0-9][A-Z0-9./_-]*)/i
+    : /(?:factura|fra\.?|invoice)\s*(?:n[ºo°]?|num(?:ero)?|#)?\s*[:#\-]?\s*([A-Z0-9][A-Z0-9./_-]*)/i;
+  const cells=(flat||[]).flatMap(record=>(record.raw||[]).map(cleanText)).filter(Boolean);
+  for(const cell of cells){
+    const direct=cell.match(pattern);
+    if(direct && direct[1] && !/^(?:de|del|fecha|date|factura|certificaci[oó]|certificado|n|no)$/i.test(direct[1])) return direct[1];
+  }
+  for(const record of flat||[]){
+    const row=record.raw||[];
+    for(let i=0;i<row.length;i++){
+      if(!aliases.some(alias=>teimor0913Norm(row[i])===teimor0913Norm(alias))) continue;
+      const next=row.slice(i+1).map(cleanText).find(value=>value && !/^(data|fecha|date)$/i.test(value));
+      if(next) return next;
+    }
+  }
+  const match=source.match(pattern);
+  if(match && match[1] && !/^(?:de|del|fecha|date|factura|certificaci[oó]|certificado|n|no)$/i.test(match[1])) return match[1];
+  const base=teimor0913SourceName(fileName).replace(/\.(xls|xlsx|xlsm|csv)$/i,'').trim();
+  return base || uid(kind==='certificacio'?'CERT':'FAC');
+}
+function teimor0913FindFallbackDate(fileName){
+  const match=String(fileName||'').match(/\b(20\d{2}|19\d{2})[._-](\d{1,2})[._-](\d{1,2})\b|\b(\d{1,2})[._-](\d{1,2})[._-](20\d{2}|19\d{2})\b/);
+  if(!match) return '';
+  return parseDateValue(match[0].replace(/[._]/g,'/'));
+}
+function teimor0913FindConcept(flat,fileName){
+  const strict=typeof teimor0911StrictConcept==='function' ? teimor0911StrictConcept(flat) : '';
+  if(strict) return strict;
+  return teimor0913FindLabelValue(flat,['concepte','concepto','descripcio','descripción','descripció','detall','detalle','obra','feina','trabajo'],v=>v.length>1 && !isNonRecipientText(v)) || '';
+}
+function teimor0913ParseFinancialWorkbook(fileName,arrayBuffer,kind){
+  const parsed=teimor0913FinancialRows(fileName,arrayBuffer);
+  const {flat,text,sheets}=parsed;
+  const rawClient=(typeof detectClient==='function' ? detectClient(fileName,flat) : {}) || {};
+  const client={...rawClient};
+  if(client.name && (!isProbablyClientName(client.name) || looksLikeAddress(client.name) || /^\s*[A-ZÀ-Ý]\s*[/\\.]\s*/i.test(client.name))) client.name='';
+  const detectedDate=(typeof detectDateV099==='function' ? detectDateV099(flat) : detectDate(flat)) || teimor0913FindFallbackDate(fileName);
+  const iva=teimor0913FindIvaRate(flat);
+  const explicitBase=teimor0913FindAmount(flat,['base imposable','base imponible','importe neto','subtotal','base']);
+  const explicitTotal=teimor0913FindAmount(flat,kind==='certificacio'
+    ? ['total certificacio','total certificación','importe certificacion','importe certificación','total a certificar','total']
+    : ['total factura','importe total factura','total a pagar','importe total','total']);
+  const base=explicitBase || (explicitTotal ? explicitTotal/(1+iva/100) : 0);
+  const total=explicitTotal || base*(1+iva/100);
+  const doc={
+    id:uid(kind==='certificacio'?'CIMP':'FIMP'),
+    kind,
+    type:kind==='certificacio'?'Certificació':'Client',
+    number:teimor0913FindDocumentNumber(flat,kind,fileName),
+    date:detectedDate || '',
+    clientId:'',
+    clientSnapshot:{name:client.name||'',nif:client.nif||'',fiscalAddress:client.fiscalAddress||'',postalCode:client.postalCode||'',city:client.city||'',workAddress:client.workAddress||'',workCity:client.workCity||'',workPostalCode:client.workPostalCode||''},
+    jobId:'',
+    budgetId:'',
+    concept:teimor0913FindConcept(flat,fileName),
+    base:Number(base.toFixed(2)),
+    iva:Number(iva.toFixed(2)),
+    ivaAmount:Number((total-base).toFixed(2)),
+    total:Number(total.toFixed(2)),
+    percentage:kind==='certificacio'?teimor0913FindCertificationPercent(flat):0,
+    paid:false,
+    status:'Importada pendent de revisar',
+    matchStatus:'pendent',
+    matchConfidence:0,
+    sourceFile:fileName,
+    sourceSheets:sheets.map(sheet=>sheet.name),
+    sourceText:text.slice(0,5000),
+    notes:'Importada automàticament. Revisa la coincidència amb l’obra i el pressupost.'
+  };
+  teimor0913ApplyMatch(doc);
+  const warnings=[];
+  if(!doc.date) warnings.push(`${fileName}: no s’ha detectat una data segura.`);
+  if(!doc.number) warnings.push(`${fileName}: no s’ha detectat número de document.`);
+  if(!doc.clientSnapshot.name) warnings.push(`${fileName}: no s’ha detectat el client al quadre superior dret.`);
+  if(!doc.concept) warnings.push(`${fileName}: no s’ha detectat el concepte.`);
+  if(!base && !total) warnings.push(`${fileName}: no s’ha detectat base ni total.`);
+  return {doc,warnings,sheetCount:sheets.length};
+}
+
+function teimor0913ClientCandidates(doc){
+  const snap=doc.clientSnapshot||{};
+  const snapNif=teimor0913Nif(snap.nif);
+  const rows=(data.clients||[]).map(client=>{
+    let score=0; const reasons=[];
+    const nif=teimor0913Nif(client.nif);
+    if(snapNif && nif && snapNif===nif){ score+=130; reasons.push('NIF exacte'); }
+    const snapName=teimor0913Norm(snap.name), clientNameNorm=teimor0913Norm(client.name);
+    if(snapName && clientNameNorm && snapName===clientNameNorm){ score+=90; reasons.push('nom exacte'); }
+    else if(snapName && clientNameNorm && (snapName.includes(clientNameNorm) || clientNameNorm.includes(snapName))){ score+=55; reasons.push('nom semblant'); }
+    const overlap=teimor0913Overlap(snap.name,client.name);
+    if(overlap>0.35){ score+=Math.round(overlap*35); reasons.push('nom coincident'); }
+    const addressOverlap=teimor0913Overlap([snap.fiscalAddress,snap.city,snap.postalCode].join(' '),[client.fiscalAddress,client.city,client.postalCode].join(' '));
+    if(addressOverlap>0.25){ score+=Math.round(addressOverlap*25); reasons.push('dades fiscals semblants'); }
+    return {id:client.id,score,reasons:reasons.join(', ')};
+  }).filter(row=>row.score>0).sort((a,b)=>b.score-a.score);
+  return rows;
+}
+function teimor0913BudgetCandidates(doc){
+  const snap=doc.clientSnapshot||{};
+  const docNumber=teimor0913NormId(doc.number);
+  const sourceNorm=teimor0913NormId(doc.sourceText);
+  const docYear=teimor0913Year(doc.date||doc.sourceFile);
+  return (data.budgets||[]).map(budget=>{
+    const job=byId(data.jobs,budget.jobId)||{};
+    const client=byId(data.clients,budget.clientId)||{};
+    let score=0; const reasons=[]; let exactNumber=false;
+    const budgetNumbers=[budget.number,budget.originalNumber,budget.oldNumber,budget.id].filter(Boolean).map(teimor0913NormId);
+    if(docNumber && budgetNumbers.includes(docNumber)){ score+=150; exactNumber=true; reasons.push('número coincident'); }
+    else if(docNumber && budgetNumbers.some(value=>value && (docNumber.includes(value)||value.includes(docNumber)))){ score+=80; reasons.push('número semblant'); }
+    if(sourceNorm && budgetNumbers.some(value=>value && sourceNorm.includes(value))){ score+=55; reasons.push('número al document'); }
+    const snapNif=teimor0913Nif(snap.nif), clientNif=teimor0913Nif(client.nif);
+    if(snapNif && clientNif && snapNif===clientNif){ score+=65; reasons.push('NIF del client'); }
+    if(snap.name && client.name && teimor0913Norm(snap.name)===teimor0913Norm(client.name)){ score+=45; reasons.push('client exacte'); }
+    else if(snap.name && client.name && teimor0913Overlap(snap.name,client.name)>0.4){ score+=25; reasons.push('client semblant'); }
+    const concept=doc.concept||'';
+    const workText=[budget.title,job.title,job.address,job.city].join(' ');
+    const conceptOverlap=teimor0913Overlap(concept,workText);
+    if(conceptOverlap>0.25){ score+=Math.round(conceptOverlap*65); reasons.push('concepte/obra'); }
+    const addressOverlap=teimor0913Overlap([snap.workAddress,snap.workCity,snap.workPostalCode].join(' '),[job.address,job.city].join(' '));
+    if(addressOverlap>0.25){ score+=Math.round(addressOverlap*45); reasons.push('adreça d’obra'); }
+    if(docYear && Number(budget.date||job.year||0)===docYear){ score+=8; reasons.push('mateix any'); }
+    return {id:budget.id,score,exactNumber,reasons:reasons.join(', '),jobId:budget.jobId||'',clientId:budget.clientId||''};
+  }).filter(row=>row.score>0).sort((a,b)=>b.score-a.score);
+}
+function teimor0913JobCandidates(doc,clientId){
+  const snap=doc.clientSnapshot||{}; const docYear=teimor0913Year(doc.date||doc.sourceFile);
+  return (data.jobs||[]).map(job=>{
+    let score=0; const reasons=[];
+    if(clientId && job.clientId===clientId){ score+=55; reasons.push('client'); }
+    const overlap=teimor0913Overlap(doc.concept,[job.title,job.address,job.city].join(' '));
+    if(overlap>0.25){ score+=Math.round(overlap*75); reasons.push('concepte/obra'); }
+    const addressOverlap=teimor0913Overlap([snap.workAddress,snap.workCity,snap.workPostalCode].join(' '),[job.address,job.city].join(' '));
+    if(addressOverlap>0.25){ score+=Math.round(addressOverlap*55); reasons.push('adreça'); }
+    if(docYear && Number(job.year)===docYear){ score+=8; reasons.push('mateix any'); }
+    return {id:job.id,score,reasons:reasons.join(', '),clientId:job.clientId||''};
+  }).filter(row=>row.score>0).sort((a,b)=>b.score-a.score);
+}
+function teimor0913ApplyMatch(doc){
+  const clients=teimor0913ClientCandidates(doc);
+  const topClient=clients[0], secondClient=clients[1];
+  const clientSafe=!!topClient && topClient.score>=65 && (!secondClient || topClient.score-secondClient.score>=12);
+  if(clientSafe) doc.clientId=topClient.id;
+  const budgets=teimor0913BudgetCandidates(doc);
+  const topBudget=budgets[0], secondBudget=budgets[1];
+  const budgetSafe=!!topBudget && topBudget.score>=72 && (!secondBudget || topBudget.score-secondBudget.score>=12);
+  const budgetAutomatic=budgetSafe && (topBudget.exactNumber || topBudget.score>=125);
+  if(budgetSafe){
+    doc.budgetId=topBudget.id;
+    doc.jobId=topBudget.jobId||'';
+    if(!doc.clientId) doc.clientId=topBudget.clientId||'';
+  }else{
+    const jobs=teimor0913JobCandidates(doc,doc.clientId);
+    const topJob=jobs[0], secondJob=jobs[1];
+    if(topJob && topJob.score>=65 && (!secondJob || topJob.score-secondJob.score>=12)) doc.jobId=topJob.id;
+    doc.candidateJobIds=jobs.slice(0,5).map(row=>row.id);
+  }
+  doc.candidateClientIds=clients.slice(0,5).map(row=>row.id);
+  doc.candidateBudgetIds=budgets.slice(0,5).map(row=>row.id);
+  if(budgetAutomatic){
+    doc.matchStatus='automatica';
+    doc.matchConfidence=Math.min(100,Math.round(topBudget.score/1.5));
+  }else if(budgetSafe || clientSafe || doc.jobId){
+    doc.matchStatus='suggerida';
+    doc.matchConfidence=Math.min(95,Math.round(Math.max(topBudget?.score||0,topClient?.score||0)/1.5));
+  }else{
+    doc.matchStatus='pendent';
+    doc.matchConfidence=0;
+  }
+  doc.matchReason=[topBudget?.reasons,topClient?.reasons].filter(Boolean).join(' · ') || 'Sense coincidència segura';
+}
+function teimor0913MatchPill(doc){
+  const label=doc.matchStatus==='automatica'?'Coincidència automàtica':doc.matchStatus==='suggerida'?'Coincidència suggerida':'Pendent de validar';
+  return statusPill(label);
+}
+
+async function handleFinancialImportV0913(files){
+  teimor0913EnsureData();
+  if(typeof XLSX==='undefined'){ alert('No s’ha carregat la llibreria per llegir Excel. Revisa la connexió.'); return; }
+  const kind=document.getElementById('v0913FinancialKind')?.value || 'factura';
+  const draft={kind,files:[],documents:[],warnings:[]};
+  const spreadsheetFiles=[];
+  for(const file of files||[]){
+    const name=(file.webkitRelativePath || file.name || '').toLowerCase();
+    if(name.endsWith('.rar')){ draft.warnings.push(`RAR detectat: ${file.name}. Descomprimeix-lo amb WinRAR i importa la carpeta, o crea un ZIP.`); continue; }
+    if(name.endsWith('.zip')){
+      if(typeof JSZip==='undefined'){ draft.warnings.push(`ZIP ignorat perquè JSZip no està carregat: ${file.name}`); continue; }
+      const zip=await JSZip.loadAsync(file);
+      const entries=Object.values(zip.files).filter(entry=>!entry.dir && /\.(xls|xlsx|xlsm|csv)$/i.test(entry.name));
+      draft.warnings.push(`ZIP ${file.name}: ${entries.length} documents Excel detectats.`);
+      for(const entry of entries) spreadsheetFiles.push({name:entry.name,arrayBuffer:await entry.async('arraybuffer')});
+    }else if(/\.(xls|xlsx|xlsm|csv)$/i.test(name)){
+      spreadsheetFiles.push({name:file.webkitRelativePath || file.name,arrayBuffer:await file.arrayBuffer()});
+    }
+  }
+  for(const file of spreadsheetFiles){
+    try{
+      const parsed=teimor0913ParseFinancialWorkbook(file.name,file.arrayBuffer,kind);
+      draft.files.push(file.name);
+      draft.documents.push(parsed.doc);
+      draft.warnings.push(...parsed.warnings);
+    }catch(error){
+      console.error(error);
+      draft.warnings.push(`ERROR llegint ${file.name}: ${error.message}`);
+    }
+  }
+  state.financialDraft=draft;
+  renderImporter();
+}
+
+function teimor0913FinancialOptions(kind,selected){
+  if(kind==='clientId') return '<option value="">Pendent de validar</option>'+options(data.clients,selected,c=>c.name||c.id);
+  if(kind==='jobId') return '<option value="">Pendent de validar</option>'+options(data.jobs,selected,j=>`${j.year||''} · ${j.title||j.id}`);
+  return '<option value="">Pendent de validar</option>'+options(data.budgets,selected,b=>`${b.number||b.id} · ${b.title||''}`);
+}
+function teimor0913FinancialPreviewHtml(draft){
+  const docs=draft?.documents||[];
+  if(!docs.length && !(draft?.warnings||[]).length) return '<div class="empty">No s’han detectat documents.</div>';
+  const rows=docs.map(doc=>`<tr>
+    <td><strong>${esc(teimor0913DocTypeLabel(doc))}</strong><br>${esc(doc.number||'Sense número')}<br><span class="muted">${esc(dateDisplay(doc.date))}</span></td>
+    <td>${esc(doc.clientSnapshot?.name||'Client no detectat')}<br><span class="small-text">${esc(doc.clientSnapshot?.nif||'')}</span></td>
+    <td>${esc(doc.concept||'Concepte pendent')}</td>
+    <td class="num">${money(doc.base)}</td><td class="num">${num(doc.iva).toFixed(2)}%</td><td class="num"><strong>${money(teimor0913DocTotal(doc))}</strong></td>
+    <td>${teimor0913MatchPill(doc)}<br><span class="small-text">${esc(doc.matchReason||'')}</span></td>
+    <td>${esc(teimor0913SourceName(doc.sourceFile))}</td>
+  </tr>
+  <tr class="financial-review-row"><td colspan="8">
+    <div class="small-text"><strong>Validació manual de ${esc(doc.number||doc.id)}:</strong> si la coincidència és suggerida o pendent, tria el client, l’obra i el pressupost correctes. El pressupost seleccionat estableix automàticament l’obra i el client.</div>
+    <div class="filter-grid">
+      <label>Client<select data-v0913-financial-field="clientId" data-v0913-financial-id="${esc(doc.id)}">${teimor0913FinancialOptions('clientId',doc.clientId)}</select></label>
+      <label>Obra<select data-v0913-financial-field="jobId" data-v0913-financial-id="${esc(doc.id)}">${teimor0913FinancialOptions('jobId',doc.jobId)}</select></label>
+      <label class="wide">Pressupost<select data-v0913-financial-field="budgetId" data-v0913-financial-id="${esc(doc.id)}">${teimor0913FinancialOptions('budgetId',doc.budgetId)}</select></label>
+    </div>
+  </td></tr>`).join('');
+  const auto=docs.filter(doc=>doc.matchStatus==='automatica').length;
+  const suggested=docs.filter(doc=>doc.matchStatus==='suggerida').length;
+  const pending=docs.filter(doc=>doc.matchStatus==='pendent').length;
+  return `<div class="card" id="v0913FinancialPreviewCard"><h2>Previsualització de ${esc(teimor0913KindLabel(draft.kind))}</h2>
+    <div class="card notice-blue"><strong>Llibreria manual:</strong> aquests documents no creen ni dupliquen partides de la llibreria. Només es guarden com a factures/certificacions relacionades amb clients, obres i pressupostos.</div>
+    <div class="import-summary"><div class="import-card"><span>Fitxers</span><strong>${draft.files?.length||0}</strong></div><div class="import-card"><span>Documents</span><strong>${docs.length}</strong></div><div class="import-card"><span>Automàtiques</span><strong>${auto}</strong></div><div class="import-card"><span>Suggerides</span><strong>${suggested}</strong></div><div class="import-card"><span>Pendents</span><strong>${pending}</strong></div></div>
+    <div class="actions"><button class="primary" id="v0913ConfirmFinancialImport">Confirmar ${esc(teimor0913KindLabel(draft.kind).toLowerCase())}</button><button class="ghost" id="v0913DiscardFinancialImport">Descartar</button><button class="ghost" data-go="obres">Veure obres</button></div>
+    ${docs.length ? table(['Tipus / número','Client llegit','Concepte','Base','IVA','Total','Coincidència','Origen'],rows) : ''}
+    ${draft.warnings?.length ? `<h3>Registre de lectura</h3><div class="log">${esc(draft.warnings.join('\n'))}</div>`:''}
+  </div>`;
+}
+function teimor0913FinancialImporterCard(){
+  return `<div class="card" id="v0913FinancialImporter"><div class="toolbar"><div><h2>Importar factures i certificacions</h2><p class="muted">Llegeix Excel, CSV, carpeta o ZIP i proposa la relació amb les obres i pressupostos ja existents.</p></div></div>
+    <div class="filter-grid"><label>Tipus de documents<select id="v0913FinancialKind"><option value="factura" ${state.financialDraft?.kind!=='certificacio'?'selected':''}>Factures</option><option value="certificacio" ${state.financialDraft?.kind==='certificacio'?'selected':''}>Certificacions</option></select></label></div>
+    <div id="v0913FinancialDropzone" class="dropzone"><p>Selecciona els documents del tipus triat. Pots fer blocs de 50, com amb els pressupostos.</p><div class="actions" style="justify-content:center"><label class="primary file-label">Seleccionar documents<input id="v0913FinancialInput" type="file" multiple accept=".xls,.xlsx,.xlsm,.csv,.zip,.rar" hidden></label><label class="ghost file-label">Seleccionar carpeta<input id="v0913FinancialFolder" type="file" webkitdirectory directory multiple hidden></label></div></div>
+    <div id="v0913FinancialPreview">${state.financialDraft ? teimor0913FinancialPreviewHtml(state.financialDraft) : '<div class="empty">Encara no has analitzat cap factura o certificació en aquesta sessió.</div>'}</div>
+  </div>`;
+}
+
+function confirmFinancialImportV0913(){
+  teimor0913EnsureData();
+  const draft=state.financialDraft;
+  if(!draft || !(draft.documents||[]).length) return alert('No hi ha documents financers per confirmar.');
+  const target=draft.kind==='certificacio' ? data.certifications : data.invoices;
+  let added=0,duplicates=0,pending=0;
+  for(const source of draft.documents){
+    const duplicate=target.find(existing=>{
+      const sameKind=(existing.kind||draft.kind)===draft.kind;
+      const sameNumber=source.number && existing.number && teimor0913NormId(source.number)===teimor0913NormId(existing.number);
+      const sameDate=!source.date || !existing.date || source.date===existing.date;
+      const sameSource=source.sourceFile && existing.sourceFile===source.sourceFile && (!source.number || source.number===existing.number);
+      return sameKind && ((sameNumber && sameDate) || sameSource);
+    });
+    if(duplicate){ duplicates++; continue; }
+    const item={...source,id:uid(draft.kind==='certificacio'?'CERT':'FAC'),importedAt:new Date().toISOString(),sourceFiles:[source.sourceFile].filter(Boolean),status:source.matchStatus==='automatica'?'Importada · vinculada':'Importada · pendent de revisar'};
+    if(item.budgetId){ const budget=byId(data.budgets,item.budgetId); if(budget){ item.jobId=budget.jobId||item.jobId; item.clientId=budget.clientId||item.clientId; } }
+    if(item.matchStatus!=='automatica') pending++;
+    target.push(item); added++;
+  }
+  data.importLogs.push({id:uid('IMP'),date:new Date().toISOString(),files:draft.files||[],kind:draft.kind,countDocuments:draft.documents.length,added,duplicates,pendingMatches:pending,libraryAdded:0,libraryManualOnly:true});
+  state.financialDraft=null;
+  saveData();
+  alert(`${teimor0913KindLabel(draft.kind)} importada. Documents nous: ${added}. Repetits omesos: ${duplicates}. Pendents de vincular/revisar: ${pending}.`);
+  state.view='obres';
+  render();
+}
+function discardFinancialImportV0913(){ state.financialDraft=null; renderImporter(); }
+function updateFinancialDraftFieldV0913(event){
+  const draft=state.financialDraft; if(!draft) return;
+  const doc=draft.documents.find(item=>item.id===event.target.dataset.v0913FinancialId); if(!doc) return;
+  const field=event.target.dataset.v0913FinancialField;
+  doc[field]=event.target.value;
+  if(field==='budgetId'){
+    const budget=byId(data.budgets,doc.budgetId);
+    if(budget){ doc.jobId=budget.jobId||''; doc.clientId=budget.clientId||''; }
+  }else if(field==='jobId'){
+    const job=byId(data.jobs,doc.jobId);
+    if(job){ doc.clientId=job.clientId||doc.clientId; if(doc.budgetId && byId(data.budgets,doc.budgetId)?.jobId!==doc.jobId) doc.budgetId=''; }
+  }else if(field==='clientId'){
+    const budget=byId(data.budgets,doc.budgetId);
+    if(budget && budget.clientId!==doc.clientId) doc.budgetId='';
+    const job=byId(data.jobs,doc.jobId);
+    if(job && job.clientId!==doc.clientId) doc.jobId='';
+  }
+  doc.matchStatus='manual'; doc.matchConfidence=100; doc.matchReason='Relació validada manualment a la previsualització.';
+  renderImporter();
+}
+
+function teimor0913TraceBudgetHtml(budgets){
+  if(!budgets.length) return empty('Aquesta obra encara no té pressupostos vinculats.');
+  return table(['Data','Número','Concepte','Base','Total','Estat','Acció'],budgets.map(b=>`<tr><td>${esc(dateDisplay(b.date))}</td><td>${esc(b.number||b.id)}</td><td>${esc(b.title||'')}</td><td class="num">${money(budgetBase(b))}</td><td class="num">${money(budgetTotal(b))}</td><td>${statusPill(b.status||'')}</td><td><button class="ghost small" data-open-budget="${esc(b.id)}">Obrir pressupost</button></td></tr>`));
+}
+function teimor0913TraceInvoiceHtml(invoices){
+  if(!invoices.length) return empty('Aquesta obra encara no té factures vinculades.');
+  return table(['Data','Número','Concepte','Pressupost','Base','Total','Estat','Acció'],invoices.map(i=>`<tr><td>${esc(dateDisplay(i.date))}</td><td>${esc(i.number||i.id)}</td><td>${esc(i.concept||'')}</td><td>${esc(budgetName(i.budgetId)||'Sense pressupost')}</td><td class="num">${money(invoiceBase(i))}</td><td class="num">${money(invoiceTotal(i))}</td><td>${statusPill(i.paid?'Pagada':(i.status||'Pendent'))}</td><td><button class="ghost small" data-edit-invoice="${esc(i.id)}">Obrir factura</button></td></tr>`));
+}
+function teimor0913TraceCertificationHtml(certifications){
+  if(!certifications.length) return empty('Aquesta obra encara no té certificacions vinculades.');
+  return table(['Data','Número','Concepte','Pressupost','%','Base','Total','Estat'],certifications.map(c=>`<tr><td>${esc(dateDisplay(c.date))}</td><td>${esc(c.number||c.id)}</td><td>${esc(c.concept||'')}</td><td>${esc(budgetName(c.budgetId)||'Sense pressupost')}</td><td class="num">${c.percentage?num(c.percentage).toFixed(2)+'%':'—'}</td><td class="num">${money(c.base)}</td><td class="num">${money(teimor0913CertTotal(c))}</td><td>${teimor0913MatchPill(c)}</td></tr>`));
+}
+function teimor0913FindExistingDocument(id,kind){
+  const list=kind==='certificacio' ? data.certifications : data.invoices;
+  return list.find(doc=>doc.id===id);
+}
+function teimor0913SaveExistingRelation(id,kind){
+  const doc=teimor0913FindExistingDocument(id,kind); if(!doc) return;
+  if(doc.budgetId){
+    const budget=byId(data.budgets,doc.budgetId);
+    if(budget){ doc.jobId=budget.jobId||''; doc.clientId=budget.clientId||doc.clientId||''; }
+  }else if(doc.jobId){
+    const job=byId(data.jobs,doc.jobId);
+    if(job) doc.clientId=job.clientId||doc.clientId||'';
+  }
+  doc.matchStatus=doc.jobId?'manual':'pendent';
+  doc.matchConfidence=doc.jobId?100:0;
+  doc.matchReason=doc.jobId?'Relació corregida manualment des d’Obres / traçabilitat.':'Encara sense obra vinculada.';
+  doc.status=doc.jobId?'Importada · vinculada':'Importada · pendent de revisar';
+  saveData(); renderObresV0913();
+}
+function updateExistingFinancialFieldV0913(event){
+  const kind=event.target.dataset.v0913ExistingKind;
+  const doc=teimor0913FindExistingDocument(event.target.dataset.v0913ExistingId,kind); if(!doc) return;
+  const field=event.target.dataset.v0913ExistingField;
+  doc[field]=event.target.value;
+  if(field==='budgetId'){
+    const budget=byId(data.budgets,doc.budgetId);
+    if(budget){ doc.jobId=budget.jobId||''; doc.clientId=budget.clientId||doc.clientId||''; }
+  }
+}
+function teimor0913UnmatchedHtml(){
+  const docs=[...(data.invoices||[]).map(doc=>({...doc,__kind:'factura'})),...(data.certifications||[]).map(doc=>({...doc,__kind:'certificacio'}))].filter(doc=>!doc.jobId);
+  if(!docs.length) return '<div class="notice-green">No hi ha factures ni certificacions pendents de relacionar amb una obra.</div>';
+  const rows=[];
+  docs.forEach(doc=>{
+    rows.push(`<tr><td>${esc(teimor0913DocTypeLabel(doc))}</td><td>${esc(doc.number||doc.id)}</td><td>${esc(byId(data.clients,doc.clientId)?.name||doc.clientSnapshot?.name||'Client pendent')}</td><td>${esc(dateDisplay(doc.date))}</td><td class="num">${money(teimor0913DocTotal(doc))}</td><td>${esc(budgetName(doc.budgetId)||'Sense pressupost')}</td><td>${esc(teimor0913SourceName(doc.sourceFile||''))}</td><td><button class="ghost small" data-go="importer">Revisar importació</button></td></tr>`);
+    rows.push(`<tr class="financial-review-row"><td colspan="8"><div class="small-text"><strong>Vincular ${esc(doc.number||doc.id)}:</strong> pots fer-ho ara sense tornar a importar el fitxer.</div><div class="filter-grid"><label>Client<select data-v0913-existing-field="clientId" data-v0913-existing-id="${esc(doc.id)}" data-v0913-existing-kind="${esc(doc.__kind)}">${teimor0913FinancialOptions('clientId',doc.clientId)}</select></label><label>Obra<select data-v0913-existing-field="jobId" data-v0913-existing-id="${esc(doc.id)}" data-v0913-existing-kind="${esc(doc.__kind)}">${teimor0913FinancialOptions('jobId',doc.jobId)}</select></label><label class="wide">Pressupost<select data-v0913-existing-field="budgetId" data-v0913-existing-id="${esc(doc.id)}" data-v0913-existing-kind="${esc(doc.__kind)}">${teimor0913FinancialOptions('budgetId',doc.budgetId)}</select></label></div><button class="primary small" data-v0913-save-existing="${esc(doc.id)}" data-v0913-existing-kind="${esc(doc.__kind)}">Guardar relació</button></td></tr>`);
+  });
+  return table(['Tipus','Número','Client llegit','Data','Total','Pressupost','Origen','Acció'],rows);
+}
+function renderObresV0913(){
+  teimor0913EnsureData();
+  setHeader('Obres / traçabilitat','Vista central de cada obra amb els pressupostos, factures i certificacions relacionats.');
+  const jobs=[...data.jobs].sort((a,b)=>Number(b.year||0)-Number(a.year||0) || String(a.title||'').localeCompare(String(b.title||'')));
+  const selected=byId(data.jobs,state.selectedJobId) || jobs[0] || null;
+  const allDocs=[...(data.invoices||[]),...(data.certifications||[])];
+  const selectedBudgets=selected?jobBudgets(selected.id):[];
+  const selectedInvoices=selected?jobInvoices(selected.id):[];
+  const selectedCertifications=selected?data.certifications.filter(doc=>doc.jobId===selected.id):[];
+  const totalBudget=jobs.reduce((sum,job)=>sum+jobBudgetTotal(job.id),0);
+  const totalInvoices=data.invoices.reduce((sum,doc)=>sum+invoiceTotal(doc),0);
+  const totalCertifications=data.certifications.reduce((sum,doc)=>sum+teimor0913CertTotal(doc),0);
+  setContent(`<div class="grid four"><div class="kpi"><span>Obres</span><strong>${jobs.length}</strong></div><div class="kpi"><span>Pressupostos</span><strong>${data.budgets.length}</strong></div><div class="kpi"><span>Factures</span><strong>${data.invoices.length}</strong></div><div class="kpi"><span>Certificacions</span><strong>${data.certifications.length}</strong></div></div>
+    <div class="card"><div class="toolbar"><div><h2>Relació per obra</h2><p class="muted">Pressupostat: ${money(totalBudget)} · Facturat: ${money(totalInvoices)} · Certificat: ${money(totalCertifications)}</p></div><button class="primary" data-go="importer">Importar factures / certificacions</button></div>${table(['Any','Obra','Client','Adreça','Pressupostos','Factures','Certificacions','Pressupostat','Facturat','Certificat','Acció'],jobs.map(job=>{ const bs=jobBudgets(job.id),is=jobInvoices(job.id),cs=data.certifications.filter(doc=>doc.jobId===job.id); return `<tr><td>${esc(job.year||'')}</td><td><strong>${esc(job.title||'Obra sense nom')}</strong></td><td>${esc(clientName(job.clientId))}</td><td>${esc(job.address||'')}</td><td class="num">${bs.length}</td><td class="num">${is.length}</td><td class="num">${cs.length}</td><td class="num">${money(jobBudgetTotal(job.id))}</td><td class="num">${money(jobInvoiceTotal(job.id))}</td><td class="num">${money(cs.reduce((sum,doc)=>sum+teimor0913CertTotal(doc),0))}</td><td class="nowrap"><button class="primary small" data-v0913-trace-job="${esc(job.id)}">Veure traçabilitat</button> <button class="ghost small" data-edit-job="${esc(job.id)}">Editar obra</button></td></tr>`;}))}</div>
+    ${selected?`<div class="card"><div class="toolbar"><div><h2>${esc(selected.title||'Obra sense nom')}</h2><p>${esc(clientName(selected.clientId)||'Client pendent')} · ${esc(selected.address||'')}${selected.city?' · '+esc(selected.city):''}</p></div><button class="ghost" data-edit-job="${esc(selected.id)}">Editar obra</button></div><div class="grid four"><div class="kpi"><span>Pressupostos</span><strong>${selectedBudgets.length}</strong></div><div class="kpi"><span>Factures</span><strong>${selectedInvoices.length}</strong></div><div class="kpi"><span>Certificacions</span><strong>${selectedCertifications.length}</strong></div><div class="kpi"><span>Pressupostat / facturat</span><strong>${money(jobBudgetTotal(selected.id)-jobInvoiceTotal(selected.id))}</strong></div></div><div class="grid two"><div class="card"><h3>Pressupostos</h3>${teimor0913TraceBudgetHtml(selectedBudgets)}</div><div class="card"><h3>Factures</h3>${teimor0913TraceInvoiceHtml(selectedInvoices)}</div><div class="card"><h3>Certificacions</h3>${teimor0913TraceCertificationHtml(selectedCertifications)}</div></div></div>`:'<div class="card">'+empty('Encara no hi ha obres. Importa pressupostos o crea una obra per començar la traçabilitat.')+'</div>'}
+    <div class="card"><h2>Documents pendents de vincular a una obra</h2>${teimor0913UnmatchedHtml()}</div>`);
+}
+
+const __teimorBaseRenderV0913=render;
+render=function(){
+  teimor0913EnsureData();
+  if(state.view==='obres') return renderObresV0913();
+  return __teimorBaseRenderV0913();
+};
+
+const __teimorBaseBindViewEventsV0913=bindViewEvents;
+bindViewEvents=function(){
+  __teimorBaseBindViewEventsV0913();
+  document.querySelectorAll('[data-v0913-trace-job]').forEach(button=>button.onclick=()=>{ state.selectedJobId=button.dataset.v0913TraceJob; renderObresV0913(); });
+  document.querySelectorAll('[data-v0913-financial-field]').forEach(field=>field.onchange=updateFinancialDraftFieldV0913);
+  const financialInput=document.getElementById('v0913FinancialInput'); if(financialInput) financialInput.onchange=e=>handleFinancialImportV0913([...e.target.files]);
+  const financialFolder=document.getElementById('v0913FinancialFolder'); if(financialFolder) financialFolder.onchange=e=>handleFinancialImportV0913([...e.target.files]);
+  const financialDropzone=document.getElementById('v0913FinancialDropzone');
+  if(financialDropzone){
+    financialDropzone.ondragover=e=>{e.preventDefault(); financialDropzone.classList.add('drag');};
+    financialDropzone.ondragleave=()=>financialDropzone.classList.remove('drag');
+    financialDropzone.ondrop=e=>{e.preventDefault(); financialDropzone.classList.remove('drag'); handleFinancialImportV0913([...e.dataTransfer.files]);};
+  }
+  const confirmFinancial=document.getElementById('v0913ConfirmFinancialImport'); if(confirmFinancial) confirmFinancial.onclick=confirmFinancialImportV0913;
+  const discardFinancial=document.getElementById('v0913DiscardFinancialImport'); if(discardFinancial) discardFinancial.onclick=discardFinancialImportV0913;
+  document.querySelectorAll('[data-edit-invoice]').forEach(button=>button.onclick=()=>renderInvoices(button.dataset.editInvoice));
+  document.querySelectorAll('[data-v0913-existing-field]').forEach(field=>field.onchange=updateExistingFinancialFieldV0913);
+  document.querySelectorAll('[data-v0913-save-existing]').forEach(button=>button.onclick=()=>teimor0913SaveExistingRelation(button.dataset.v0913SaveExisting,button.dataset.v0913ExistingKind));
+};
+
+const __teimorBaseRenderImporterV0913=renderImporter;
+renderImporter=function(){
+  __teimorBaseRenderImporterV0913();
+  const content=document.getElementById('content');
+  if(content) content.insertAdjacentHTML('beforeend',teimor0913FinancialImporterCard());
+  bindViewEvents();
+};
+
+const __teimorBaseRenderInvoicesV0913=renderInvoices;
+renderInvoices=function(editId=''){
+  __teimorBaseRenderInvoicesV0913(editId);
+  const content=document.getElementById('content');
+  if(!content) return;
+  const card=`<div class="card"><div class="toolbar"><h2>Certificacions importades</h2><button class="ghost" data-go="obres">Veure per obra</button></div>${teimor0913TraceCertificationHtml(data.certifications||[])}</div>`;
+  content.insertAdjacentHTML('beforeend',card);
+  bindViewEvents();
+};
+
+saveInvoice=function(event){
+  event.preventDefault();
+  const fields=formObj(event.target);
+  const old=byId(data.invoices,fields.editId)||{};
+  const base=num(fields.base), iva=num(fields.iva);
+  const invoice={...old,id:fields.id,number:fields.number,date:fields.date,jobId:fields.jobId,budgetId:fields.budgetId,type:fields.type,concept:fields.concept,base,iva,total:Number((base*(1+iva/100)).toFixed(2)),paid:fields.paid==='true',notes:fields.notes};
+  const budget=byId(data.budgets,invoice.budgetId);
+  const job=byId(data.jobs,invoice.jobId || budget?.jobId);
+  if(!invoice.jobId && budget?.jobId) invoice.jobId=budget.jobId;
+  if(!invoice.clientId) invoice.clientId=budget?.clientId || job?.clientId || '';
+  const index=data.invoices.findIndex(item=>item.id===fields.editId || item.id===invoice.id);
+  if(index>=0) data.invoices[index]=invoice; else data.invoices.push(invoice);
+  saveData(); renderInvoices();
+};
+
+const __teimorBaseDeleteClientV0913=deleteClient;
+deleteClient=function(id){
+  const affected=(data.certifications||[]).filter(doc=>doc.clientId===id).map(doc=>({doc,clientId:doc.clientId}));
+  const result=__teimorBaseDeleteClientV0913(id);
+  if(data.clients.some(client=>client.id===id)) affected.forEach(item=>{ item.doc.clientId=item.clientId; });
+  else affected.forEach(item=>{ item.doc.clientId=''; });
+  return result;
+};
+const __teimorBaseDeleteJobV0913=deleteJob;
+deleteJob=function(id){
+  const affected=(data.certifications||[]).filter(doc=>doc.jobId===id).map(doc=>({doc,jobId:doc.jobId}));
+  const result=__teimorBaseDeleteJobV0913(id);
+  if(data.jobs.some(job=>job.id===id)) affected.forEach(item=>{ item.doc.jobId=item.jobId; });
+  else affected.forEach(item=>{ item.doc.jobId=''; });
+  return result;
+};
+const __teimorBaseDeleteBudgetV0913=deleteBudget;
+deleteBudget=function(id){
+  const affected=(data.certifications||[]).filter(doc=>doc.budgetId===id).map(doc=>({doc,budgetId:doc.budgetId}));
+  const result=__teimorBaseDeleteBudgetV0913(id);
+  if(data.budgets.some(budget=>budget.id===id)) affected.forEach(item=>{ item.doc.budgetId=item.budgetId; });
+  else affected.forEach(item=>{ item.doc.budgetId=''; });
+  return result;
 };
