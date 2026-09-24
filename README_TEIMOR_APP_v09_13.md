@@ -1,4 +1,4 @@
-# TEIMOR V09.13 · factures, certificacions i traçabilitat
+# TEIMOR V09.13.1 · identificació d’obra, factures i traçabilitat
 
 V09.13 parteix de V09.12 i manté les versions anteriors intactes.
 
@@ -15,6 +15,10 @@ Canvis principals:
 - La llibreria de partides continua sent manual: cap importació financera ni de pressupostos hi afegeix partides automàticament.
 - Es mantenen la lectura de Treballs per punts/asteriscs/vinyetes, la depuració de clients, la fusió revisable i l’edició manual de capítols de V09.12.
 - La importació de documents repetits del mateix número/data o origen es detecta i s’omet per evitar duplicats.
+- A Obres, la identificació mostra la paraula clau/concepte i l’adreça real de l’obra en camps separats.
+- L’adreça de l’obra només es llegeix des d’un camp explícit d’obra; les línies de partides no es poden convertir en adreces.
+- Còpies JSON de V09.12/V09.11 es poden fusionar des de Còpies / JSON per recuperar pressupostos ja ordenats o corregits.
+- Els pressupostos sense obra vinculada es mostren igualment a Obres perquè no quedin ocults.
 
 Ús recomanat:
 

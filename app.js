@@ -5986,3 +5986,611 @@ deleteBudget=function(id){
   else affected.forEach(item=>{ item.doc.budgetId=''; });
   return result;
 };
+
+/* =========================================================
+   TEIMOR V09.13.1 · IDENTIFICACIÓ D'OBRA I RECUPERACIÓ
+   - Paraula clau/concepte i adreça d'obra són camps independents.
+   - L'adreça d'obra només s'accepta des d'un camp d'obra explícit.
+   - Les dades de la versió anterior es poden recuperar i fusionar.
+   ========================================================= */
+
+data.meta = data.meta || {};
+data.meta.version = '9.13.1-identificacio-obra-recuperacio';
+
+function teimor0913v2Clean(value){
+  return cleanText(String(value == null ? '' : value).replace(/\u00a0/g,' '));
+}
+
+function teimor0913v2LooksLikeLabel(value){
+  const t=strip(value);
+  return /^(?:client(?:e)?|client\s*\/\s*empresa|destinatari|destinatario|senyors|sres|promotor|propietari|propiedad|nif|dni|cif|nif\s*\/\s*(?:dni|cif)|codi postal|codigo postal|cp|c\.p\.|poblacio|poblacion|municipi|municipio|localitat|localidad|ciutat|ciudad|adre[cç]a|direccio|direccion|domicili|domicilio|concepte|concepto|obra|feina|treball|trabajo|unitat|unidad|quantitat|cantidad|amidament|medicio|medicion|preu|precio|import|importe|total|subtotal|observacions|observaciones|notes|notas)$/i.test(t);
+}
+
+function teimor0913v2LooksLikeLineItem(value){
+  const t=teimor0913v2Clean(value);
+  if(!t) return false;
+  if(/^\s*[·•*]\s*/.test(t)) return true;
+  if(/^(?:partida|cap[ií]tol|concepte|concepto|treballs?|trabajos?|unitat|unidad|quantitat|cantidad|amidament|medici[oó]n?|preu|precio|import|importe|total|subtotal|descripci[oó]n|descripció)\b/i.test(t)) return true;
+  if(/(?:m²|m2|m3|m³|ml|kg|ud|ut|h)\b/i.test(t) && /(?:€|=|x|×|\d+[.,]\d+)/i.test(t)) return true;
+  if(/\b(?:subministrament|suministro|col\.?locaci[oó]|colocaci[oó]n|retirada|neteja|limpieza|impermeabilitzaci[oó]|impermeabilizaci[oó]n|revestiment|revestimiento|enderroc|demolici[oó]|reparaci[oó]|muntatge|montaje)\b/i.test(t) && !looksLikeAddress(t)) return true;
+  return false;
+}
+
+function teimor0913v2Accept(value,kind,sameRow){
+  const t=teimor0913v2Clean(value);
+  if(!t || teimor0913v2LooksLikeLabel(t) || isTeimorText(t) || looksLikeCalculationLine(t)) return '';
+  if(kind==='name') return isProbablyClientName(t) ? t : '';
+  if(kind==='postal') return /^(?:0[1-9]|[1-4][0-9]|5[0-2])[0-9]{3}$/.test(t.replace(/\s/g,'')) ? t.replace(/\s/g,'') : '';
+  if(kind==='nif') return teimor0911NifFromText(t) || '';
+  if(kind==='city') return !looksLikeAddress(t) && !/^\d{5}$/.test(t) && t.length<=100 && !teimor0913v2LooksLikeLineItem(t) ? t : '';
+  if(kind==='concept'){
+    return t.length>1 && t.length<=240 && !teimor0913v2LooksLikeLineItem(t) ? t : '';
+  }
+  if(kind==='address'){
+    if(t.length>180 || teimor0913v2LooksLikeLineItem(t)) return '';
+    if(sameRow) return t;
+    return looksLikeAddress(t) || /\b\d{1,5}\b/.test(t) || looksLikeCityLine(t) ? t : '';
+  }
+  return t;
+}
+
+function teimor0913v2StrictFieldValue(records,aliases,kind,allowNextRow){
+  const list=teimor099Aliases(aliases);
+  const source=records||[];
+  for(const record of source){
+    const cell=teimor099CellText(record.text);
+    if(!cell || teimor0911TableHeaderRow(record)) continue;
+    const inline=teimor099InlineValue(cell,list);
+    const inlineValue=teimor0913v2Accept(inline,kind,true);
+    if(inlineValue) return inlineValue;
+    if(!teimor099IsExactLabel(cell,list)) continue;
+    const row=record.raw||[];
+    for(let col=record.col+1;col<row.length;col++){
+      const candidate=teimor099CellText(row[col]);
+      if(!candidate || teimor099IsExactLabel(candidate,list)) continue;
+      const value=teimor0913v2Accept(candidate,kind,true);
+      if(value) return value;
+    }
+    if(record.col>0){
+      const candidate=teimor099CellText(row[record.col-1]);
+      const value=teimor0913v2Accept(candidate,kind,true);
+      if(value) return value;
+    }
+    if(allowNextRow!==false){
+      for(const next of source){
+        if(next.sheet!==record.sheet || next.rowIndex!==record.rowIndex+1 || next.col!==record.col) continue;
+        const value=teimor0913v2Accept(next.text,kind,false);
+        if(value) return value;
+      }
+    }
+  }
+  return '';
+}
+
+const TEIMOR0913V2_CLIENT_NAME_LABELS=[
+  'client / empresa','client','cliente','destinatari','destinatario','senyors','sres',
+  'promotor','propietari','propiedad','comunitat','comunidad'
+];
+const TEIMOR0913V2_FISCAL_ADDRESS_LABELS=[
+  'adreça fiscal','adressa fiscal','direcció fiscal','direccion fiscal','domicili fiscal',
+  'domicilio fiscal','adreça','adressa','direcció','direccion','domicili','domicilio'
+];
+const TEIMOR0913V2_POSTAL_LABELS=['codi postal','codigo postal','cp','c.p.'];
+const TEIMOR0913V2_NIF_LABELS=[
+  'nif','dni','cif','nif/cif','nif / cif','nif/dni','nif / dni','nif/dni/cif',
+  'nif / dni / cif','identificació fiscal','identificacion fiscal'
+];
+const TEIMOR0913V2_CITY_LABELS=[
+  'població','poblacion','població / ciutat','poblacion / ciudad','municipi',
+  'municipio','localitat','localidad','ciutat','ciudad'
+];
+const TEIMOR0913V2_WORK_ADDRESS_LABELS=[
+  'adreça obra','adressa obra','adreça de l’obra',"adreça de l'obra",'adressa de lobra',
+  'adreça de la obra','direcció obra','direccio obra','direccion obra','dirección de la obra',
+  'emplaçament','emplazamiento','ubicació obra','ubicacio obra','ubicacion obra',
+  'localització obra','localitzacio obra','localización obra','situació obra','situacio obra',
+  'situacion obra','lloc de l’obra',"lloc de l'obra",'lugar de la obra','domicili obra',
+  'domicilio obra','domicili de l’obra',"domicili de l'obra",'domicilio de la obra',
+  'adreça feina','adressa feina','direcció feina','direccio feina','direccion trabajo',
+  'adreça del treball','adressa del treball'
+];
+const TEIMOR0913V2_WORK_POSTAL_LABELS=['codi postal obra','codigo postal obra','cp obra','postal obra'];
+const TEIMOR0913V2_WORK_CITY_LABELS=[
+  'població obra','poblacion obra','municipi obra','municipio obra','localitat obra',
+  'localidad obra','ciutat obra','ciudad obra','població de l’obra',"població de l'obra",
+  'municipi de l’obra',"municipi de l'obra",'municipio de la obra','ciutat obra'
+];
+
+function teimor0913v2ReadFlat(arrayBuffer){
+  const wb=XLSX.read(arrayBuffer,{type:'array',cellDates:true,raw:true,cellNF:true,cellText:true});
+  const flat=[];
+  for(const sheetName of wb.SheetNames||[]){
+    const rows=XLSX.utils.sheet_to_json(wb.Sheets[sheetName],{header:1,defval:'',raw:true,blankrows:false});
+    rows.forEach((row,rowIndex)=>flat.push({sheet:sheetName,rowIndex,cells:(row||[]).map(teimor099CellText).filter(Boolean),raw:row||[]}));
+  }
+  return flat;
+}
+
+function teimor0913v2RecipientBox(flat){
+  const records=teimor0911TopRightRecords(flat);
+  const name=teimor0913v2StrictFieldValue(records,TEIMOR0913V2_CLIENT_NAME_LABELS,'name',true);
+  const fiscalAddress=teimor0913v2StrictFieldValue(records,TEIMOR0913V2_FISCAL_ADDRESS_LABELS,'address',true);
+  const postalCode=teimor0913v2StrictFieldValue(records,TEIMOR0913V2_POSTAL_LABELS,'postal',true);
+  const nif=teimor0913v2StrictFieldValue(records,TEIMOR0913V2_NIF_LABELS,'nif',true);
+  const city=teimor0913v2StrictFieldValue(records,TEIMOR0913V2_CITY_LABELS,'city',true);
+  const lines=(teimor0911BoxLines(records)||[]).map(teimor0913v2Clean).filter(line=>line && !teimor0913v2LooksLikeLineItem(line));
+  const joined=lines.join('\n');
+  const finalPostal=postalCode || teimor0911PostalFromText(joined);
+  const finalNif=nif || teimor0911NifFromText(joined);
+  const fallbackName=lines.find(line=>isProbablyClientName(line) && !looksLikeAddress(line) && !looksLikeCityLine(line) && !teimor0911NifFromText(line) && !/^\d/.test(line)) || '';
+  const finalName=cleanClientName(name || fallbackName);
+  const fallbackAddress=lines.find(line=>looksLikeAddress(line)) || '';
+  const finalAddress=fiscalAddress || fallbackAddress;
+  const cityFromLabel=city ? (teimor0911CityFromText(city,finalPostal) || city.replace(new RegExp('\\b'+(finalPostal||'00000')+'\\b','i'),'').trim()) : '';
+  const cityFromPostal=finalPostal ? teimor0911CityFromText(lines.find(line=>line.includes(finalPostal))||joined,finalPostal) : '';
+  const finalCity=cityFromLabel || cityFromPostal || (lines.find(line=>looksLikeCityLine(line) && !looksLikeAddress(line))||'');
+  return {
+    name:finalName==='Client pendent de revisar'?'':finalName,
+    fiscalAddress:finalAddress,
+    postalCode:finalPostal,
+    nif:finalNif,
+    city:teimor0913v2Clean(finalCity),
+    phone:detectPhone(joined)||'',
+    email:firstRegex(joined,/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)||'',
+    lines
+  };
+}
+
+function teimor0913v2GenericWorkAddress(flat,records){
+  const topRight=teimor0911TopRightRecords(flat);
+  const isTopRight=record=>topRight.some(item=>item.sheet===record.sheet && item.rowIndex===record.rowIndex && item.col===record.col);
+  const genericLabels=['adreça','adressa','direcció','direccio','direccion','domicili','domicilio','ubicació','ubicacio','ubicacion'];
+  for(const record of records||[]){
+    if(isTopRight(record) || !teimor099IsExactLabel(record.text,teimor099Aliases(genericLabels))) continue;
+    const context=(flat||[]).filter(row=>row.sheet===record.sheet && Math.abs(row.rowIndex-record.rowIndex)<=2)
+      .flatMap(row=>(row.raw||[]).map(teimor099CellText)).join(' ');
+    if(!/\b(?:obra|feina|treball|trabajo|emplaçament|emplazamiento|ubicaci[oó]n)\b/i.test(context)) continue;
+    const value=teimor0913v2StrictFieldValue([record,...(records||[])],genericLabels,'address',true);
+    if(value && (looksLikeAddress(value) || /\b\d{1,5}\b/.test(value) || looksLikeCityLine(value))) return value;
+  }
+  return '';
+}
+
+function teimor0913v2WorkData(flat){
+  const records=teimor0911CellRecords(flat);
+  const address=teimor0913v2StrictFieldValue(records,TEIMOR0913V2_WORK_ADDRESS_LABELS,'address',true)
+    || teimor0913v2GenericWorkAddress(flat,records);
+  const postalCode=teimor0913v2StrictFieldValue(records,TEIMOR0913V2_WORK_POSTAL_LABELS,'postal',true)
+    || teimor0911PostalFromText(address);
+  const cityValue=teimor0913v2StrictFieldValue(records,TEIMOR0913V2_WORK_CITY_LABELS,'city',true);
+  const city=cityValue
+    ? (teimor0911CityFromText(cityValue,postalCode)||teimor0913v2Clean(cityValue).replace(new RegExp('\\b'+(postalCode||'00000')+'\\b','i'),'').trim())
+    : teimor0911CityFromText(address,postalCode);
+  return {address:teimor0913v2Clean(address),city:teimor0913v2Clean(city),postalCode};
+}
+
+function teimor0913v2Concept(flat){
+  return teimor0913v2StrictFieldValue(teimor0911CellRecords(flat),['concepte','concepto'],'concept',false);
+}
+
+function teimor0913v2Client(fileName,flat){
+  const box=teimor0913v2RecipientBox(flat);
+  const work=teimor0913v2WorkData(flat);
+  const name=cleanClientName(box.name||'');
+  const reviewIssues=[];
+  if(name==='Client pendent de revisar') reviewIssues.push('No s’ha detectat el nom dins del quadre superior dret.');
+  if(!box.fiscalAddress) reviewIssues.push('No s’ha detectat l’adreça fiscal dins del quadre superior dret.');
+  if(!box.city) reviewIssues.push('No s’ha detectat la població del client dins del quadre superior dret.');
+  if(!box.postalCode) reviewIssues.push('No s’ha detectat el codi postal del client dins del quadre superior dret.');
+  if(!box.nif) reviewIssues.push('No s’ha detectat NIF/DNI/CIF dins del quadre superior dret.');
+  if(!work.address) reviewIssues.push('No s’ha detectat l’adreça de l’obra en un camp explícit d’obra.');
+  return {
+    id:uid('CLI'),tempKey:uid('TMPCLI'),name,nif:box.nif||'',phone:box.phone||'',email:box.email||'',contact:'',
+    fiscalAddress:box.fiscalAddress||'',postalCode:box.postalCode||'',city:box.city||'',
+    workAddress:work.address||'',workCity:work.city||'',workPostalCode:work.postalCode||'',
+    status:'Actiu',source:fileName,sourceFiles:[fileName],reviewIssues,
+    needsReview:reviewIssues.length>0,notes:'Client llegit exclusivament del quadre superior dret. L’obra es llegeix en camps separats.'
+  };
+}
+
+function teimor0913v2Context(fileName,arrayBuffer){
+  const flat=teimor0913v2ReadFlat(arrayBuffer);
+  return {flat,client:teimor0913v2Client(fileName,flat),work:teimor0913v2WorkData(flat),concept:teimor0913v2Concept(flat)};
+}
+
+detectClientV099=function(fileName,flat){ return teimor0913v2Client(fileName,flat); };
+detectClient=detectClientV099;
+detectBudgetConceptV099=function(fileName,flat){ return teimor0913v2Concept(flat); };
+detectBudgetConcept=detectBudgetConceptV099;
+detectJobTitle=function(fileName,flat){ return teimor0913v2Concept(flat); };
+
+const __teimorBaseParseWorkbookV0913V2=parseWorkbook;
+parseWorkbook=function(fileName,arrayBuffer){
+  const parsed=__teimorBaseParseWorkbookV0913V2(fileName,arrayBuffer);
+  let context=null;
+  try{ context=teimor0913v2Context(fileName,arrayBuffer); }catch(error){ console.warn('No s’ha pogut aplicar la lectura estricta de camps:',error); }
+  if(!context) return parsed;
+  const client=context.client||{};
+  const work=context.work||{};
+  const keyword=teimor0913v2Clean(context.concept||'');
+  const safeKeyword=keyword || 'Concepte pendent de revisar';
+  parsed.client={...(parsed.client||{}),...client};
+  parsed.job={...(parsed.job||{}),
+    title:safeKeyword,keyword:keyword,clientTempKey:client.tempKey,
+    address:work.address||'',workAddress:work.address||'',city:work.city||'',
+    workCity:work.city||'',postalCode:work.postalCode||'',workPostalCode:work.postalCode||''
+  };
+  parsed.budget={...(parsed.budget||{}),
+    title:safeKeyword,keyword:keyword,clientTempKey:client.tempKey,jobTempKey:parsed.job.id,
+    workAddress:work.address||'',workCity:work.city||'',workPostalCode:work.postalCode||''
+  };
+  parsed.warnings=Array.isArray(parsed.warnings) ? parsed.warnings : [];
+  if(!keyword) parsed.warnings.push(fileName+': no s’ha trobat una paraula clau segura a l’etiqueta Concepte/Concepto.');
+  if(client.reviewIssues?.length) parsed.warnings.push(fileName+': '+client.reviewIssues.join(' '));
+  parsed.warnings=[...new Set(parsed.warnings)];
+  return parsed;
+};
+
+function teimor0913v2BudgetKeyword(budget){
+  return teimor0913v2Clean(budget?.keyword||budget?.workKeyword||budget?.title||'');
+}
+function teimor0913v2JobKeyword(job){
+  return teimor0913v2Clean(job?.keyword||job?.workKeyword||job?.title||'');
+}
+function teimor0913v2JobAddress(job){
+  return teimor0913v2Clean(job?.workAddress||job?.address||'');
+}
+function teimor0913v2JobCity(job){
+  return teimor0913v2Clean(job?.workCity||job?.city||'');
+}
+function teimor0913v2BudgetAddress(budget){
+  return teimor0913v2Clean(budget?.workAddress||budget?.address||'');
+}
+function teimor0913v2Overlap(a,b){
+  const aa=new Set(teimor0913Tokens(a)),bb=new Set(teimor0913Tokens(b));
+  if(!aa.size || !bb.size) return 0;
+  let hits=0; aa.forEach(token=>{ if(bb.has(token)) hits++; });
+  return hits/Math.max(aa.size,bb.size);
+}
+
+function teimor0913v2ResolveBudgetJob(budget){
+  if(budget?.jobId && byId(data.jobs,budget.jobId)) return byId(data.jobs,budget.jobId);
+  const clientId=budget?.clientId||'';
+  const keyword=teimor0913v2BudgetKeyword(budget);
+  const address=teimor0913v2BudgetAddress(budget);
+  const year=budgetYear(budget);
+  const candidates=(data.jobs||[]).filter(job=>!clientId || job.clientId===clientId).map(job=>{
+    let score=0;
+    if(job.mainBudgetId===budget.id) score+=200;
+    if(clientId && job.clientId===clientId) score+=20;
+    if(year && Number(job.year)===Number(year)) score+=10;
+    const jobKeyword=teimor0913v2JobKeyword(job);
+    const jobAddress=teimor0913v2JobAddress(job);
+    if(address && jobAddress && strip(address)===strip(jobAddress)) score+=120;
+    else if(address && jobAddress) score+=teimor0913v2Overlap(address,jobAddress)*70;
+    if(keyword && jobKeyword && strip(keyword)===strip(jobKeyword)) score+=120;
+    else if(keyword && jobKeyword) score+=teimor0913v2Overlap(keyword,jobKeyword)*80;
+    return {job,score};
+  }).sort((a,b)=>b.score-a.score);
+  if(candidates.length && candidates[0].score>=120 && (!candidates[1] || candidates[0].score>candidates[1].score+15)) return candidates[0].job;
+  return null;
+}
+
+function teimor0913v2NormalizeData(){
+  __teimorBaseEnsureDataV0913V2();
+  data.clients.forEach(client=>{
+    client.name=teimor0913v2Clean(client.name);
+    client.nif=teimor0913v2Clean(client.nif).toUpperCase();
+    client.fiscalAddress=teimor0913v2Clean(client.fiscalAddress);
+    client.postalCode=teimor0913v2Clean(client.postalCode);
+    client.city=teimor0913v2Clean(client.city);
+    client.workAddress=teimor0913v2Clean(client.workAddress);
+    client.workCity=teimor0913v2Clean(client.workCity);
+    client.workPostalCode=teimor0913v2Clean(client.workPostalCode);
+  });
+  data.jobs.forEach(job=>{
+    job.keyword=teimor0913v2JobKeyword(job);
+    job.title=teimor0913v2Clean(job.title||job.keyword||'');
+    if(!job.keyword) job.keyword=job.title;
+    job.workAddress=teimor0913v2JobAddress(job);
+    job.address=job.workAddress;
+    job.workCity=teimor0913v2JobCity(job);
+    job.city=job.workCity;
+    job.workPostalCode=teimor0913v2Clean(job.workPostalCode||job.postalCode||'');
+    job.postalCode=job.workPostalCode;
+    if(!job.year && job.date) job.year=Number(String(job.date).slice(0,4))||0;
+  });
+  data.budgets.forEach(budget=>{
+    budget.keyword=teimor0913v2BudgetKeyword(budget);
+    budget.workAddress=teimor0913v2BudgetAddress(budget);
+    budget.workCity=teimor0913v2Clean(budget.workCity||'');
+    budget.workPostalCode=teimor0913v2Clean(budget.workPostalCode||'');
+    const job=budget.jobId ? byId(data.jobs,budget.jobId) : null;
+    if(job){
+      if(!budget.keyword) budget.keyword=teimor0913v2JobKeyword(job);
+      if(!budget.workAddress) budget.workAddress=teimor0913v2JobAddress(job);
+      if(!budget.workCity) budget.workCity=teimor0913v2JobCity(job);
+      if(!budget.workPostalCode) budget.workPostalCode=teimor0913v2Clean(job.workPostalCode||'');
+    }
+  });
+  data.budgets.forEach(budget=>{
+    const job=teimor0913v2ResolveBudgetJob(budget);
+    if(job && (!budget.jobId || !byId(data.jobs,budget.jobId))) budget.jobId=job.id;
+  });
+  data.budgets.forEach(budget=>{
+    const job=budget.jobId ? byId(data.jobs,budget.jobId) : null;
+    if(job){
+      if(!job.mainBudgetId) job.mainBudgetId=budget.id;
+      if(!job.keyword && budget.keyword) job.keyword=budget.keyword;
+      if(!job.title && budget.keyword) job.title=budget.keyword;
+      if(!job.workAddress && budget.workAddress){ job.workAddress=budget.workAddress; job.address=budget.workAddress; }
+      if(!job.workCity && budget.workCity){ job.workCity=budget.workCity; job.city=budget.workCity; }
+    }
+  });
+}
+
+const __teimorBaseEnsureDataV0913V2=teimor0913EnsureData;
+teimor0913EnsureData=function(){
+  __teimorBaseEnsureDataV0913V2();
+  data.library=Array.isArray(data.library) ? data.library : [];
+  data.settings=data.settings || defaultData().settings;
+  teimor0913v2NormalizeData();
+};
+
+function teimor0913v2LooksLikeSeed(source){
+  const budgets=Array.isArray(source?.budgets) ? source.budgets : [];
+  const jobs=Array.isArray(source?.jobs) ? source.jobs : [];
+  const clients=Array.isArray(source?.clients) ? source.clients : [];
+  return !budgets.length || (budgets.length===1 && budgets[0]?.id==='P-2016-001' && jobs.length<=1 && clients.length<=1);
+}
+
+function teimor0913v2RecoverLocalStorage(){
+  try{
+    if(!window.localStorage || !teimor0913v2LooksLikeSeed(data)) return false;
+    const candidates=[];
+    for(let i=0;i<localStorage.length;i++){
+      const key=localStorage.key(i);
+      if(!key || key===STORE_KEY || !/teimor|pressupost|gestor/i.test(key)) continue;
+      try{
+        const value=JSON.parse(localStorage.getItem(key)||'null');
+        if(value && Array.isArray(value.budgets) && value.budgets.length>data.budgets.length) candidates.push({key,value});
+      }catch(error){}
+    }
+    candidates.sort((a,b)=>((b.value.budgets?.length||0)+(b.value.jobs?.length||0)+(b.value.clients?.length||0))-((a.value.budgets?.length||0)+(a.value.jobs?.length||0)+(a.value.clients?.length||0)));
+    if(!candidates.length) return false;
+    data=candidates[0].value;
+    data.meta=data.meta||{};
+    data.meta.recoveredFromLocalStorageKey=candidates[0].key;
+    state.selectedBudgetId=data.budgets?.[0]?.id||'';
+    teimor0913v2NormalizeData();
+    saveData();
+    return true;
+  }catch(error){
+    console.warn('No s’han pogut recuperar dades locals antigues:',error);
+    return false;
+  }
+}
+
+function teimor0913v2MergeRecord(existing,incoming){
+  const out={...(existing||{})};
+  Object.entries(incoming||{}).forEach(([key,value])=>{
+    if(key==='id' || value===undefined || value===null || value==='') return;
+    if(Array.isArray(value)){ if(value.length) out[key]=value; }
+    else out[key]=value;
+  });
+  return out;
+}
+
+function teimor0913v2SameText(a,b){
+  return !!a && !!b && strip(a)===strip(b);
+}
+
+function teimor0913v2MergePreviousData(source){
+  const incoming=source&&typeof source==='object' ? source : {};
+  teimor0913EnsureData();
+  const clientMap=new Map(),jobMap=new Map(),budgetMap=new Map();
+  let addedClients=0,updatedClients=0,addedJobs=0,updatedJobs=0,addedBudgets=0,updatedBudgets=0;
+  const incomingClients=Array.isArray(incoming.clients)?incoming.clients:[];
+  for(const raw of incomingClients){
+    const client={...raw};
+    const nif=teimor0913v2Clean(client.nif).toUpperCase();
+    const name=teimor0913v2Clean(client.name);
+    let existing=client.id ? byId(data.clients,client.id) : null;
+    if(!existing && nif) existing=data.clients.find(item=>teimor0913v2Clean(item.nif).toUpperCase()===nif);
+    if(!existing && name) existing=data.clients.find(item=>teimor0913v2SameText(item.name,name) && teimor0913v2SameText(item.fiscalAddress,client.fiscalAddress));
+    if(existing){
+      Object.assign(existing,teimor0913v2MergeRecord(existing,client));
+      clientMap.set(client.id,existing.id); updatedClients++;
+    }else{
+      const id=client.id||uid('CLI');
+      data.clients.push({...client,id});
+      clientMap.set(client.id,id); addedClients++;
+    }
+  }
+  const incomingJobs=Array.isArray(incoming.jobs)?incoming.jobs:[];
+  for(const raw of incomingJobs){
+    const job={...raw};
+    const clientId=clientMap.get(job.clientId)||job.clientId||'';
+    let existing=job.id ? byId(data.jobs,job.id) : null;
+    if(!existing) existing=data.jobs.find(item=>item.clientId===clientId && Number(item.year||0)===Number(job.year||0) && teimor0913v2Overlap(teimor0913v2JobKeyword(item),teimor0913v2JobKeyword(job))>=0.75 && (!teimor0913v2JobAddress(job)||!teimor0913v2JobAddress(item)||teimor0913v2SameText(teimor0913v2JobAddress(item),teimor0913v2JobAddress(job))));
+    const merged=teimor0913v2MergeRecord(existing,{...job,clientId});
+    if(existing){ Object.assign(existing,merged); jobMap.set(job.id,existing.id); updatedJobs++; }
+    else { const id=job.id||uid('F'); data.jobs.push({...merged,id}); jobMap.set(job.id,id); addedJobs++; }
+  }
+  const incomingBudgets=Array.isArray(incoming.budgets)?incoming.budgets:[];
+  for(const raw of incomingBudgets){
+    const budget={...raw};
+    const clientId=clientMap.get(budget.clientId)||budget.clientId||'';
+    const jobId=jobMap.get(budget.jobId)||budget.jobId||'';
+    let existing=budget.id ? byId(data.budgets,budget.id) : null;
+    if(!existing && budget.number) existing=data.budgets.find(item=>teimor0913v2SameText(item.number,budget.number) && (!budget.date || !item.date || String(item.date)===String(budget.date)));
+    const merged=teimor0913v2MergeRecord(existing,{...budget,clientId,jobId});
+    if(Array.isArray(budget.lines) && budget.lines.length) merged.lines=budget.lines;
+    if(existing){ Object.assign(existing,merged); budgetMap.set(budget.id,existing.id); updatedBudgets++; }
+    else { const id=budget.id||uid('P'); data.budgets.push({...merged,id}); budgetMap.set(budget.id,id); addedBudgets++; }
+  }
+  const mergeDocs=(collectionName)=>{
+    const incomingDocs=Array.isArray(incoming[collectionName])?incoming[collectionName]:[];
+    const target=data[collectionName]=Array.isArray(data[collectionName])?data[collectionName]:[];
+    for(const raw of incomingDocs){
+      const doc={...raw,clientId:clientMap.get(raw.clientId)||raw.clientId||'',jobId:jobMap.get(raw.jobId)||raw.jobId||'',budgetId:budgetMap.get(raw.budgetId)||raw.budgetId||''};
+      let existing=doc.id ? byId(target,doc.id) : null;
+      if(!existing && doc.number) existing=target.find(item=>teimor0913v2SameText(item.number,doc.number) && (!doc.date || !item.date || String(item.date)===String(doc.date)));
+      if(existing) Object.assign(existing,teimor0913v2MergeRecord(existing,doc));
+      else target.push({...doc,id:doc.id||uid(collectionName==='certifications'?'CERT':'INV')});
+    }
+  };
+  mergeDocs('invoices');
+  mergeDocs('certifications');
+  if(Array.isArray(incoming.library)){
+    data.library=Array.isArray(data.library)?data.library:[];
+    incoming.library.forEach(raw=>{
+      const existing=raw.id ? byId(data.library,raw.id) : data.library.find(item=>raw.code && item.code===raw.code);
+      if(existing) Object.assign(existing,teimor0913v2MergeRecord(existing,raw));
+      else data.library.push({...raw,id:raw.id||uid('LIB')});
+    });
+  }
+  if(Array.isArray(incoming.attachments)){
+    data.attachments=Array.isArray(data.attachments)?data.attachments:[];
+    incoming.attachments.forEach(raw=>{
+      const existing=raw.id ? byId(data.attachments,raw.id) : null;
+      if(existing) Object.assign(existing,teimor0913v2MergeRecord(existing,raw));
+      else data.attachments.push({...raw,id:raw.id||uid('ATT')});
+    });
+  }
+  if(Array.isArray(incoming.importLogs)){
+    data.importLogs=Array.isArray(data.importLogs)?data.importLogs:[];
+    incoming.importLogs.forEach(raw=>{ if(!raw.id || !data.importLogs.some(item=>item.id===raw.id)) data.importLogs.push({...raw,id:raw.id||uid('IMP')}); });
+  }
+  teimor0913v2NormalizeData();
+  return {addedClients,updatedClients,addedJobs,updatedJobs,addedBudgets,updatedBudgets};
+}
+
+async function importPreviousJsonV0913(e){
+  const file=e.target.files?.[0];
+  if(!file) return;
+  try{
+    const source=JSON.parse(await file.text());
+    const result=teimor0913v2MergePreviousData(source);
+    const payloads=Array.isArray(source.attachmentPayloads)?source.attachmentPayloads:[];
+    for(const payload of payloads){
+      if(payload.dataUrl){ const blob=await (await fetch(payload.dataUrl)).blob(); await idbPut({id:payload.id,blob,dataUrl:payload.dataUrl,meta:payload.meta}); }
+    }
+    saveData();
+    state.selectedBudgetId=data.budgets?.[0]?.id||state.selectedBudgetId;
+    alert('Dades fusionades: '+result.addedBudgets+' pressupost/os nous i '+result.updatedBudgets+' actualitzat/s. S’han conservat les factures i certificacions actuals.');
+    render();
+  }catch(error){
+    console.error(error);
+    alert('No s’ha pogut fusionar la còpia anterior. Comprova que sigui un JSON complet exportat des de TEIMOR.');
+  }
+  e.target.value='';
+}
+
+const __teimorBaseRenderBackupV0913V2=renderBackup;
+renderBackup=function(){
+  __teimorBaseRenderBackupV0913V2();
+  const content=document.getElementById('content');
+  if(!content) return;
+  content.insertAdjacentHTML('afterbegin','<div class="card notice-blue"><h2>Recuperar dades de la versió anterior</h2><p>Si la V09.13 s’ha obert en un altre origen del navegador, les dades de la V09.12 no apareixen soles. Exporta un JSON complet des de la versió anterior i aquí el fusionarem, conservant el que ja tinguis a la V09.13.</p><label class="primary file-label">Importar i fusionar còpia anterior<input id="importPreviousJsonPage" type="file" accept="application/json" hidden></label></div>');
+  bindViewEvents();
+};
+
+const __teimorBaseBindViewEventsV0913V2=bindViewEvents;
+bindViewEvents=function(){
+  __teimorBaseBindViewEventsV0913V2();
+  const previous=document.getElementById('importPreviousJsonPage');
+  if(previous) previous.onchange=importPreviousJsonV0913;
+  document.querySelectorAll('[data-v0913-open-budget]').forEach(button=>button.onclick=()=>{
+    state.view='budgets';
+    state.selectedBudgetId=button.dataset.v0913OpenBudget;
+    render();
+    openBudgetModal(button.dataset.v0913OpenBudget);
+  });
+};
+
+function teimor0913v2IdentificationHtml(keyword,address,city){
+  const title=keyword||'Paraula clau pendent de revisar';
+  const place=[address,city].filter(Boolean).join(' · ');
+  return '<strong>'+esc(title)+'</strong><br><span class="muted">'+(place?'Adreça obra: '+esc(place):'Adreça obra pendent de revisar')+'</span>';
+}
+
+function teimor0913v2OrphanBudgets(){
+  return data.budgets.filter(budget=>!byId(data.jobs,budget.jobId));
+}
+
+renderObresV0913=function(){
+  teimor0913EnsureData();
+  setHeader('Obres / traçabilitat','Identificació de l’obra per paraula clau i adreça real, amb pressupostos, factures i certificacions relacionats.');
+  const jobs=[...data.jobs].sort((a,b)=>Number(b.year||0)-Number(a.year||0) || teimor0913v2JobKeyword(a).localeCompare(teimor0913v2JobKeyword(b)));
+  const selected=byId(data.jobs,state.selectedJobId) || jobs[0] || null;
+  if(selected) state.selectedJobId=selected.id;
+  const selectedBudgets=selected?jobBudgets(selected.id):[];
+  const selectedInvoices=selected?jobInvoices(selected.id):[];
+  const selectedCertifications=selected?data.certifications.filter(doc=>doc.jobId===selected.id):[];
+  const orphanBudgets=teimor0913v2OrphanBudgets();
+  const totalBudget=data.budgets.reduce((sum,budget)=>sum+budgetBase(budget),0);
+  const totalInvoices=data.invoices.reduce((sum,doc)=>sum+invoiceTotal(doc),0);
+  const totalCertifications=data.certifications.reduce((sum,doc)=>sum+teimor0913CertTotal(doc),0);
+  const jobRows=jobs.map(job=>{
+    const budgets=jobBudgets(job.id),invoices=jobInvoices(job.id),certifications=data.certifications.filter(doc=>doc.jobId===job.id);
+    return '<tr><td>'+esc(job.year||'')+'</td><td>'+teimor0913v2IdentificationHtml(teimor0913v2JobKeyword(job),teimor0913v2JobAddress(job),teimor0913v2JobCity(job))+'</td><td>'+esc(clientName(job.clientId)||'Client pendent')+'</td><td class="num">'+budgets.length+'</td><td class="num">'+invoices.length+'</td><td class="num">'+certifications.length+'</td><td class="num">'+money(jobBudgetTotal(job.id))+'</td><td class="num">'+money(jobInvoiceTotal(job.id))+'</td><td class="num">'+money(certifications.reduce((sum,doc)=>sum+teimor0913CertTotal(doc),0))+'</td><td class="nowrap"><button class="primary small" data-v0913-trace-job="'+esc(job.id)+'">Veure traçabilitat</button> <button class="ghost small" data-edit-job="'+esc(job.id)+'">Editar obra</button></td></tr>';
+  });
+  const orphanRows=orphanBudgets.map(budget=>{
+    const invoices=data.invoices.filter(doc=>doc.budgetId===budget.id),certifications=data.certifications.filter(doc=>doc.budgetId===budget.id);
+    return '<tr><td>'+esc(budgetYear(budget)||'')+'</td><td>'+teimor0913v2IdentificationHtml(teimor0913v2BudgetKeyword(budget),teimor0913v2BudgetAddress(budget),budget.workCity||'')+'</td><td>'+esc(clientName(budget.clientId)||'Client pendent')+'</td><td class="num">1</td><td class="num">'+invoices.length+'</td><td class="num">'+certifications.length+'</td><td class="num">'+money(budgetBase(budget))+'</td><td class="num">'+money(invoices.reduce((sum,doc)=>sum+invoiceTotal(doc),0))+'</td><td class="num">'+money(certifications.reduce((sum,doc)=>sum+teimor0913CertTotal(doc),0))+'</td><td><button class="ghost small" data-v0913-open-budget="'+esc(budget.id)+'">Obrir pressupost</button></td></tr>';
+  });
+  const detail=selected
+    ? '<div class="card"><div class="toolbar"><div><h2>'+esc(teimor0913v2JobKeyword(selected)||'Obra sense paraula clau')+'</h2><p><strong>Adreça de l’obra:</strong> '+esc(teimor0913v2JobAddress(selected)||'Pendent de revisar')+(teimor0913v2JobCity(selected)?' · '+esc(teimor0913v2JobCity(selected)):'')+'<br><strong>Client:</strong> '+esc(clientName(selected.clientId)||'Client pendent')+'</p></div><button class="ghost" data-edit-job="'+esc(selected.id)+'">Editar obra</button></div><div class="grid four"><div class="kpi"><span>Pressupostos</span><strong>'+selectedBudgets.length+'</strong></div><div class="kpi"><span>Factures</span><strong>'+selectedInvoices.length+'</strong></div><div class="kpi"><span>Certificacions</span><strong>'+selectedCertifications.length+'</strong></div><div class="kpi"><span>Pressupostat / facturat</span><strong>'+money(jobBudgetTotal(selected.id)-jobInvoiceTotal(selected.id))+'</strong></div></div><div class="grid two"><div class="card"><h3>Pressupostos</h3>'+teimor0913TraceBudgetHtml(selectedBudgets)+'</div><div class="card"><h3>Factures</h3>'+teimor0913TraceInvoiceHtml(selectedInvoices)+'</div><div class="card"><h3>Certificacions</h3>'+teimor0913TraceCertificationHtml(selectedCertifications)+'</div></div></div>'
+    : '<div class="card">'+empty('No hi ha cap obra creada. Els pressupostos sense obra apareixen a la llista de recuperació inferior.')+'</div>';
+  const orphanCard=orphanBudgets.length
+    ? '<div class="card notice-blue"><h2>Pressupostos recuperats sense obra vinculada</h2><p>Es mostren aquí perquè no desapareguin de la traçabilitat. Obre cada pressupost i assigna-li una obra quan correspongui.</p>'+table(['Any','Identificació','Client','Pressupostos','Factures','Certificacions','Pressupostat','Facturat','Certificat','Acció'],orphanRows)+'</div>'
+    : '';
+  const visibleJobRows=jobRows.length ? jobRows : ['<tr><td colspan="10">'+empty('No hi ha obres creades.')+'</td></tr>'];
+  setContent('<div class="grid four"><div class="kpi"><span>Obres</span><strong>'+jobs.length+'</strong></div><div class="kpi"><span>Pressupostos</span><strong>'+data.budgets.length+'</strong></div><div class="kpi"><span>Factures</span><strong>'+data.invoices.length+'</strong></div><div class="kpi"><span>Certificacions</span><strong>'+data.certifications.length+'</strong></div></div><div class="card"><div class="toolbar"><div><h2>Relació per obra</h2><p class="muted">Pressupostat: '+money(totalBudget)+' · Facturat: '+money(totalInvoices)+' · Certificat: '+money(totalCertifications)+'</p></div><button class="primary" data-go="importer">Importar factures / certificacions</button></div>'+table(['Any','Identificació de l’obra','Client','Pressupostos','Factures','Certificacions','Pressupostat','Facturat','Certificat','Acció'],visibleJobRows)+'</div>'+detail+orphanCard+'<div class="card"><h2>Documents pendents de vincular a una obra</h2>'+teimor0913UnmatchedHtml()+'</div>');
+};
+
+saveJob=function(event){
+  event.preventDefault();
+  const f=formObj(event.target);
+  const old=byId(data.jobs,f.editId)||byId(data.jobs,f.id)||{};
+  const title=teimor0913v2Clean(f.title);
+  const address=teimor0913v2Clean(f.address);
+  const city=teimor0913v2Clean(f.city);
+  const job={...(old||{}),id:f.id,year:Number(f.year)||new Date().getFullYear(),clientId:f.clientId,title,keyword:title,address,workAddress:address,city,workCity:city,status:f.status,notes:f.notes,mainBudgetId:old.mainBudgetId||''};
+  const index=data.jobs.findIndex(item=>item.id===f.editId || item.id===job.id);
+  if(index>=0) data.jobs[index]=job; else data.jobs.push(job);
+  data.budgets.filter(budget=>budget.jobId===job.id).forEach(budget=>{
+    if(!budget.keyword || budget.keyword===old.keyword || budget.keyword===old.title) budget.keyword=title;
+    if(!budget.workAddress) budget.workAddress=address;
+    if(!budget.workCity) budget.workCity=city;
+  });
+  saveData();
+  if(typeof renderJobs==='function') renderJobs();
+  else renderObresV0913();
+};
+
+saveBudget=function(event){
+  event.preventDefault();
+  const f=formObj(event.target);
+  const old=byId(data.budgets,f.id)||{};
+  const b={...(old||{}),id:f.id,seqNumber:num(f.seqNumber)||num(old.seqNumber)||0,oldNumber:f.oldNumber||old.oldNumber||old.number||'',number:f.oldNumber||old.number||'',date:f.date,clientId:f.clientId,jobId:f.jobId,title:f.title,keyword:f.title, status:f.status,ci:num(f.ci),dge:num(f.dge),bi:num(f.bi),iva:num(f.iva),importedBase:num(f.importedBase),notes:f.notes,lines:old.lines||[]};
+  const index=data.budgets.findIndex(item=>item.id===b.id);
+  if(index>=0) data.budgets[index]=b; else data.budgets.push(b);
+  state.selectedBudgetId=b.id;
+  state.editBudgetId='';
+  const job=byId(data.jobs,b.jobId);
+  if(job){
+    if(!job.mainBudgetId) job.mainBudgetId=b.id;
+    if(!job.keyword || job.keyword===old.keyword || job.keyword===old.title) job.keyword=f.title;
+    if(!job.title || job.title===old.title) job.title=f.title;
+  }
+  normalizeBudgetSequentialNumbersV098();
+  saveData();
+  if(isModalOpen()) closeModal();
+  renderBudgets();
+};
+
+/* Intent de recuperació automàtica només quan la base actual encara és la demo inicial. */
+teimor0913v2RecoverLocalStorage();
+teimor0913v2NormalizeData();
