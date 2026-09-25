@@ -6594,3 +6594,437 @@ saveBudget=function(event){
 /* Intent de recuperació automàtica només quan la base actual encara és la demo inicial. */
 teimor0913v2RecoverLocalStorage();
 teimor0913v2NormalizeData();
+
+/* =========================================================
+   TEIMOR V09.13.2 · RELACIÓ CLIENT/ADREÇA I DESCÀRREGA
+   - Fa la vista Obres tolerant de registres antics incomplets.
+   - Compara explícitament client i adreça de l'obra.
+   - Conserva el fitxer original de cada factura importada.
+   - Mostra una acció visible "Descarregar factura".
+   ========================================================= */
+
+data.meta = data.meta || {};
+data.meta.version = '9.13.2-factures-descàrrega-relacions';
+
+function teimor09132SafeArray(value){
+  return Array.isArray(value) ? value.filter(item=>item && typeof item==='object') : [];
+}
+
+function teimor09132SanitizeData(){
+  ['clients','jobs','budgets','invoices','certifications','library','attachments','importLogs'].forEach(key=>{
+    data[key]=teimor09132SafeArray(data[key]);
+  });
+  data.settings = data.settings && typeof data.settings==='object' ? data.settings : defaultData().settings;
+}
+
+/* Reutilitza la validació V09.13 sense entrar en la seva normalització recursiva. */
+teimor0913EnsureData=function(){
+  __teimorBaseEnsureDataV0913V2();
+  teimor09132SanitizeData();
+  try{ teimor0913v2NormalizeData(); }catch(error){ console.warn('Normalització de dades antigues ajornada:',error); }
+};
+
+function teimor09132AddressText(value){
+  let text=teimor0913Norm(value);
+  text=text.replace(/\b(?:c|cl|carrer|calle)\b/g,'carrer');
+  text=text.replace(/\b(?:av|avda|avinguda|avenida)\b/g,'avinguda');
+  text=text.replace(/\b(?:pg|passeig)\b/g,'passeig');
+  text=text.replace(/\b(?:pl|pla[cç]a|plaza)\b/g,'plaça');
+  return text.replace(/\s+/g,' ').trim();
+}
+
+function teimor09132AddressEvidence(left,right){
+  const a=teimor09132AddressText(left), b=teimor09132AddressText(right);
+  if(!a || !b) return {score:0,exact:false,label:'no disponible',available:!!(a||b)};
+  if(a===b) return {score:1,exact:true,label:'exacta',available:true};
+  const aNumbers=(a.match(/\b\d+[a-z]?\b/g)||[]), bNumbers=(b.match(/\b\d+[a-z]?\b/g)||[]);
+  if(aNumbers.length && bNumbers.length && !aNumbers.some(number=>bNumbers.includes(number))){
+    return {score:0.08,exact:false,label:'número diferent',available:true};
+  }
+  const overlap=teimor0913Overlap(a,b);
+  const score=a.includes(b)||b.includes(a) ? 0.86 : overlap>=0.75 ? 0.74 : overlap>=0.45 ? 0.52 : overlap>=0.2 ? 0.28 : 0;
+  return {score,exact:false,label:score>=0.7?'semblant':score>=0.4?'parcial':'no coincideix',available:true};
+}
+
+function teimor09132PlaceEvidence(snap,target){
+  const left=teimor0913Norm([snap?.workCity,snap?.workPostalCode].filter(Boolean).join(' '));
+  const right=teimor0913Norm([target?.city,target?.workCity,target?.postalCode,target?.workPostalCode].filter(Boolean).join(' '));
+  if(!left || !right) return {score:0,exact:false,label:'no disponible'};
+  if(left===right) return {score:0.92,exact:true,label:'població/codi exactes'};
+  const overlap=teimor0913Overlap(left,right);
+  return {score:overlap>=0.5?0.62:overlap>=0.25?0.32:0,exact:false,label:overlap>=0.5?'població/codi semblants':overlap>=0.25?'població/codi parcials':'població/codi no coincideixen'};
+}
+
+function teimor09132ClientEvidence(snap,client){
+  const reasons=[];
+  const snapNif=teimor0913Nif(snap?.nif), clientNif=teimor0913Nif(client?.nif);
+  const nifExact=!!(snapNif && clientNif && snapNif===clientNif);
+  if(nifExact) reasons.push('NIF exacte');
+  const snapName=teimor0913Norm(snap?.name), clientNameNorm=teimor0913Norm(client?.name);
+  const nameExact=!!(snapName && clientNameNorm && snapName===clientNameNorm);
+  if(nameExact) reasons.push('nom exacte');
+  const nameOverlap=teimor0913Overlap(snap?.name,client?.name);
+  if(!nameExact && nameOverlap>0.35) reasons.push('nom semblant');
+  const fiscalOverlap=teimor0913Overlap(
+    [snap?.fiscalAddress,snap?.city,snap?.postalCode].filter(Boolean).join(' '),
+    [client?.fiscalAddress,client?.city,client?.postalCode].filter(Boolean).join(' ')
+  );
+  if(fiscalOverlap>0.25) reasons.push('dades fiscals semblants');
+  const score=(nifExact?130:0)+(nameExact?90:0)+(!nameExact?Math.round(nameOverlap*35):0)+Math.round(fiscalOverlap*25);
+  return {score,nifExact,nameExact,strong:nifExact||nameExact,label:reasons.join(', ')||'sense coincidència segura'};
+}
+
+function teimor09132ExplicitWorkAddress(record){
+  if(!record || typeof record!=='object') return '';
+  if(Object.prototype.hasOwnProperty.call(record,'workAddress')) return record.workAddress||'';
+  return record.address||'';
+}
+
+function teimor09132BestBudgetAddress(doc,budget,job){
+  const snap=doc.clientSnapshot||{};
+  const candidates=[
+    ['pressupost',teimor09132ExplicitWorkAddress(budget)],
+    ['obra',teimor09132ExplicitWorkAddress(job)]
+  ].filter(item=>item[1]);
+  let best={score:0,exact:false,label:'no disponible',source:'',available:!!(snap.workAddress||snap.workCity||snap.workPostalCode)};
+  for(const [source,address] of candidates){
+    const evidence=teimor09132AddressEvidence(snap.workAddress,address);
+    if(evidence.score>best.score) best={...evidence,source};
+  }
+  const place=teimor09132PlaceEvidence(snap,{
+    city:job?.city,
+    workCity:job?.workCity||budget?.workCity,
+    postalCode:job?.postalCode,
+    workPostalCode:job?.workPostalCode||budget?.workPostalCode
+  });
+  if(place.score>best.score) best={...place,source:'població/codi',available:true};
+  return best;
+}
+
+teimor0913ClientCandidates=function(doc){
+  const snap=doc.clientSnapshot||{};
+  return (data.clients||[]).map(client=>{
+    const evidence=teimor09132ClientEvidence(snap,client);
+    return {id:client.id,score:evidence.score,reasons:evidence.label,clientExact:evidence.nifExact||evidence.nameExact,clientStrong:evidence.strong};
+  }).filter(row=>row.score>0).sort((a,b)=>b.score-a.score);
+};
+
+teimor0913BudgetCandidates=function(doc){
+  const snap=doc.clientSnapshot||{};
+  const docNumber=teimor0913NormId(doc.number);
+  const sourceNorm=teimor0913NormId(doc.sourceText);
+  const docYear=teimor0913Year(doc.date||doc.sourceFile);
+  return (data.budgets||[]).map(budget=>{
+    const job=byId(data.jobs,budget.jobId)||{};
+    const client=byId(data.clients,budget.clientId||job.clientId)||{};
+    const clientEvidence=teimor09132ClientEvidence(snap,client);
+    const addressEvidence=teimor09132BestBudgetAddress(doc,budget,job);
+    const reasons=[];
+    let score=0, exactNumber=false;
+    const budgetNumbers=[budget.number,budget.originalNumber,budget.oldNumber,budget.id].filter(Boolean).map(teimor0913NormId);
+    if(docNumber && budgetNumbers.includes(docNumber)){ score+=150; exactNumber=true; reasons.push('número coincident'); }
+    else if(docNumber && budgetNumbers.some(value=>value && (docNumber.includes(value)||value.includes(docNumber)))){ score+=80; reasons.push('número semblant'); }
+    if(sourceNorm && budgetNumbers.some(value=>value && sourceNorm.includes(value))){ score+=55; reasons.push('número dins del document'); }
+    if(clientEvidence.score){ score+=Math.min(145,clientEvidence.score); reasons.push('client: '+clientEvidence.label); }
+    if(addressEvidence.score>=0.85){ score+=120; reasons.push('adreça obra exacta'); }
+    else if(addressEvidence.score>=0.7){ score+=85; reasons.push('adreça obra semblant'); }
+    else if(addressEvidence.score>=0.4){ score+=45; reasons.push('adreça obra parcial'); }
+    const conceptOverlap=teimor0913Overlap(doc.concept,[budget.title,budget.keyword,job.title,job.keyword].filter(Boolean).join(' '));
+    if(conceptOverlap>0.25){ score+=Math.round(conceptOverlap*65); reasons.push('concepte/obra'); }
+    if(docYear && Number(budget.date||job.year||0)===docYear){ score+=8; reasons.push('mateix any'); }
+    if(clientEvidence.strong && addressEvidence.exact){ score+=35; reasons.push('client + adreça exactes'); }
+    return {
+      id:budget.id,score,exactNumber,
+      reasons:reasons.join(', '),
+      jobId:budget.jobId||'',clientId:budget.clientId||job.clientId||'',
+      clientStrong:clientEvidence.strong,clientExact:clientEvidence.nifExact||clientEvidence.nameExact,
+      clientScore:clientEvidence.score,addressScore:addressEvidence.score,
+      addressExact:addressEvidence.exact,addressAvailable:addressEvidence.available,
+      addressLabel:addressEvidence.label
+    };
+  }).filter(row=>row.score>0).sort((a,b)=>b.score-a.score);
+};
+
+teimor0913JobCandidates=function(doc,clientId){
+  const snap=doc.clientSnapshot||{};
+  const docYear=teimor0913Year(doc.date||doc.sourceFile);
+  return (data.jobs||[]).map(job=>{
+    const client=byId(data.clients,job.clientId)||{};
+    const clientEvidence=teimor09132ClientEvidence(snap,client);
+    const addressEvidence=teimor09132BestBudgetAddress(doc,{},job);
+    let score=0; const reasons=[];
+    if(clientId && job.clientId===clientId){ score+=55; reasons.push('client relacionat'); }
+    else if(clientEvidence.strong){ score+=Math.min(90,clientEvidence.score); reasons.push('client: '+clientEvidence.label); }
+    if(addressEvidence.score>=0.85){ score+=110; reasons.push('adreça exacta'); }
+    else if(addressEvidence.score>=0.7){ score+=75; reasons.push('adreça semblant'); }
+    else if(addressEvidence.score>=0.4){ score+=40; reasons.push('adreça parcial'); }
+    const overlap=teimor0913Overlap(doc.concept,[job.title,job.keyword,job.address,job.workAddress,job.city,job.workCity].filter(Boolean).join(' '));
+    if(overlap>0.25){ score+=Math.round(overlap*75); reasons.push('concepte/obra'); }
+    if(docYear && Number(job.year)===docYear){ score+=8; reasons.push('mateix any'); }
+    return {id:job.id,score,reasons:reasons.join(', '),clientId:job.clientId||'',addressScore:addressEvidence.score,addressExact:addressEvidence.exact,addressLabel:addressEvidence.label};
+  }).filter(row=>row.score>0).sort((a,b)=>b.score-a.score);
+};
+
+teimor0913ApplyMatch=function(doc){
+  const clients=teimor0913ClientCandidates(doc);
+  const topClient=clients[0], secondClient=clients[1];
+  const clientSafe=!!topClient && topClient.score>=65 && (!secondClient || topClient.score-secondClient.score>=12);
+  if(clientSafe) doc.clientId=topClient.id;
+  const budgets=teimor0913BudgetCandidates(doc);
+  const topBudget=budgets[0], secondBudget=budgets[1];
+  const budgetSafe=!!topBudget && topBudget.score>=72 && (!secondBudget || topBudget.score-secondBudget.score>=12);
+  const addressAvailable=!!(doc.clientSnapshot?.workAddress||doc.clientSnapshot?.workCity||doc.clientSnapshot?.workPostalCode);
+  const addressConflict=!!(topBudget && addressAvailable && topBudget.addressScore<0.4);
+  const budgetAutomatic=budgetSafe && (
+    (topBudget.clientStrong && topBudget.addressExact) ||
+    (topBudget.exactNumber && !addressConflict)
+  );
+  let topJob=null, secondJob=null;
+  if(budgetSafe){
+    doc.budgetId=topBudget.id;
+    doc.jobId=topBudget.jobId||'';
+    if(!doc.clientId) doc.clientId=topBudget.clientId||'';
+  }else{
+    const jobs=teimor0913JobCandidates(doc,doc.clientId);
+    topJob=jobs[0]; secondJob=jobs[1];
+    if(topJob && topJob.score>=65 && (!secondJob || topJob.score-secondJob.score>=12)) doc.jobId=topJob.id;
+    doc.candidateJobIds=jobs.slice(0,5).map(row=>row.id);
+  }
+  doc.candidateClientIds=clients.slice(0,5).map(row=>row.id);
+  doc.candidateBudgetIds=budgets.slice(0,5).map(row=>row.id);
+  const evidenceClient=topClient?.reasons||'no trobat';
+  const evidenceAddress=topBudget?.addressLabel || topJob?.addressLabel || (addressAvailable?'no coincideix':'no llegida');
+  const evidenceBudget=topBudget ? (topBudget.exactNumber?'número coincident':topBudget.reasons||'pressupost suggerit') : 'no trobat';
+  doc.matchEvidence={
+    client:{id:topClient?.id||'',score:topClient?.score||0,label:evidenceClient},
+    address:{score:topBudget?.addressScore||topJob?.addressScore||0,exact:!!(topBudget?.addressExact||topJob?.addressExact),label:evidenceAddress},
+    budget:{id:topBudget?.id||'',score:topBudget?.score||0,label:evidenceBudget}
+  };
+  doc.matchReason=`Client: ${evidenceClient} · Adreça obra: ${evidenceAddress} · Pressupost: ${evidenceBudget}`;
+  if(budgetAutomatic){
+    doc.matchStatus='automatica';
+    doc.matchConfidence=Math.min(100,Math.round((topBudget.score||0)/2));
+  }else if(budgetSafe || clientSafe || doc.jobId){
+    doc.matchStatus='suggerida';
+    doc.matchConfidence=Math.min(95,Math.round(Math.max(topBudget?.score||0,topClient?.score||0,topJob?.score||0)/2));
+  }else{
+    doc.matchStatus='pendent';
+    doc.matchConfidence=0;
+  }
+};
+
+function teimor09132SourceMime(name){
+  const value=String(name||'').toLowerCase();
+  if(value.endsWith('.csv')) return 'text/csv';
+  if(value.endsWith('.xlsx')) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  if(value.endsWith('.xlsm')) return 'application/vnd.ms-excel.sheet.macroEnabled.12';
+  if(value.endsWith('.xls')) return 'application/vnd.ms-excel';
+  return 'application/octet-stream';
+}
+
+function teimor09132RememberSource(doc,file){
+  if(!doc || !file?.blob) return;
+  try{
+    Object.defineProperty(doc,'__sourceBlob',{value:file.blob,writable:true,configurable:true,enumerable:false});
+    Object.defineProperty(doc,'__sourceName',{value:file.name,writable:true,configurable:true,enumerable:false});
+  }catch(error){
+    doc.__sourceBlob=file.blob;
+    doc.__sourceName=file.name;
+  }
+}
+
+handleFinancialImportV0913=async function(files){
+  teimor0913EnsureData();
+  if(typeof XLSX==='undefined'){ alert('No s’ha carregat la llibreria per llegir Excel. Revisa la connexió.'); return; }
+  const kind=document.getElementById('v0913FinancialKind')?.value || 'factura';
+  const draft={kind,files:[],documents:[],warnings:[]};
+  const spreadsheetFiles=[];
+  for(const file of files||[]){
+    const rawName=file.webkitRelativePath || file.name || '';
+    const name=rawName.toLowerCase();
+    if(name.endsWith('.rar')){ draft.warnings.push(`RAR detectat: ${file.name}. Descomprimeix-lo amb WinRAR i importa la carpeta, o crea un ZIP.`); continue; }
+    if(name.endsWith('.zip')){
+      if(typeof JSZip==='undefined'){ draft.warnings.push(`ZIP ignorat perquè JSZip no està carregat: ${file.name}`); continue; }
+      const zip=await JSZip.loadAsync(file);
+      const entries=Object.values(zip.files).filter(entry=>!entry.dir && /\.(xls|xlsx|xlsm|csv)$/i.test(entry.name));
+      draft.warnings.push(`ZIP ${file.name}: ${entries.length} documents Excel detectats.`);
+      for(const entry of entries){
+        const buffer=await entry.async('arraybuffer');
+        spreadsheetFiles.push({name:entry.name,arrayBuffer:buffer,blob:new Blob([buffer],{type:teimor09132SourceMime(entry.name)})});
+      }
+    }else if(/\.(xls|xlsx|xlsm|csv)$/i.test(name)){
+      const buffer=await file.arrayBuffer();
+      spreadsheetFiles.push({name:rawName,arrayBuffer:buffer,blob:file});
+    }
+  }
+  for(const file of spreadsheetFiles){
+    try{
+      const parsed=teimor0913ParseFinancialWorkbook(file.name,file.arrayBuffer,kind);
+      teimor09132RememberSource(parsed.doc,file);
+      draft.files.push(file.name);
+      draft.documents.push(parsed.doc);
+      draft.warnings.push(...parsed.warnings);
+    }catch(error){
+      console.error(error);
+      draft.warnings.push(`ERROR llegint ${file.name}: ${error.message}`);
+    }
+  }
+  state.financialDraft=draft;
+  renderImporter();
+};
+
+async function teimor09132StoreInvoiceSource(item,source,kind){
+  const blob=source?.__sourceBlob;
+  if(!blob) return {saved:false,reason:'Fitxer original no disponible'};
+  const attachmentId=uid(kind==='certificacio'?'CERTFILE':'FACFILE');
+  const sourceName=teimor0913SourceName(source.__sourceName || source.sourceFile);
+  const meta={
+    id:attachmentId,
+    name:sourceName || `${item.id}.bin`,
+    type:blob.type || teimor09132SourceMime(sourceName),
+    size:blob.size||0,
+    category:kind==='certificacio'?'Certificació importada':'Factura importada',
+    invoiceId:kind==='factura'?item.id:'',
+    certificationId:kind==='certificacio'?item.id:'',
+    clientId:item.clientId||'',
+    jobId:item.jobId||'',
+    budgetId:item.budgetId||'',
+    includeInJson:false,
+    createdAt:new Date().toISOString()
+  };
+  await idbPut({id:attachmentId,blob,dataUrl:'',meta});
+  item.attachmentId=attachmentId;
+  item.sourceFileName=meta.name;
+  item.sourceFileType=meta.type;
+  item.fileStatus='Fitxer original guardat';
+  return {saved:true};
+}
+
+confirmFinancialImportV0913=async function(){
+  teimor0913EnsureData();
+  const draft=state.financialDraft;
+  if(!draft || !(draft.documents||[]).length) return alert('No hi ha documents financers per confirmar.');
+  const target=draft.kind==='certificacio' ? data.certifications : data.invoices;
+  let added=0,duplicates=0,pending=0,savedFiles=0,failedFiles=0;
+  for(const source of draft.documents){
+    const duplicate=target.find(existing=>{
+      const sameKind=(existing.kind||draft.kind)===draft.kind;
+      const sameNumber=source.number && existing.number && teimor0913NormId(source.number)===teimor0913NormId(existing.number);
+      const sameDate=!source.date || !existing.date || source.date===existing.date;
+      const sameSource=source.sourceFile && existing.sourceFile===source.sourceFile && (!source.number || source.number===existing.number);
+      return sameKind && ((sameNumber && sameDate) || sameSource);
+    });
+    if(duplicate){ duplicates++; continue; }
+    const item={...source,id:uid(draft.kind==='certificacio'?'CERT':'FAC'),importedAt:new Date().toISOString(),sourceFiles:[source.sourceFile].filter(Boolean),status:source.matchStatus==='automatica'?'Importada · vinculada':'Importada · pendent de revisar',fileStatus:'Fitxer original pendent de guardar'};
+    if(item.budgetId){
+      const budget=byId(data.budgets,item.budgetId);
+      if(budget){ item.jobId=budget.jobId||item.jobId; item.clientId=budget.clientId||item.clientId; }
+    }
+    try{
+      const stored=await teimor09132StoreInvoiceSource(item,source,draft.kind);
+      if(stored.saved) savedFiles++; else failedFiles++;
+    }catch(error){
+      console.error('No s’ha pogut guardar el fitxer original:',error);
+      item.fileStatus='Fitxer original no guardat';
+      failedFiles++;
+    }
+    if(item.matchStatus!=='automatica') pending++;
+    target.push(item); added++;
+  }
+  data.importLogs.push({id:uid('IMP'),date:new Date().toISOString(),files:draft.files||[],kind:draft.kind,countDocuments:draft.documents.length,added,duplicates,pendingMatches:pending,originalFilesSaved:savedFiles,originalFilesFailed:failedFiles,libraryAdded:0,libraryManualOnly:true});
+  state.financialDraft=null;
+  saveData();
+  alert(`${teimor0913KindLabel(draft.kind)} importada. Documents nous: ${added}. Repetits omesos: ${duplicates}. Fitxers originals guardats: ${savedFiles}. Pendents de vincular/revisar: ${pending}.`);
+  state.view='obres';
+  render();
+};
+
+async function downloadInvoiceFileV09132(id){
+  const invoice=byId(data.invoices,id);
+  if(!invoice) return alert('No s’ha trobat la factura.');
+  if(!invoice.attachmentId){
+    return alert('Aquesta factura es va importar abans de guardar el fitxer original. Torna a importar l’Excel de la factura en aquesta versió i després podràs prémer «Descarregar factura».');
+  }
+  try{
+    const record=await idbGet(invoice.attachmentId);
+    if(!record?.blob) return alert('No s’ha trobat el fitxer original local. Cal tornar a importar la factura.');
+    const url=URL.createObjectURL(record.blob);
+    const link=document.createElement('a');
+    link.href=url;
+    link.download=record.meta?.name || invoice.sourceFileName || `factura_${invoice.number||invoice.id}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(error){
+    console.error(error);
+    alert('No s’ha pogut descarregar el fitxer original de la factura.');
+  }
+}
+
+function teimor09132InvoiceDownloadHtml(){
+  const invoices=data.invoices||[];
+  if(!invoices.length) return empty('Encara no hi ha factures importades.');
+  const rows=invoices.map(invoice=>{
+    const name=invoice.sourceFileName || teimor0913SourceName(invoice.sourceFile||'');
+    const status=invoice.attachmentId ? 'Fitxer original guardat' : 'Cal reimportar el fitxer original';
+    return `<tr><td><strong>${esc(invoice.number||invoice.id)}</strong><br><span class="muted">${esc(dateDisplay(invoice.date))}</span></td><td>${esc(clientName(invoice.clientId)||invoice.clientSnapshot?.name||'Client pendent')}</td><td>${esc(invoice.concept||'Concepte pendent')}</td><td>${esc(budgetName(invoice.budgetId)||'Sense pressupost')}</td><td>${esc(name||'Origen no disponible')}</td><td>${statusPill(status)}</td><td><button class="primary small" data-v09132-download-invoice="${esc(invoice.id)}">Descarregar factura</button></td></tr>`;
+  });
+  return table(['Número','Client','Concepte','Pressupost','Fitxer original','Disponibilitat','Acció'],rows);
+}
+
+const __teimorBaseRenderInvoicesV09132=renderInvoices;
+renderInvoices=function(editId=''){
+  __teimorBaseRenderInvoicesV09132(editId);
+  const content=document.getElementById('content');
+  if(!content) return;
+  content.insertAdjacentHTML('beforeend',`<div class="card"><div class="toolbar"><div><h2>Descarregar factura</h2><p class="muted">Cada factura importada conserva el fitxer original local quan es confirma la importació.</p></div><button class="ghost" data-go="obres">Veure per obra</button></div>${teimor09132InvoiceDownloadHtml()}</div>`);
+  bindViewEvents();
+};
+
+function teimor09132RenderObresFallback(error){
+  console.error('La vista Obres ha necessitat el mode segur:',error);
+  teimor09132SanitizeData();
+  setHeader('Obres / traçabilitat','Vista recuperada en mode segur. Revisa els registres antics incomplets.');
+  const jobs=data.jobs||[];
+  const rows=jobs.map(job=>{
+    const jobId=String(job.id||'');
+    const budgets=(data.budgets||[]).filter(item=>String(item.jobId||'')===jobId);
+    const invoices=(data.invoices||[]).filter(item=>String(item.jobId||'')===jobId);
+    return `<tr><td>${esc(job.year||'')}</td><td><strong>${esc(job.keyword||job.title||'Obra sense nom')}</strong><br><span class="muted">${esc(job.workAddress||job.address||'Adreça pendent')}</span></td><td>${esc(clientName(job.clientId)||'Client pendent')}</td><td class="num">${budgets.length}</td><td class="num">${invoices.length}</td><td><button class="ghost small" data-edit-job="${esc(job.id||'')}">Editar obra</button></td></tr>`;
+  });
+  const html=`<div class="card notice-blue"><h2>Obres</h2><p>La vista està oberta. S’han protegit registres antics incomplets perquè no bloquegin la pantalla. Els pressupostos i factures es poden revisar des de les pestanyes corresponents.</p>${table(['Any','Identificació / adreça','Client','Pressupostos','Factures','Acció'],rows)}</div>`;
+  const content=document.getElementById('content');
+  if(content){
+    content.innerHTML=html;
+    try{ bindViewEvents(); }catch(bindError){ console.warn('Alguns botons antics no s’han pogut activar:',bindError); }
+  }
+}
+
+function teimor09132RenderObresSafe(){
+  try{ renderObresV0913(); }
+  catch(error){ teimor09132RenderObresFallback(error); }
+}
+
+const __teimorBaseRenderV09132=render;
+render=function(){
+  try{ teimor0913EnsureData(); }
+  catch(error){
+    if(state.view==='obres') return teimor09132RenderObresFallback(error);
+    throw error;
+  }
+  document.querySelectorAll('#tabs button').forEach(button=>button.classList.toggle('active',button.dataset.view===state.view));
+  if(state.view==='obres') return teimor09132RenderObresSafe();
+  return __teimorBaseRenderV09132();
+};
+
+const __teimorBaseBindViewEventsV09132=bindViewEvents;
+bindViewEvents=function(){
+  try{ __teimorBaseBindViewEventsV09132(); }
+  catch(error){ console.warn('Alguns esdeveniments de la vista no s’han pogut activar:',error); }
+  document.querySelectorAll('[data-v0913-trace-job]').forEach(button=>button.onclick=()=>{
+    state.selectedJobId=button.dataset.v0913TraceJob;
+    teimor09132RenderObresSafe();
+  });
+  document.querySelectorAll('[data-v09132-download-invoice]').forEach(button=>button.onclick=()=>downloadInvoiceFileV09132(button.dataset.v09132DownloadInvoice));
+};
