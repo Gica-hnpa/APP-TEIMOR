@@ -1,4 +1,4 @@
-# TEIMOR V09.13.6 · identificació d’obra, factures i traçabilitat
+# TEIMOR V09.13.7 · importació incremental, arrencada ràpida i fitxa d’obra
 
 V09.13 parteix de V09.12 i manté les versions anteriors intactes.
 
@@ -36,16 +36,19 @@ Canvis principals:
 - Obres té filtres per text, any, client, estat i vinculació, amb anys clicables i paginació per mantenir la pantalla ràpida.
 - Cada obra s’obre en una fitxa amb pestanyes de resum, pressupostos, factures, certificacions, documentació, albarans, notes, temps/materials i rendiment.
 - Des de la fitxa es poden revisar i guardar les relacions d’una factura amb l’obra i el pressupost, i veure el PDF o descarregar el fitxer original.
+- La importació de pressupostos és incremental: reimportar els mateixos Excels actualitza dades buides o errònies i no duplica pressupostos, clients ni obres.
+- La reparació global de dades no bloqueja el login ni es repeteix en cada canvi de pestanya; s’executa en segon pla quan és necessària.
+- La fitxa d’obra s’obre com una finestra superior independent, amb pantalla completa al mòbil i totes les pestanyes de treball.
 
 Ús recomanat:
 
 1. Obre Importar Excels.
 2. Tria Factures o Certificacions.
-3. Importa un bloc de fins a 50 fitxers, revisa les coincidències i confirma.
+3. Importa tots els pressupostos o diversos blocs, revisa el recompte i confirma; els repetits es reutilitzen i només s’afegeixen els que falten.
 4. Entra a Obres / traçabilitat per veure la relació completa.
 
 Configuració Render:
 
-Root Directory: `App_TEIMOR_gestor_pressupostos_v09_13_6_OBRES_FILTRES_FITXA`
+Root Directory: `App_TEIMOR_gestor_pressupostos_v09_13_7_IMPORTACIO_INCREMENTAL_FITXA_MODAL`
 Build Command: `echo "No build needed"`
 Publish Directory: `.`

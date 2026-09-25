@@ -114,3 +114,17 @@ button,input,select,textarea{font:inherit} button{cursor:pointer}.hidden{display
 .job-detail-tabs button:hover,.job-detail-tabs button.active{background:var(--brand);border-color:var(--brand);color:#fff}
 button:disabled{opacity:.45;cursor:not-allowed}
 @media(max-width:900px){.job-detail-tabs{overflow:auto;flex-wrap:nowrap;padding-bottom:12px}.job-detail-tabs button{white-space:nowrap}}
+
+/* V09.13.7 · fitxa d’obra en pantalla superior */
+body.v09137-overlay-open{overflow:hidden}
+.v09137-job-overlay{position:fixed;inset:0;z-index:90;background:rgba(15,23,42,.66);display:flex;align-items:flex-start;justify-content:center;padding:2vh 2vw;overflow:auto}
+.v09137-job-overlay-panel{position:relative;width:min(1400px,96vw);max-height:96vh;overflow:auto;background:var(--card);border-radius:20px;box-shadow:0 30px 100px rgba(0,0,0,.38)}
+.v09137-job-overlay-panel #v09136JobFicha{margin:0;border:0;border-radius:20px;box-shadow:none;min-height:94vh}
+.v09137-overlay-close{position:sticky;top:12px;float:right;z-index:5;margin:12px 12px 0 0;width:38px;height:38px;border:1px solid var(--line);border-radius:999px;background:#fff;color:var(--text);font-size:25px;line-height:1;cursor:pointer;box-shadow:0 4px 12px rgba(15,23,42,.12)}
+.v09137-overlay-close:hover{background:var(--brand);color:#fff;border-color:var(--brand)}
+@media(max-width:700px){
+  .v09137-job-overlay{padding:0;align-items:stretch}
+  .v09137-job-overlay-panel{width:100vw;max-height:100vh;border-radius:0}
+  .v09137-job-overlay-panel #v09136JobFicha{border-radius:0;min-height:100vh;padding:14px}
+  .v09137-overlay-close{top:6px;margin:6px 6px 0 0}
+}
