@@ -1,4 +1,4 @@
-# TEIMOR V09.13.4 · identificació d’obra, factures i traçabilitat
+# TEIMOR V09.13.5 · identificació d’obra, factures i traçabilitat
 
 V09.13 parteix de V09.12 i manté les versions anteriors intactes.
 
@@ -30,6 +30,9 @@ Canvis principals:
 - Pressupostos i Factures mostren comptadors totals i comptadors filtrats; les factures tenen també filtre per relació automàtica/pendent.
 - Les factures es poden editar amb client, obra, pressupost, concepte, base, IVA i estat, sense perdre el fitxer original ni la traçabilitat.
 - Cada factura té una «Vista PDF» amb el mateix estil A4 de la previsualització dels pressupostos i es pot imprimir o guardar com a PDF.
+- La relació massiva no crea obres: consolida les obres duplicades, propaga la relació pressupost–factura–obra i manté els comptadors reals.
+- «Veure traçabilitat» i «Editar obra» tenen una delegació d’esdeveniments reforçada perquè funcionin també després de filtrar o recalcular relacions.
+- La factura impresa mostra «Referència obra» i «Segons pressupost» com a referències comercials; no hi imprimeix textos interns de vinculació.
 
 Ús recomanat:
 
@@ -40,6 +43,6 @@ Canvis principals:
 
 Configuració Render:
 
-Root Directory: `App_TEIMOR_gestor_pressupostos_v09_13_4_FACTURES_SEPARACIO_OBRES_PDF`
+Root Directory: `App_TEIMOR_gestor_pressupostos_v09_13_5_RELACIO_TRAÇABILITAT_PDF`
 Build Command: `echo "No build needed"`
 Publish Directory: `.`
