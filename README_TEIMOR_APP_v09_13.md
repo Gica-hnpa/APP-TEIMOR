@@ -1,4 +1,4 @@
-# TEIMOR V09.13.2 · identificació d’obra, factures i traçabilitat
+# TEIMOR V09.13.3 · identificació d’obra, factures i traçabilitat
 
 V09.13 parteix de V09.12 i manté les versions anteriors intactes.
 
@@ -23,6 +23,9 @@ Canvis principals:
 - La importació desa el fitxer original local de cada factura i la pestanya Factures inclou l’acció explícita «Descarregar factura».
 - Les factures importades en versions anteriors que no tenen fitxer local s’han de reimportar una vegada per poder-les descarregar.
 - La pestanya Obres té un mode segur per obrir-se encara que hi hagi registres antics incomplets.
+- La pestanya Factures permet importar directament factures i, després de confirmar, les mostra en un llistat amb filtre per text complet, any, client i estat.
+- Els filtres de Clients, Pressupostos i Llibreria accepten diverses lletres sense reconstruir tota la pantalla ni perdre el cursor.
+- A Obres funcionen «Veure traçabilitat» i «Editar obra», i hi ha una acció per recalcular de cop les relacions pendents de factures i certificacions.
 
 Ús recomanat:
 
@@ -33,6 +36,6 @@ Canvis principals:
 
 Configuració Render:
 
-Root Directory: `App_TEIMOR_gestor_pressupostos_v09_13_2_FACTURES_CERTIFICACIONS_TRAÇABILITAT`
+Root Directory: `App_TEIMOR_gestor_pressupostos_v09_13_3_FACTURES_CERTIFICACIONS_TRAÇABILITAT`
 Build Command: `echo "No build needed"`
 Publish Directory: `.`

@@ -5764,7 +5764,7 @@ function teimor0913FinancialPreviewHtml(draft){
       <label>Obra<select data-v0913-financial-field="jobId" data-v0913-financial-id="${esc(doc.id)}">${teimor0913FinancialOptions('jobId',doc.jobId)}</select></label>
       <label class="wide">Pressupost<select data-v0913-financial-field="budgetId" data-v0913-financial-id="${esc(doc.id)}">${teimor0913FinancialOptions('budgetId',doc.budgetId)}</select></label>
     </div>
-  </td></tr>`).join('');
+  </td></tr>`);
   const auto=docs.filter(doc=>doc.matchStatus==='automatica').length;
   const suggested=docs.filter(doc=>doc.matchStatus==='suggerida').length;
   const pending=docs.filter(doc=>doc.matchStatus==='pendent').length;
@@ -6935,7 +6935,7 @@ confirmFinancialImportV0913=async function(){
   state.financialDraft=null;
   saveData();
   alert(`${teimor0913KindLabel(draft.kind)} importada. Documents nous: ${added}. Repetits omesos: ${duplicates}. Fitxers originals guardats: ${savedFiles}. Pendents de vincular/revisar: ${pending}.`);
-  state.view='obres';
+  state.view='invoices';
   render();
 };
 
@@ -7027,4 +7027,270 @@ bindViewEvents=function(){
     teimor09132RenderObresSafe();
   });
   document.querySelectorAll('[data-v09132-download-invoice]').forEach(button=>button.onclick=()=>downloadInvoiceFileV09132(button.dataset.v09132DownloadInvoice));
+};
+
+/* =========================================================
+   TEIMOR V09.13.3 · FILTRES, FACTURES I ACCIONS MASSIVES
+   ========================================================= */
+
+data.meta = data.meta || {};
+data.meta.version = '9.13.3-filtres-factures-obres';
+
+function teimor09133BindClientActions(){
+  document.querySelectorAll('#clientsTable [data-edit-client]').forEach(button=>button.onclick=()=>renderClients(button.dataset.editClient));
+  document.querySelectorAll('#clientsTable [data-delete-client]').forEach(button=>button.onclick=()=>deleteClient(button.dataset.deleteClient));
+}
+
+filterClients=function(event){
+  const source=event?.target?.id==='clientSearch' ? event.target : document.getElementById('clientSearch');
+  const q=strip(source?.value||'');
+  const year=document.getElementById('clientYearFilter')?.value||'';
+  const city=strip(document.getElementById('clientCityFilter')?.value||'');
+  const status=strip(document.getElementById('clientStatusFilter')?.value||'');
+  state.clientSearch=source?.value||'';
+  const rows=(data.clients||[]).filter(client=>{
+    const clientJobs=(data.jobs||[]).filter(job=>job.clientId===client.id);
+    const yearOk=!year || clientJobs.some(job=>String(job.year)===String(year));
+    const cityBlob=strip([client.city,client.workCity,client.workAddress,client.fiscalAddress].filter(Boolean).join(' '));
+    const cityOk=!city || cityBlob.includes(city);
+    const statusOk=!status || strip(client.status)===status;
+    const jobBlob=clientJobs.map(job=>[job.year,job.title,job.keyword,job.address,job.workAddress,job.city,job.workCity].join(' ')).join(' ');
+    const blob=strip([client.id,client.name,client.nif,client.phone,client.email,client.contact,client.fiscalAddress,client.workAddress,client.city,client.notes,jobBlob].join(' '));
+    return yearOk && cityOk && statusOk && (!q || blob.includes(q));
+  });
+  const tableElement=document.getElementById('clientsTable');
+  if(tableElement) tableElement.innerHTML=clientsTable(rows);
+  const info=document.getElementById('clientFilterInfo');
+  if(info) info.textContent=`Mostrant ${rows.length} de ${data.clients.length} clients.`;
+  teimor09133BindClientActions();
+};
+
+function teimor09133BindBudgetActions(){
+  document.querySelectorAll('#budgetsTable [data-edit-budget]').forEach(button=>button.onclick=()=>openBudgetModal(button.dataset.editBudget));
+  document.querySelectorAll('#budgetsTable [data-preview-budget]').forEach(button=>button.onclick=()=>openBudgetPreview(button.dataset.previewBudget));
+  document.querySelectorAll('#budgetsTable [data-delete-budget]').forEach(button=>button.onclick=()=>deleteBudget(button.dataset.deleteBudget));
+  document.querySelectorAll('#budgetsTable [data-budget-status]').forEach(select=>select.onchange=event=>updateBudgetStatus(event.target.dataset.budgetStatus,event.target.value));
+  document.querySelectorAll('#budgetsTable [data-open-budget]').forEach(row=>row.onclick=event=>{
+    if(event.target.closest('[data-no-row-open]') || event.target.closest('button') || event.target.closest('select') || event.target.closest('input')) return;
+    openBudgetModal(row.dataset.openBudget);
+  });
+  document.querySelectorAll('#budgetsTable [data-sort-kind][data-sort-key]').forEach(button=>button.onclick=()=>{
+    const kind=button.dataset.sortKind, key=button.dataset.sortKey;
+    const field=`${kind}SortField`, direction=`${kind}SortDir`;
+    if(state[field]===key) state[direction]=state[direction]==='asc'?'desc':'asc';
+    else { state[field]=key; state[direction]=(key==='date'||key==='base'||key==='total'||key==='year'||key==='lines')?'desc':'asc'; }
+    if(kind==='budget') filterBudgets();
+  });
+}
+
+filterBudgets=function(event){
+  const searchElement=document.getElementById('budgetSearch');
+  const yearElement=document.getElementById('budgetYearFilter');
+  const clientElement=document.getElementById('budgetClientFilter');
+  const statusElement=document.getElementById('budgetStatusFilter');
+  if(searchElement) state.budgetSearch=searchElement.value||'';
+  if(yearElement) state.budgetYearFilter=yearElement.value||'';
+  if(clientElement) state.budgetClientFilter=clientElement.value||'';
+  if(statusElement) state.budgetStatusFilter=statusElement.value||'';
+  const rows=budgetRowsFiltered();
+  const tableElement=document.getElementById('budgetsTable');
+  const currentYear=typeof activeYear==='function'?activeYear('budget'):(state.budgetYearFilter||'all');
+  if(tableElement) tableElement.innerHTML=currentYear==='all'?budgetsGroupedByYear(rows):budgetsTable(rows);
+  const info=document.getElementById('budgetFilterInfo');
+  if(info) info.textContent=`Mostrant ${rows.length} de ${data.budgets.length} pressupostos.`;
+  teimor09133BindBudgetActions();
+};
+
+function teimor09133LibraryRows(){
+  const q=strip(document.getElementById('libSearch')?.value ?? state.libSearch ?? '');
+  const chapter=document.getElementById('libChapterFilter')?.value ?? state.libChapterFilter ?? '';
+  const status=strip(document.getElementById('libStatusFilter')?.value ?? state.libStatusFilter ?? '');
+  return (data.library||[]).filter(item=>{
+    const chapterOk=!chapter || (item.chapter||'Sense capítol')===chapter;
+    const statusOk=!status || strip(item.status||'').includes(status);
+    const blob=strip([item.code,item.chapter,item.unit,item.concept,item.longDesc,item.status,item.origin].join(' '));
+    return chapterOk && statusOk && (!q || blob.includes(q));
+  });
+}
+
+function teimor09133BindLibraryActions(){
+  document.querySelectorAll('#libraryTable [data-view-lib]').forEach(button=>button.onclick=()=>openLibModal(button.dataset.viewLib));
+  document.querySelectorAll('#libraryTable [data-delete-lib]').forEach(button=>button.onclick=()=>deleteLibraryItem(button.dataset.deleteLib));
+  document.querySelectorAll('#libraryTable [data-sort-kind][data-sort-key]').forEach(button=>button.onclick=()=>{
+    const kind=button.dataset.sortKind, key=button.dataset.sortKey;
+    const field=`${kind}SortField`, direction=`${kind}SortDir`;
+    if(state[field]===key) state[direction]=state[direction]==='asc'?'desc':'asc';
+    else { state[field]=key; state[direction]=(key==='date'||key==='base'||key==='total'||key==='year'||key==='lines')?'desc':'asc'; }
+    renderLibrary();
+  });
+}
+
+filterLibrary=function(event){
+  const id=event?.target?.id||'';
+  if(id==='libSearch') state.libSearch=event.target.value||'';
+  if(id==='libChapterFilter') state.libChapterFilter=event.target.value||'';
+  if(id==='libStatusFilter') state.libStatusFilter=event.target.value||'';
+  const tableElement=document.getElementById('libraryTable');
+  if(tableElement) tableElement.innerHTML=libraryTable(teimor09133LibraryRows());
+  teimor09133BindLibraryActions();
+};
+
+function teimor09133InvoiceStatus(invoice){
+  return invoice.paid?'Pagada':(invoice.status||'Pendent');
+}
+
+function teimor09133InvoiceRows(){
+  const q=strip(document.getElementById('v09133InvoiceSearch')?.value ?? state.invoiceSearch ?? '');
+  const year=document.getElementById('v09133InvoiceYear')?.value ?? state.invoiceYearFilter ?? '';
+  const client=document.getElementById('v09133InvoiceClient')?.value ?? state.invoiceClientFilter ?? '';
+  const status=strip(document.getElementById('v09133InvoiceStatus')?.value ?? state.invoiceStatusFilter ?? '');
+  return (data.invoices||[]).filter(invoice=>{
+    const job=byId(data.jobs,invoice.jobId)||{};
+    const budget=byId(data.budgets,invoice.budgetId)||{};
+    const invoiceYear=teimor0913Year(invoice.date||invoice.sourceFile);
+    const blob=strip([invoice.id,invoice.number,invoice.date,invoice.concept,invoice.notes,invoice.sourceFile,invoice.sourceFileName,clientName(invoice.clientId),job.title,job.keyword,job.address,job.workAddress,budget.number,budget.title].join(' '));
+    return (!q || blob.includes(q)) && (!year || String(invoiceYear)===String(year)) && (!client || invoice.clientId===client) && (!status || strip(teimor09133InvoiceStatus(invoice))===status);
+  }).sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')) || String(b.number||b.id).localeCompare(String(a.number||a.id),'ca',{numeric:true}));
+}
+
+function teimor09133InvoiceTableHtml(){
+  const rows=teimor09133InvoiceRows().map(invoice=>{
+    const sourceName=invoice.sourceFileName||teimor0913SourceName(invoice.sourceFile||'');
+    const fileStatus=invoice.attachmentId?'Fitxer original guardat':'Fitxer pendent de reimportar';
+    return `<tr><td><strong>${esc(invoice.number||invoice.id)}</strong><br><span class="muted">${esc(dateDisplay(invoice.date))}</span></td><td>${esc(clientName(invoice.clientId)||invoice.clientSnapshot?.name||'Client pendent')}</td><td>${esc(jobName(invoice.jobId)||'Sense obra')}</td><td>${esc(budgetName(invoice.budgetId)||'Sense pressupost')}</td><td>${esc(invoice.concept||'Concepte pendent')}</td><td class="num">${money(invoiceBase(invoice))}</td><td class="num">${money(invoiceTotal(invoice))}</td><td>${statusPill(teimor09133InvoiceStatus(invoice))}<br><span class="small-text">${esc(fileStatus)}</span></td><td class="nowrap"><button class="primary small" data-v09132-download-invoice="${esc(invoice.id)}">Descarregar factura</button> <button class="ghost small" data-edit-invoice="${esc(invoice.id)}">Editar</button> <button class="danger small" data-delete-invoice="${esc(invoice.id)}">Eliminar</button></td></tr>`;
+  });
+  return table(['Número','Data','Client','Obra','Pressupost','Concepte','Base','Total','Estat / fitxer','Accions'],rows);
+}
+
+function teimor09133InvoiceListCardHtml(){
+  const years=[...new Set((data.invoices||[]).map(invoice=>teimor0913Year(invoice.date||invoice.sourceFile)).filter(Boolean))].sort((a,b)=>b-a);
+  const statuses=[...new Set((data.invoices||[]).map(teimor09133InvoiceStatus).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  return `<div class="card" id="v09133InvoiceListCard"><div class="toolbar"><div><h2>Llistat de factures</h2><p class="muted">Filtra per text complet, any, client o estat. El filtre no recarrega la pantalla mentre escrius.</p></div><div class="actions"><label class="primary file-label">Importar factures<input id="v09133InvoiceInput" type="file" multiple accept=".xls,.xlsx,.xlsm,.csv,.zip,.rar" hidden></label><button class="ghost" data-go="importer">Importar certificacions</button></div></div>
+    <div class="filter-grid compact-filters"><label>Cerca<input id="v09133InvoiceSearch" placeholder="Número, client, obra, adreça, concepte..." value="${esc(state.invoiceSearch||'')}"></label><label>Any<select id="v09133InvoiceYear"><option value="">Tots els anys</option>${years.map(year=>`<option value="${year}" ${String(state.invoiceYearFilter||'')===String(year)?'selected':''}>${year}</option>`).join('')}</select></label><label>Client<select id="v09133InvoiceClient"><option value="">Tots els clients</option>${options(data.clients,state.invoiceClientFilter||'',client=>client.name||client.id)}</select></label><label>Estat<select id="v09133InvoiceStatus"><option value="">Tots</option>${statuses.map(status=>`<option value="${esc(status)}" ${strip(state.invoiceStatusFilter||'')===strip(status)?'selected':''}>${esc(status)}</option>`).join('')}</select></label></div>
+    <div id="v09133InvoiceFilterInfo" class="small-text" style="margin:10px 0">Mostrant ${teimor09133InvoiceRows().length} de ${data.invoices.length} factures.</div><div id="v09133InvoiceTable">${teimor09133InvoiceTableHtml()}</div></div>`;
+}
+
+function teimor09133BindInvoiceActions(){
+  document.querySelectorAll('[data-v09132-download-invoice]').forEach(button=>button.onclick=()=>downloadInvoiceFileV09132(button.dataset.v09132DownloadInvoice));
+  document.querySelectorAll('#v09133InvoiceTable [data-edit-invoice]').forEach(button=>button.onclick=()=>renderInvoices(button.dataset.editInvoice));
+  document.querySelectorAll('#v09133InvoiceTable [data-delete-invoice]').forEach(button=>button.onclick=()=>deleteInvoice(button.dataset.deleteInvoice));
+}
+
+function filterInvoicesV09133(event){
+  const target=event?.target;
+  if(target?.id==='v09133InvoiceSearch') state.invoiceSearch=target.value||'';
+  if(target?.id==='v09133InvoiceYear') state.invoiceYearFilter=target.value||'';
+  if(target?.id==='v09133InvoiceClient') state.invoiceClientFilter=target.value||'';
+  if(target?.id==='v09133InvoiceStatus') state.invoiceStatusFilter=target.value||'';
+  const tableElement=document.getElementById('v09133InvoiceTable');
+  if(tableElement) tableElement.innerHTML=teimor09133InvoiceTableHtml();
+  const info=document.getElementById('v09133InvoiceFilterInfo');
+  if(info) info.textContent=`Mostrant ${teimor09133InvoiceRows().length} de ${data.invoices.length} factures.`;
+  teimor09133BindInvoiceActions();
+}
+
+const __teimorBaseRenderInvoicesV09133=renderInvoices;
+renderInvoices=function(editId=''){
+  __teimorBaseRenderInvoicesV09133(editId);
+  const content=document.getElementById('content');
+  if(!content) return;
+  if(content.querySelectorAll){
+    [...content.querySelectorAll('.card')].forEach(card=>{
+      const heading=strip(card.querySelector('h2')?.textContent||'');
+      if(heading==='llistat de factures' || heading==='descarregar factura') card.remove();
+    });
+  }
+  content.insertAdjacentHTML('beforeend',teimor09133InvoiceListCardHtml());
+  bindViewEvents();
+  teimor09133BindInvoiceActions();
+};
+
+function teimor09133BindObresActions(){
+  document.querySelectorAll('[data-v0913-trace-job]').forEach(button=>button.onclick=()=>{
+    state.view='obres';
+    state.selectedJobId=button.dataset.v0913TraceJob;
+    teimor09132RenderObresSafe();
+  });
+  document.querySelectorAll('[data-edit-job]').forEach(button=>button.onclick=()=>{
+    const id=button.dataset.editJob;
+    if(id) renderJobs(id);
+  });
+  document.querySelectorAll('[data-v09133-auto-relate]').forEach(button=>button.onclick=teimor09133RelateAllPending);
+}
+
+function teimor09133RelateAllPending(){
+  teimor0913EnsureData();
+  const documents=[...(data.invoices||[]),...(data.certifications||[])];
+  let checked=0,linked=0,unresolved=0;
+  documents.forEach(doc=>{
+    if(doc.matchStatus==='manual') return;
+    if(doc.jobId && doc.budgetId) return;
+    checked++;
+    teimor0913ApplyMatch(doc);
+    const budget=doc.budgetId?byId(data.budgets,doc.budgetId):null;
+    if(budget){
+      doc.jobId=budget.jobId||doc.jobId||'';
+      doc.clientId=budget.clientId||doc.clientId||'';
+    }
+    if(doc.jobId||doc.budgetId){
+      doc.status='Importada · vinculada';
+      linked++;
+    }else unresolved++;
+  });
+  saveData();
+  alert(`Relació massiva acabada. Documents revisats: ${checked}. Vinculats: ${linked}. Pendents de validar: ${unresolved}.`);
+  state.view='obres';
+  render();
+}
+
+function teimor09133FilterObres(event){
+  const target=event?.target;
+  const q=strip(target?.value||'');
+  document.querySelectorAll('[data-v09133-obres-row]').forEach(row=>row.style.display=!q||strip(row.textContent).includes(q)?'':'none');
+}
+
+function teimor09133AddObresControls(){
+  const content=document.getElementById('content');
+  if(!content || content.querySelector?.('#v09133ObresControls')) return;
+  content.insertAdjacentHTML('afterbegin',`<div class="card" id="v09133ObresControls"><div class="toolbar"><div><h2>Filtre i relació massiva</h2><p class="muted">Escriu diverses lletres de la paraula clau, client o adreça. També pots recalcular totes les relacions pendents de cop.</p></div><button class="primary" data-v09133-auto-relate>Relacionar pendents automàticament</button></div><label style="display:block;max-width:620px">Paraula clau, client o adreça<input id="v09133ObresSearch" placeholder="Ex.: RCP, Major 10, coberta..."></label></div>`);
+  const tables=content.querySelectorAll?.('table')||[];
+  const mainTable=tables[0];
+  mainTable?.querySelectorAll('tbody tr').forEach(row=>row.dataset.v09133ObresRow='1');
+  bindViewEvents();
+  document.getElementById('v09133ObresSearch')?.addEventListener('input',teimor09133FilterObres);
+  teimor09133BindObresActions();
+}
+
+const __teimorBaseRenderObresSafeV09133=teimor09132RenderObresSafe;
+teimor09132RenderObresSafe=function(){
+  try{
+    renderObresV0913();
+    teimor09133AddObresControls();
+  }catch(error){
+    teimor09132RenderObresFallback(error);
+  }
+};
+
+const __teimorBaseBindViewEventsV09133=bindViewEvents;
+bindViewEvents=function(){
+  try{ __teimorBaseBindViewEventsV09133(); }catch(error){ console.warn('No s’han pogut activar alguns controls:',error); }
+  const clientSearch=document.getElementById('clientSearch'); if(clientSearch) clientSearch.oninput=filterClients;
+  const clientYear=document.getElementById('clientYearFilter'); if(clientYear) clientYear.onchange=filterClients;
+  const clientCity=document.getElementById('clientCityFilter'); if(clientCity) clientCity.onchange=filterClients;
+  const clientStatus=document.getElementById('clientStatusFilter'); if(clientStatus) clientStatus.onchange=filterClients;
+  const budgetSearch=document.getElementById('budgetSearch'); if(budgetSearch) budgetSearch.oninput=filterBudgets;
+  const budgetYear=document.getElementById('budgetYearFilter'); if(budgetYear) budgetYear.onchange=filterBudgets;
+  const budgetClient=document.getElementById('budgetClientFilter'); if(budgetClient) budgetClient.onchange=filterBudgets;
+  const budgetStatus=document.getElementById('budgetStatusFilter'); if(budgetStatus) budgetStatus.onchange=filterBudgets;
+  const librarySearch=document.getElementById('libSearch'); if(librarySearch) librarySearch.oninput=filterLibrary;
+  const libraryChapter=document.getElementById('libChapterFilter'); if(libraryChapter) libraryChapter.onchange=filterLibrary;
+  const libraryStatus=document.getElementById('libStatusFilter'); if(libraryStatus) libraryStatus.onchange=filterLibrary;
+  ['v09133InvoiceSearch','v09133InvoiceYear','v09133InvoiceClient','v09133InvoiceStatus'].forEach(id=>{ const element=document.getElementById(id); if(element) element.oninput=filterInvoicesV09133; if(element) element.onchange=filterInvoicesV09133; });
+  const directInvoiceInput=document.getElementById('v09133InvoiceInput');
+  if(directInvoiceInput) directInvoiceInput.onchange=event=>handleFinancialImportV0913([...event.target.files]);
+  teimor09133BindClientActions();
+  teimor09133BindBudgetActions();
+  teimor09133BindLibraryActions();
+  teimor09133BindInvoiceActions();
+  teimor09133BindObresActions();
 };
