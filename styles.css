@@ -107,3 +107,10 @@ button,input,select,textarea{font:inherit} button{cursor:pointer}.hidden{display
 #smartCleanLibraryV097{background:#0f766e;border-color:#0f766e;color:#fff}
 #finishCleanupVisible{border-color:#0f766e;color:#0f766e;background:#ecfdf5}
 .chapter-group summary{position:sticky;top:0;z-index:2}
+
+/* V09.13.6 · fitxa d’obra */
+.job-detail-tabs{display:flex;gap:7px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding:0 0 10px;margin-top:12px}
+.job-detail-tabs button{background:#fff;border:1px solid var(--line);border-radius:999px;padding:8px 12px;color:var(--text);font-size:12px;font-weight:700}
+.job-detail-tabs button:hover,.job-detail-tabs button.active{background:var(--brand);border-color:var(--brand);color:#fff}
+button:disabled{opacity:.45;cursor:not-allowed}
+@media(max-width:900px){.job-detail-tabs{overflow:auto;flex-wrap:nowrap;padding-bottom:12px}.job-detail-tabs button{white-space:nowrap}}

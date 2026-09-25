@@ -7634,6 +7634,301 @@ render=function(){
 teimor09134RepairData();
 
 /* =========================================================
+   TEIMOR V09.13.6 · OBRES RÀPIDES I FITXA COMPLETA
+   - Índexs en memòria per evitar cercar tots els documents per cada obra.
+   - Filtres per any, client, obra, estat i estat de vinculació.
+   - Paginació per no construir centenars d’elements DOM alhora.
+   - Fitxa d’obra amb pestanyes de resum, pressupostos, factures,
+     documentació, albarans, notes, temps/materials i rendiment.
+   ========================================================= */
+
+data.meta = data.meta || {};
+data.meta.version = '9.13.6-obres-filtres-fitxa-rapida';
+state.obresPage = Number(state.obresPage)||1;
+state.obresPageSize = Number(state.obresPageSize)||40;
+state.obresJobTab = state.obresJobTab || 'resum';
+
+function teimor09136MapPush(map,key,item){
+  if(!key || !item) return;
+  const list=map.get(key)||[];
+  if(!list.some(existing=>existing.id===item.id)) list.push(item);
+  map.set(key,list);
+}
+
+function teimor09136IndexData(){
+  const budgetsByJob=new Map(), invoicesByJob=new Map(), certificationsByJob=new Map();
+  const attachmentsByJob=new Map(), agendaByJob=new Map(), hoursByJob=new Map(), materialsByJob=new Map();
+  const budgetsById=new Map((data.budgets||[]).map(item=>[item.id,item]));
+  (data.budgets||[]).forEach(item=>teimor09136MapPush(budgetsByJob,item.jobId,item));
+  const addDocument=(map,doc)=>{
+    const budget=doc?.budgetId?budgetsById.get(doc.budgetId):null;
+    teimor09136MapPush(map,doc?.jobId,doc);
+    teimor09136MapPush(map,budget?.jobId,doc);
+  };
+  (data.invoices||[]).forEach(doc=>addDocument(invoicesByJob,doc));
+  (data.certifications||[]).forEach(doc=>addDocument(certificationsByJob,doc));
+  (data.attachments||[]).forEach(doc=>addDocument(attachmentsByJob,doc));
+  (data.agenda||[]).forEach(doc=>teimor09136MapPush(agendaByJob,doc.jobId,doc));
+  (Array.isArray(data.hores)?data.hores:[]).forEach(doc=>teimor09136MapPush(hoursByJob,doc.jobId,doc));
+  (Array.isArray(data.materials)?data.materials:[]).forEach(doc=>teimor09136MapPush(materialsByJob,doc.jobId,doc));
+  (data.budgets||[]).forEach(budget=>{
+    (budget.lines||[]).filter(line=>/material/i.test(String(line.type||line.category||''))).forEach(line=>{
+      const material={...line,budgetId:budget.id,jobId:budget.jobId,sourceBudget:budget.number||budget.id};
+      teimor09136MapPush(materialsByJob,budget.jobId,material);
+    });
+  });
+  return {budgetsByJob,invoicesByJob,certificationsByJob,attachmentsByJob,agendaByJob,hoursByJob,materialsByJob,budgetsById};
+}
+
+function teimor09136JobYear(job,budgets){
+  if(job?.year) return Number(job.year);
+  const first=(budgets||[])[0];
+  return first?Number(budgetYear(first)||0):0;
+}
+
+function teimor09136BuildModels(){
+  const index=teimor09136IndexData();
+  const models=(data.jobs||[]).map(job=>{
+    const budgets=index.budgetsByJob.get(job.id)||[];
+    const invoices=index.invoicesByJob.get(job.id)||[];
+    const certifications=index.certificationsByJob.get(job.id)||[];
+    const attachments=index.attachmentsByJob.get(job.id)||[];
+    const agenda=index.agendaByJob.get(job.id)||[];
+    const hours=index.hoursByJob.get(job.id)||[];
+    const materials=index.materialsByJob.get(job.id)||[];
+    const client=byId(data.clients,job.clientId)||{};
+    const keyword=teimor0913v2JobKeyword(job)||job.keyword||job.title||'';
+    const address=teimor0913v2JobAddress(job)||job.address||job.workAddress||'';
+    const city=teimor0913v2JobCity(job)||job.city||job.workCity||'';
+    const year=teimor09136JobYear(job,budgets);
+    const blob=strip([
+      job.id,year,keyword,address,city,job.status,client.name,client.nif,client.city,
+      budgets.map(item=>[item.number,item.title,item.concept].join(' ')).join(' '),
+      invoices.map(item=>[item.number,item.concept,item.date].join(' ')).join(' ')
+    ].join(' '));
+    return {job,client,budgets,invoices,certifications,attachments,agenda,hours,materials,keyword,address,city,year,blob,
+      budgetTotal:budgets.reduce((sum,item)=>sum+budgetBase(item),0),
+      invoiceBase:invoices.reduce((sum,item)=>sum+invoiceBase(item),0),
+      invoiceTotal:invoices.reduce((sum,item)=>sum+invoiceTotal(item),0),
+      certificationTotal:certifications.reduce((sum,item)=>sum+teimor0913CertTotal(item),0)};
+  });
+  models.sort((a,b)=>b.year-a.year || a.keyword.localeCompare(b.keyword,'ca') || a.address.localeCompare(b.address,'ca'));
+  return {models,index};
+}
+
+function teimor09136ObresFilters(){
+  return {
+    q:strip(document.getElementById('v09136ObresSearch')?.value ?? state.obresSearch ?? ''),
+    year:document.getElementById('v09136ObresYear')?.value ?? state.obresYearFilter ?? '',
+    client:document.getElementById('v09136ObresClient')?.value ?? state.obresClientFilter ?? '',
+    status:strip(document.getElementById('v09136ObresStatus')?.value ?? state.obresStatusFilter ?? ''),
+    relation:document.getElementById('v09136ObresRelation')?.value ?? state.obresRelationFilter ?? ''
+  };
+}
+
+function teimor09136FilterModels(models,filters){
+  return models.filter(model=>{
+    const queryOk=!filters.q || model.blob.includes(filters.q);
+    const yearOk=!filters.year || String(model.year)===String(filters.year);
+    const clientOk=!filters.client || model.job.clientId===filters.client;
+    const statusOk=!filters.status || strip(model.job.status||'')===filters.status;
+    const hasBudget=model.budgets.length>0;
+    const hasInvoice=model.invoices.length>0;
+    let relationOk=true;
+    if(filters.relation==='pressupost') relationOk=hasBudget;
+    if(filters.relation==='factura') relationOk=hasInvoice;
+    if(filters.relation==='completa') relationOk=hasBudget&&hasInvoice;
+    if(filters.relation==='pendent-factura') relationOk=hasBudget&&!hasInvoice;
+    if(filters.relation==='sense-documents') relationOk=!hasBudget&&!hasInvoice;
+    return queryOk&&yearOk&&clientOk&&statusOk&&relationOk;
+  });
+}
+
+function teimor09136YearButtons(models,selected){
+  const years=[...new Set(models.map(model=>model.year).filter(Boolean))].sort((a,b)=>b-a);
+  return '<div class="actions" style="flex-wrap:wrap;margin:8px 0 0"><button class="'+(!selected?'primary':'ghost')+' small" data-v09136-year="">Tots els anys</button>'+years.map(year=>'<button class="'+(String(selected)===String(year)?'primary':'ghost')+' small" data-v09136-year="'+esc(year)+'">'+esc(year)+'</button>').join('')+'</div>';
+}
+
+function teimor09136StatusOptions(models,selected){
+  const statuses=[...new Set(models.map(model=>model.job.status).filter(Boolean))].sort((a,b)=>String(a).localeCompare(String(b),'ca'));
+  return '<option value="">Tots els estats</option>'+statuses.map(status=>'<option value="'+esc(status)+'" '+(strip(status)===strip(selected||'')?'selected':'')+'>'+esc(status)+'</option>').join('');
+}
+
+function teimor09136RelationOptions(selected){
+  const values=[['','Totes'],['pressupost','Amb pressupost'],['factura','Amb factura'],['completa','Pressupost + factura'],['pendent-factura','Pressupost sense factura'],['sense-documents','Sense documents']];
+  return values.map(([value,label])=>'<option value="'+value+'" '+(value===selected?'selected':'')+'>'+label+'</option>').join('');
+}
+
+function teimor09136JobRows(models){
+  if(!models.length) return '<tr><td colspan="10">'+empty('No hi ha obres que coincideixin amb aquests filtres.')+'</td></tr>';
+  return models.map(model=>'<tr data-v09136-obres-row="1"><td>'+esc(model.year||'')+'</td><td><strong>'+esc(model.keyword||'Obra sense paraula clau')+'</strong><br><span class="muted">Adreça obra: '+esc([model.address,model.city].filter(Boolean).join(' · ')||'Pendent de revisar')+'</span></td><td>'+esc(model.client?.name||clientName(model.job.clientId)||'Client pendent')+'</td><td class="num">'+model.budgets.length+'</td><td class="num">'+model.invoices.length+'</td><td class="num">'+model.certifications.length+'</td><td class="num">'+money(model.budgetTotal)+'</td><td class="num">'+money(model.invoiceBase)+'</td><td>'+statusPill(model.job.status||'')+'</td><td class="nowrap"><button class="primary small" data-v0913-trace-job="'+esc(model.job.id)+'" data-v09136-open-job="'+esc(model.job.id)+'">Obrir fitxa</button> <button class="ghost small" data-edit-job="'+esc(model.job.id)+'">Editar obra</button></td></tr>').join('');
+}
+
+function teimor09136PageControls(total){
+  const size=Number(state.obresPageSize)||40;
+  const pages=Math.max(1,Math.ceil(total/size));
+  state.obresPage=Math.min(Math.max(1,Number(state.obresPage)||1),pages);
+  return '<div class="toolbar" style="margin-top:10px"><span class="small-text">Pàgina '+state.obresPage+' de '+pages+'</span><div class="actions"><button class="ghost small" data-v09136-page="prev" '+(state.obresPage<=1?'disabled':'')+'>← Anterior</button><button class="ghost small" data-v09136-page="next" '+(state.obresPage>=pages?'disabled':'')+'>Següent →</button><label class="small-text">Per pàgina<select id="v09136ObresPageSize"><option '+(size===25?'selected':'')+'>25</option><option '+(size===40?'selected':'')+'>40</option><option '+(size===75?'selected':'')+'>75</option><option '+(size===100?'selected':'')+'>100</option></select></label></div></div>';
+}
+
+function teimor09136InvoiceBudgetOptions(model,invoice){
+  const budgets=[...model.budgets];
+  if(invoice.budgetId && !budgets.some(item=>item.id===invoice.budgetId)){
+    const current=byId(data.budgets,invoice.budgetId); if(current) budgets.push(current);
+  }
+  return '<option value="">Sense pressupost</option>'+budgets.map(item=>'<option value="'+esc(item.id)+'" '+(item.id===invoice.budgetId?'selected':'')+'>'+esc((item.number||item.id)+' · '+(item.title||''))+'</option>').join('');
+}
+
+function teimor09136InvoiceJobOptions(model,invoice){
+  const ids=[model.job.id,invoice.jobId].filter(Boolean).filter((id,index,array)=>array.indexOf(id)===index);
+  return '<option value="">Sense obra</option>'+ids.map(id=>{const job=byId(data.jobs,id)||{};return '<option value="'+esc(id)+'" '+(id===invoice.jobId?'selected':'')+'>'+esc((job.year||'')+' · '+(teimor0913v2JobKeyword(job)||job.title||id))+'</option>';}).join('');
+}
+
+function teimor09136SummaryTab(model){
+  const client=model.client||{};
+  return '<div class="grid four"><div class="kpi"><span>Pressupostos</span><strong>'+model.budgets.length+'</strong></div><div class="kpi"><span>Factures</span><strong>'+model.invoices.length+'</strong></div><div class="kpi"><span>Certificacions</span><strong>'+model.certifications.length+'</strong></div><div class="kpi"><span>Pressupostat s/IVA</span><strong>'+money(model.budgetTotal)+'</strong></div></div><div class="grid two"><div class="card"><h3>Identificació</h3><p><strong>Paraula clau / referència:</strong> '+esc(model.keyword||'Pendent')+'<br><strong>Adreça de l’obra:</strong> '+esc([model.address,model.city].filter(Boolean).join(' · ')||'Pendent')+'<br><strong>Any:</strong> '+esc(model.year||'')+'<br><strong>Estat:</strong> '+esc(model.job.status||'')+'</p></div><div class="card"><h3>Client i dades fiscals</h3><p><strong>'+esc(client.name||'Client pendent')+'</strong><br>NIF/DNI/CIF: '+esc(client.nif||'')+'<br>'+esc([client.fiscalAddress,client.postalCode,client.city].filter(Boolean).join(' · ')||'Dades fiscals pendents')+'</p></div></div><div class="card notice-blue"><strong>Traçabilitat:</strong> aquesta fitxa agrupa els documents per l’obra consolidada. Si una factura surt aquí, es pot revisar o canviar la seva relació des de la pestanya «Factures».</div>';
+}
+
+function teimor09136BudgetsTab(model){
+  if(!model.budgets.length) return '<div class="card">'+empty('Aquesta obra encara no té cap pressupost vinculat.')+'<button class="primary small" data-go="budgets">Anar a Pressupostos</button></div>';
+  return '<div class="card"><div class="toolbar"><h3>Pressupostos vinculats</h3><button class="ghost small" data-go="budgets">Veure tots els pressupostos</button></div>'+table(['Any','Número','Data','Concepte','Estat','Base','Total','Acció'],model.budgets.map(budget=>'<tr><td>'+esc(budgetYear(budget)||model.year||'')+'</td><td><strong>'+esc(budget.number||budget.id)+'</strong></td><td>'+dateDisplay(budget.date)+'</td><td>'+esc(budget.title||budget.keyword||'')+'</td><td>'+statusPill(budget.status||'')+'</td><td class="num">'+money(budgetBase(budget))+'</td><td class="num">'+money(budgetTotal(budget))+'</td><td><button class="ghost small" data-open-budget="'+esc(budget.id)+'">Obrir pressupost</button></td></tr>'))+'</div>';
+}
+
+function teimor09136InvoicesTab(model){
+  if(!model.invoices.length) return '<div class="card">'+empty('Aquesta obra encara no té cap factura vinculada.')+'<button class="primary small" data-go="invoices">Anar a Factures</button></div>';
+  const rows=model.invoices.map(invoice=>'<tr><td>'+esc(dateDisplay(invoice.date))+'</td><td><strong>'+esc(invoice.number||invoice.id)+'</strong></td><td>'+esc(invoice.concept||'')+'</td><td><select data-v09136-invoice-job="'+esc(invoice.id)+'">'+teimor09136InvoiceJobOptions(model,invoice)+'</select></td><td><select data-v09136-invoice-budget="'+esc(invoice.id)+'">'+teimor09136InvoiceBudgetOptions(model,invoice)+'</select></td><td class="num">'+money(invoiceBase(invoice))+'</td><td class="num">'+money(invoiceTotal(invoice))+'</td><td class="nowrap"><button class="primary small" data-v09136-save-invoice="'+esc(invoice.id)+'">Guardar relació</button> <button class="ghost small" data-edit-invoice="'+esc(invoice.id)+'">Editar</button> <button class="ghost small" data-v09134-invoice-pdf="'+esc(invoice.id)+'">Veure PDF</button> <button class="ghost small" data-v09132-download-invoice="'+esc(invoice.id)+'">Descarregar factura</button></td></tr>');
+  return '<div class="card"><div class="toolbar"><div><h3>Factures vinculades</h3><p class="muted">Pots canviar l’obra o el pressupost de cada factura i guardar la relació.</p></div><button class="ghost small" data-go="invoices">Veure totes les factures</button></div>'+table(['Data','Número','Concepte','Obra','Pressupost','Base','Total','Acció'],rows)+'</div>';
+}
+
+function teimor09136DocumentsTab(model,onlyAlbarans=false){
+  const rows=(model.attachments||[]).filter(item=>!onlyAlbarans || /albar[aà]n|entrega|delivery/i.test([item.name,item.category,item.type,item.notes].filter(Boolean).join(' ')));
+  if(!rows.length) return '<div class="card">'+empty(onlyAlbarans?'No hi ha albarans vinculats a aquesta obra.':'No hi ha documentació vinculada a aquesta obra.')+'<button class="primary small" data-go="attachments">Anar a Arxius / albarans</button></div>';
+  return '<div class="card"><div class="toolbar"><h3>'+ (onlyAlbarans?'Albarans':'Documentació vinculada') +'</h3><button class="ghost small" data-go="attachments">Gestionar arxius</button></div>'+table(['Nom','Tipus','Categoria','Mida','Notes','Acció'],rows.map(item=>'<tr><td><strong>'+esc(item.name||item.id)+'</strong></td><td>'+esc(item.type||'')+'</td><td>'+esc(item.category||'')+'</td><td class="num">'+(num(item.size)/1024).toFixed(1)+' KB</td><td>'+esc(item.notes||'')+'</td><td><button class="ghost small" data-download-attachment="'+esc(item.id)+'">Obrir</button></td></tr>'))+'</div>';
+}
+
+function teimor09136TimeMaterialsTab(model){
+  const timeRows=[...(model.hours||[])];
+  const agendaRows=[...(model.agenda||[])];
+  const materials=(model.materials||[]).slice(0,150);
+  const timeHtml=timeRows.length?table(['Data','Descripció','Hores','Cost','Estat'],timeRows.map(item=>'<tr><td>'+esc(dateDisplay(item.date))+'</td><td>'+esc(item.concept||item.title||item.notes||'')+'</td><td class="num">'+esc(item.hours||item.qty||'')+'</td><td class="num">'+money(item.total||item.cost||num(item.hours)*num(item.unitPrice))+'</td><td>'+esc(item.status||'')+'</td></tr>')):empty('Encara no hi ha repercussió d’hores registrada.');
+  const agendaHtml=agendaRows.length?table(['Data','Hora','Tipus','Nota','Estat'],agendaRows.map(item=>'<tr><td>'+esc(dateDisplay(item.date))+'</td><td>'+esc(item.time||'')+'</td><td>'+esc(item.type||'')+'</td><td>'+esc(item.title||item.notes||'')+'</td><td>'+esc(item.status||'')+'</td></tr>')):empty('No hi ha notes de temps o agenda vinculades.');
+  const materialHtml=materials.length?table(['Origen','Material','Ut','Quantitat','Preu/ut','Total'],materials.map(item=>'<tr><td>'+esc(item.sourceBudget||item.budgetId||'')+'</td><td>'+esc(item.concept||item.name||'')+'</td><td>'+esc(item.unit||'')+'</td><td class="num">'+esc(item.qty||item.quantity||'')+'</td><td class="num">'+money(item.unitPrice||item.price)+'</td><td class="num">'+money(item.total||lineTotal(item))+'</td></tr>')):empty('Encara no hi ha materials o partides de material separats.');
+  return '<div class="grid two"><div class="card"><div class="toolbar"><h3>Temps / hores</h3><button class="ghost small" data-go="agenda">Obrir agenda</button></div>'+timeHtml+'</div><div class="card"><h3>Notes i seguiment de temps</h3>'+agendaHtml+'</div></div><div class="card"><h3>Materials i repercussió</h3>'+materialHtml+'</div>';
+}
+
+function teimor09136PerformanceTab(model){
+  const difference=model.invoiceBase-model.budgetTotal;
+  const percentage=model.budgetTotal?difference/model.budgetTotal*100:0;
+  return '<div class="grid four"><div class="kpi"><span>Pressupost s/IVA</span><strong>'+money(model.budgetTotal)+'</strong></div><div class="kpi"><span>Facturat s/IVA</span><strong>'+money(model.invoiceBase)+'</strong></div><div class="kpi '+(difference>=0?'good':'bad')+'"><span>Diferència</span><strong>'+money(difference)+'</strong></div><div class="kpi"><span>Diferència %</span><strong>'+percentage.toFixed(2)+'%</strong></div></div><div class="card"><h3>Rendiment per pressupost</h3>'+table(['Pressupost','Base pressupost','Facturat associat','Diferència'],model.budgets.map(budget=>{const invoices=model.invoices.filter(item=>item.budgetId===budget.id);const billed=invoices.reduce((sum,item)=>sum+invoiceBase(item),0);return '<tr><td>'+esc(budget.number||budget.id)+'</td><td class="num">'+money(budgetBase(budget))+'</td><td class="num">'+money(billed)+'</td><td class="num">'+money(billed-budgetBase(budget))+'</td></tr>';}))+'</div><div class="card notice-blue">El rendiment es calcula amb les dades de pressupostos i factures que hi ha actualment vinculades. Les hores i materials es poden completar a la pestanya corresponent.</div>';
+}
+
+function teimor09136NotesTab(model){
+  return '<div class="card"><h3>Notes de l’obra</h3><textarea id="v09136JobNotes" style="min-height:180px;width:100%">'+esc(model.job.notes||'')+'</textarea><div class="actions" style="margin-top:10px"><button class="primary" data-v09136-save-notes="'+esc(model.job.id)+'">Guardar notes</button></div></div>';
+}
+
+function teimor09136JobFicha(model){
+  const tabs=[['resum','Resum'],['pressupost','Pressupostos'],['factures','Factures'],['certificacions','Certificacions'],['documentacio','Documentació'],['albarans','Albarans'],['notes','Notes'],['temps','Temps i materials'],['rendiment','Rendiment']];
+  const tab= tabs.some(item=>item[0]===state.obresJobTab)?state.obresJobTab:'resum';
+  let body=teimor09136SummaryTab(model);
+  if(tab==='pressupost') body=teimor09136BudgetsTab(model);
+  if(tab==='factures') body=teimor09136InvoicesTab(model);
+  if(tab==='certificacions') body='<div class="card">'+(model.certifications.length?teimor0913TraceCertificationHtml(model.certifications):empty('Aquesta obra encara no té certificacions vinculades.'))+'</div>';
+  if(tab==='documentacio') body=teimor09136DocumentsTab(model,false);
+  if(tab==='albarans') body=teimor09136DocumentsTab(model,true);
+  if(tab==='notes') body=teimor09136NotesTab(model);
+  if(tab==='temps') body=teimor09136TimeMaterialsTab(model);
+  if(tab==='rendiment') body=teimor09136PerformanceTab(model);
+  return '<div class="card" id="v09136JobFicha"><div class="toolbar"><div><h2>Fitxa d’obra: '+esc(model.keyword||'Obra sense nom')+'</h2><p class="muted">'+esc(clientName(model.job.clientId)||'Client pendent')+' · '+esc([model.address,model.city].filter(Boolean).join(' · ')||'Adreça pendent')+'</p></div><div class="actions"><button class="ghost" data-edit-job="'+esc(model.job.id)+'">Editar obra</button><button class="ghost" data-v09136-close-job>Tancar fitxa</button></div></div><div class="job-detail-tabs">'+tabs.map(item=>'<button class="'+(tab===item[0]?'active':'')+'" data-v09136-job-tab="'+item[0]+'">'+item[1]+'</button>').join('')+'</div><div style="margin-top:14px">'+body+'</div></div>';
+}
+
+function teimor09136RenderObres(prepareData=true){
+  if(prepareData) teimor0913EnsureData();
+  data.meta=data.meta||{};
+  data.meta.version='9.13.6-obres-filtres-fitxa-rapida';
+  setHeader('Obres / fitxes de treball','Filtra per any, client, obra i vinculació; obre la fitxa completa per revisar pressupostos, factures i documents.');
+  const built=teimor09136BuildModels();
+  state.obresModels=built.models;
+  const filters=teimor09136ObresFilters();
+  state.obresSearch=filters.q; state.obresYearFilter=filters.year; state.obresClientFilter=filters.client; state.obresStatusFilter=filters.status; state.obresRelationFilter=filters.relation;
+  const filtered=teimor09136FilterModels(built.models,filters);
+  const size=Number(state.obresPageSize)||40;
+  const pages=Math.max(1,Math.ceil(filtered.length/size));
+  state.obresPage=Math.min(Math.max(1,Number(state.obresPage)||1),pages);
+  const pageRows=filtered.slice((state.obresPage-1)*size,state.obresPage*size);
+  const selected=state.selectedJobId?built.models.find(model=>model.job.id===state.selectedJobId):null;
+  const allBudgetTotal=(data.budgets||[]).reduce((sum,item)=>sum+budgetBase(item),0);
+  const allInvoiceTotal=(data.invoices||[]).reduce((sum,item)=>sum+invoiceBase(item),0);
+  const usedClientIds=new Set(built.models.map(model=>model.job.clientId).filter(Boolean));
+  const visibleClients=data.clients.filter(client=>usedClientIds.has(client.id));
+  const clientOptions='<option value="">Tots els clients</option>'+options(visibleClients,state.obresClientFilter||'',client=>client.name||client.id);
+  const filterInfo='Mostrant '+(filtered.length?((state.obresPage-1)*size+1)+'–'+Math.min(state.obresPage*size,filtered.length):0)+' de '+filtered.length+' obres filtrades · total real: '+built.models.length+' obres · '+data.budgets.length+' pressupostos · '+data.invoices.length+' factures.';
+  const detail=selected?teimor09136JobFicha(selected):'<div class="card notice-blue"><h2>Obre una obra per veure la fitxa completa</h2><p>La fitxa conté pressupostos, factures, certificacions, documentació, albarans, notes, temps/materials i rendiment.</p></div>';
+  setContent('<div class="grid four"><div class="kpi"><span>Obres totals</span><strong>'+built.models.length+'</strong></div><div class="kpi"><span>Obres filtrades</span><strong>'+filtered.length+'</strong></div><div class="kpi"><span>Pressupostos</span><strong>'+data.budgets.length+'</strong></div><div class="kpi"><span>Factures</span><strong>'+data.invoices.length+'</strong></div></div><div class="card"><div class="toolbar"><div><h2>Llistat d’obres</h2><p class="muted">Pressupostat: '+money(allBudgetTotal)+' · Facturat s/IVA: '+money(allInvoiceTotal)+'</p></div><div class="actions"><button class="ghost" data-v09136-clear-filters>Netejar filtres</button><button class="primary" data-go="importer">Importar factures / certificacions</button></div></div><div class="filter-grid"><label>Cerca obra / client / adreça<input id="v09136ObresSearch" placeholder="RCP, Major 10, coberta..." value="'+esc(state.obresSearch||'')+'"></label><label>Any<select id="v09136ObresYear"><option value="">Tots els anys</option>'+[...new Set(built.models.map(model=>model.year).filter(Boolean))].sort((a,b)=>b-a).map(year=>'<option value="'+esc(year)+'" '+(String(year)===String(state.obresYearFilter||'')?'selected':'')+'>'+esc(year)+'</option>').join('')+'</select></label><label>Client<select id="v09136ObresClient">'+clientOptions+'</select></label><label>Estat<select id="v09136ObresStatus">'+teimor09136StatusOptions(built.models,state.obresStatusFilter||'')+'</select></label><label>Vinculació<select id="v09136ObresRelation">'+teimor09136RelationOptions(state.obresRelationFilter||'')+'</select></label></div>'+teimor09136YearButtons(built.models,state.obresYearFilter||'')+'<div id="v09136ObresFilterInfo" class="small-text" style="margin:10px 0">'+filterInfo+'</div><div class="table-wrap"><table><thead><tr><th>Any</th><th>Identificació de l’obra</th><th>Client</th><th>Pressupostos</th><th>Factures</th><th>Certificacions</th><th>Pressupostat</th><th>Facturat</th><th>Estat</th><th>Accions</th></tr></thead><tbody>'+teimor09136JobRows(pageRows)+'</tbody></table></div>'+teimor09136PageControls(filtered.length)+'</div>'+detail);
+  teimor09136BindObresUi();
+}
+
+function teimor09136SaveInvoiceRelation(invoiceId,row){
+  const invoice=byId(data.invoices,invoiceId); if(!invoice) return;
+  const jobId=row.querySelector('[data-v09136-invoice-job]')?.value||'';
+  const budgetId=row.querySelector('[data-v09136-invoice-budget]')?.value||'';
+  const budget=budgetId?byId(data.budgets,budgetId):null;
+  invoice.budgetId=budget?.id||'';
+  invoice.jobId=budget?.jobId||jobId||'';
+  if(budget?.clientId) invoice.clientId=budget.clientId;
+  else if(invoice.jobId) invoice.clientId=byId(data.jobs,invoice.jobId)?.clientId||invoice.clientId||'';
+  invoice.matchStatus=invoice.jobId||invoice.budgetId?'manual':'pendent';
+  invoice.matchConfidence=invoice.jobId||invoice.budgetId?100:0;
+  invoice.matchReason=invoice.jobId||invoice.budgetId?'Relació revisada des de la fitxa d’obra.':'Sense obra ni pressupost vinculats.';
+  invoice.status=invoice.jobId||invoice.budgetId?'Importada · vinculada':'Importada · pendent de revisar';
+  saveData();
+  teimor09134RepairData();
+  teimor09136RenderObres(false);
+}
+
+function teimor09136RenderKeepingFocus(inputId){
+  const current=document.getElementById(inputId);
+  const start=current?.selectionStart;
+  const end=current?.selectionEnd;
+  teimor09136RenderObres(false);
+  const next=document.getElementById(inputId);
+  if(next){
+    next.focus();
+    if(typeof start==='number' && typeof next.setSelectionRange==='function') next.setSelectionRange(start,end??start);
+  }
+}
+
+function teimor09136BindObresUi(){
+  const rerender=()=>{ state.obresPage=1; teimor09136RenderObres(false); };
+  const search=document.getElementById('v09136ObresSearch'); if(search) search.oninput=event=>{state.obresSearch=event.target.value||'';state.obresPage=1;teimor09136RenderKeepingFocus('v09136ObresSearch');};
+  const year=document.getElementById('v09136ObresYear'); if(year) year.onchange=event=>{state.obresYearFilter=event.target.value||'';rerender();};
+  const client=document.getElementById('v09136ObresClient'); if(client) client.onchange=event=>{state.obresClientFilter=event.target.value||'';rerender();};
+  const status=document.getElementById('v09136ObresStatus'); if(status) status.onchange=event=>{state.obresStatusFilter=event.target.value||'';rerender();};
+  const relation=document.getElementById('v09136ObresRelation'); if(relation) relation.onchange=event=>{state.obresRelationFilter=event.target.value||'';rerender();};
+  const pageSize=document.getElementById('v09136ObresPageSize'); if(pageSize) pageSize.onchange=event=>{state.obresPageSize=Number(event.target.value)||40;state.obresPage=1;teimor09136RenderObres(false);};
+  document.querySelectorAll('[data-v09136-year]').forEach(button=>button.onclick=event=>{event.preventDefault();state.obresYearFilter=button.dataset.v09136Year||'';state.obresPage=1;teimor09136RenderObres(false);});
+  document.querySelectorAll('[data-v09136-page]').forEach(button=>button.onclick=event=>{event.preventDefault();state.obresPage+=(button.dataset.v09136Page==='next'?1:-1);teimor09136RenderObres(false);});
+  document.querySelectorAll('[data-v09136-open-job],[data-v0913-trace-job]').forEach(button=>button.onclick=event=>{event.preventDefault();event.stopPropagation();const id=button.dataset.v09136OpenJob||button.dataset.v0913TraceJob;state.selectedJobId=id;state.obresJobTab='resum';teimor09136RenderObres(false);});
+  document.querySelectorAll('[data-edit-job]').forEach(button=>button.onclick=event=>{event.preventDefault();event.stopPropagation();teimor09135OpenJobEditor(button.dataset.editJob);});
+  document.querySelectorAll('[data-v09136-job-tab]').forEach(button=>button.onclick=event=>{event.preventDefault();state.obresJobTab=button.dataset.v09136JobTab||'resum';teimor09136RenderObres(false);});
+  document.querySelectorAll('[data-v09136-close-job]').forEach(button=>button.onclick=event=>{event.preventDefault();state.selectedJobId='';teimor09136RenderObres(false);});
+  document.querySelectorAll('[data-v09136-clear-filters]').forEach(button=>button.onclick=event=>{event.preventDefault();state.obresSearch='';state.obresYearFilter='';state.obresClientFilter='';state.obresStatusFilter='';state.obresRelationFilter='';state.obresPage=1;teimor09136RenderObres(false);});
+  document.querySelectorAll('[data-v09136-save-notes]').forEach(button=>button.onclick=event=>{event.preventDefault();const job=byId(data.jobs,button.dataset.v09136SaveNotes);const notes=document.getElementById('v09136JobNotes');if(job&&notes){job.notes=notes.value||'';saveData();teimor09136RenderObres(false);}});
+  document.querySelectorAll('[data-v09136-save-invoice]').forEach(button=>button.onclick=event=>{event.preventDefault();const row=button.closest('tr');teimor09136SaveInvoiceRelation(button.dataset.v09136SaveInvoice,row);});
+}
+
+renderObresV0913=function(){
+  try{ teimor09136RenderObres(); }
+  catch(error){ console.error('No s’ha pogut obrir la nova fitxa d’obra:',error); teimor09132RenderObresFallback(error); }
+};
+
+/* Obre la vista nova també des de qualsevol acció antiga que encara cridi
+   directament renderObresV0913 o el mode segur de V09.13. */
+teimor09132RenderObresSafe=function(){ renderObresV0913(); };
+teimor09133FilterObres=function(){ teimor09136RenderObres(false); };
+
+teimor09134RepairData();
+
+/* =========================================================
    TEIMOR V09.13.5 · RELACIÓ REAL, TRAÇABILITAT I FACTURA PDF
    - No crea obres en relacionar documents.
    - Consolida obres duplicades després d’enriquir-les amb les dades dels
@@ -7964,3 +8259,4 @@ openInvoicePreview=function(id){
 
 /* Executa la reparació també a l’arrencada de la V09.13.5. */
 teimor09134RepairData();
+data.meta.version = '9.13.6-obres-filtres-fitxa-rapida';
