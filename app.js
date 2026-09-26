@@ -9303,6 +9303,444 @@ teimor09132RenderObresSafe=function(){ return renderObresV0913(); };
 })();
 
 /* =========================================================
+   TEIMOR V09.16 · LECTOR DE PRESSUPOSTOS ANTICS, ESTATS I FITXA COMPLETA
+   - Separa el patró antic TREBALLS: concepte curt, descripció llarga,
+     amidament, preu unitari i total.
+   - Les files NOTA/Observacions queden fora de les partides.
+   - Pressupostos i obres tenen estats de treball recomanats i filtres
+     combinables.
+   - La fitxa de pressupost s'obre sempre en una pantalla superior completa.
+   ========================================================= */
+(function(){
+  const VERSION='9.16.0-lector-875-estats-fitxa-completa';
+  const arr=value=>Array.isArray(value)?value:[];
+  const tx=value=>String(value??'').replace(/\s+/g,' ').trim();
+  const norm=value=>strip(value||'').replace(/\s+/g,' ').trim();
+
+  const BUDGET_STATUS_DEFS=[
+    ['draft','Esborrany'],
+    ['to-send','Pendent d’enviar'],
+    ['waiting-response','Pendent de resposta'],
+    ['accepted','Acceptat'],
+    ['in-progress','En execució'],
+    ['closed','Tancat'],
+    ['rejected','No acceptat'],
+    ['imported-history','Històric importat']
+  ];
+  const JOB_STATUS_DEFS=[
+    ['quote-pending','Pendent de pressupost'],
+    ['waiting-response','Pendent de resposta'],
+    ['active','Activa'],
+    ['in-progress','En execució'],
+    ['paused','Aturada'],
+    ['closed','Tancada'],
+    ['rejected','No acceptada'],
+    ['imported-history','Històrica importada']
+  ];
+
+  function statusCode(value,kind){
+    const defs=kind==='job'?JOB_STATUS_DEFS:BUDGET_STATUS_DEFS;
+    const raw=norm(value);
+    if(!raw) return '';
+    const direct=defs.find(([code,label])=>norm(code)===raw||norm(label)===raw);
+    if(direct) return direct[0];
+    if(kind==='job'){
+      if(/histor|importad/.test(raw)) return 'imported-history';
+      if(/rebutj|no accept|anul/.test(raw)) return 'rejected';
+      if(/tancad|acab|final/.test(raw)) return 'closed';
+      if(/execuc|en curs|curs/.test(raw)) return 'in-progress';
+      if(/activ|acceptad/.test(raw)) return 'active';
+      if(/pendent de pressupost|sense pressupost|pressupost pendent/.test(raw)) return 'quote-pending';
+      if(/pendent|respost|espera|enviat/.test(raw)) return 'waiting-response';
+    }else{
+      if(/histor|importad/.test(raw)) return 'imported-history';
+      if(/rebutj|no accept|anul/.test(raw)) return 'rejected';
+      if(/tancad|cobrat|factur|acceptat i fet|final/.test(raw)) return 'closed';
+      if(/execuc|en curs|curs/.test(raw)) return 'in-progress';
+      if(/acceptat|acceptada/.test(raw)) return 'accepted';
+      if(/pendent d enviar|per enviar/.test(raw)) return 'to-send';
+      if(/enviat|pendent|respost|espera/.test(raw)) return 'waiting-response';
+      if(/esborr|borrador/.test(raw)) return 'draft';
+    }
+    return 'other:'+raw;
+  }
+  function statusLabel(value,kind){
+    const defs=kind==='job'?JOB_STATUS_DEFS:BUDGET_STATUS_DEFS;
+    const code=statusCode(value,kind);
+    return defs.find(([key])=>key===code)?.[1] || tx(value) || '';
+  }
+  function statusOptions(current,kind){
+    const defs=kind==='job'?JOB_STATUS_DEFS:BUDGET_STATUS_DEFS;
+    const selected=statusCode(current,kind);
+    const known=defs.some(([code])=>code===selected);
+    const extra=current && !known ? `<option value="${esc(current)}" selected>${esc(current)}</option>` : '';
+    return defs.map(([code,label])=>`<option value="${esc(label)}" ${code===selected?'selected':''}>${esc(label)}</option>`).join('')+extra;
+  }
+  function filterOptions(selected,kind){
+    const defs=kind==='job'?JOB_STATUS_DEFS:BUDGET_STATUS_DEFS;
+    const selectedCode=statusCode(selected,kind);
+    return '<option value="">'+(kind==='job'?'Tots els estats d’obra':'Tots els estats de pressupost')+'</option>'+defs.map(([code,label])=>`<option value="${esc(code)}" ${code===selectedCode?'selected':''}>${esc(label)}</option>`).join('');
+  }
+
+  /* -------------------- Importació del patró antic 875 -------------------- */
+  function normalizedRows(aoa){
+    return arr(aoa).map(row=>arr(row).map(value=>cleanText(value)).filter(Boolean));
+  }
+  function unitLabel(value){
+    const clean=tx(value).replace(/[.]$/,'');
+    if(/^m2$/i.test(clean)) return 'm²';
+    if(/^m3$/i.test(clean)) return 'm³';
+    return clean;
+  }
+  function measurementFromRow(row){
+    const text=arr(row).map(tx).filter(Boolean).join(' ');
+    if(!text) return null;
+    const number='([0-9]+(?:[.,][0-9]+)*)';
+    const unit='(m²|m2|m³|m3|ml|ud|ut|u|kg|pa|h|dia|dies)';
+    const match=text.match(new RegExp(number+'\\s*'+unit+'\\s*[x×*]\\s*'+number+'\\s*€?\\s*(?:=|:|→)\\s*'+number+'\\s*€?','i'));
+    if(!match) return null;
+    return {qty:num(match[1]),unit:unitLabel(match[2]),unitPrice:num(match[3]),total:num(match[4]),raw:text};
+  }
+  function workHeaderFromRow(row){
+    if(measurementFromRow(row)) return null;
+    const pieces=arr(row).map(tx).filter(Boolean);
+    for(let i=0;i<pieces.length;i++){
+      let text=pieces[i].replace(/^\s*[.*•·-]\s*/,'').trim();
+      const separate=text.match(/^(m²|m2|m³|m3|ml|ud|ut|u|kg|pa|h|dia|dies)\s*$/i);
+      if(separate && pieces[i+1]) return {unit:unitLabel(separate[1]),concept:tx(pieces[i+1])};
+      const inline=text.match(/^(m²|m2|m³|m3|ml|ud|ut|u|kg|pa|h|dia|dies)\s+(.{4,})$/i);
+      if(inline && !/^x\b/i.test(inline[2])) return {unit:unitLabel(inline[1]),concept:tx(inline[2])};
+    }
+    return null;
+  }
+  function observationMarker(value){
+    return /^(?:nota|notes|observaci[oó](?:n|ons)?|condici[oó](?:n|ons)?|exclusions?)\b/i.test(tx(value));
+  }
+  function summaryMarker(value){
+    return /^(?:base imposable|base imponible|subtotal|iva|import total|importe total|total pressupost|total presupuesto|total obra|total)\b/i.test(tx(value));
+  }
+  function noteValue(value){
+    const text=tx(value);
+    if(!text || observationMarker(text) && !/[:=\-]/.test(text)) return '';
+    const cleaned=text.replace(/^\s*(?:nota|notes|observaci[oó](?:n|ons)?|condici[oó](?:n|ons)?|exclusions?)\s*[:=\-]?\s*/i,'').trim();
+    return cleaned.replace(/^\s*[.*•·-]\s*/,'').trim();
+  }
+  function extractLegacyObservations(aoa){
+    const rows=normalizedRows(aoa);
+    const notes=[];
+    let active=false;
+    for(const row of rows){
+      const markerIndex=row.findIndex(observationMarker);
+      if(markerIndex>=0){
+        active=true;
+        row.slice(markerIndex).forEach(value=>{ const note=noteValue(value); if(note) notes.push(note); });
+        continue;
+      }
+      if(!active) continue;
+      if(row.some(summaryMarker) || row.some(value=>/^treballs?|^partides?|^concepte|^concepto/i.test(value))) break;
+      const joined=row.join(' ');
+      if(joined) notes.push(noteValue(joined));
+    }
+    return [...new Set(notes.map(tx).filter(Boolean))];
+  }
+  function legacyWorkItems(fileName,sheetName,aoa){
+    const rows=normalizedRows(aoa);
+    const start=rows.findIndex(row=>row.some(value=>/^treballs?\s*[:：-]?$/i.test(value)||/^treballs?\s*[:：-]\s*.+/i.test(value)));
+    if(start<0) return [];
+    let current=null;
+    const result=[];
+    const flush=()=>{
+      if(!current || !current.measurement || !current.concept) { current=null; return; }
+      const line=makeItem({
+        code:'TR-'+String(result.length+1).padStart(2,'0'),
+        chapter:'Treballs',
+        unit:current.measurement.unit,
+        desc:current.concept,
+        qty:current.measurement.qty,
+        pu:current.measurement.unitPrice,
+        total:current.measurement.total,
+        status:classifyItem(current.measurement.unit,current.measurement.qty,current.measurement.unitPrice,current.measurement.total,current.concept),
+        fileName,
+        sheetName,
+        longDescOverride:current.longDesc.join('\n')||current.concept
+      });
+      line.v0916LegacyWork=true;
+      line.v0916LegacyMeasurementRows=1;
+      result.push(line);
+      current=null;
+    };
+    for(let index=start+1;index<rows.length;index++){
+      const row=rows[index];
+      if(!row.length) continue;
+      if(observationMarker(row[0]) || row.some(summaryMarker)) break;
+      const measurement=measurementFromRow(row);
+      const header=workHeaderFromRow(row);
+      if(header){ flush(); current={...header,longDesc:[],measurement:null}; continue; }
+      if(measurement){
+        if(current){ current.measurement=measurement; flush(); }
+        continue;
+      }
+      if(!current) continue;
+      const text=row.join(' ');
+      if(!text || /^treballs?|^partides?/i.test(text) || /^(?:nota|observacions?)\b/i.test(text)) continue;
+      if(!/[a-zà-ÿ]{3}/i.test(text)) continue;
+      current.longDesc.push(text);
+    }
+    flush();
+    return result;
+  }
+  const baseDetectItemsV0916=detectItemsFromSheet;
+  detectItemsFromSheet=function(fileName,sheetName,aoa){
+    const legacy=legacyWorkItems(fileName,sheetName,aoa);
+    return legacy.length ? legacy : baseDetectItemsV0916(fileName,sheetName,aoa);
+  };
+
+  const baseParseWorkbookV0916=parseWorkbook;
+  parseWorkbook=function(fileName,arrayBuffer){
+    const parsed=baseParseWorkbookV0916(fileName,arrayBuffer);
+    let flat=[];
+    try{ flat=typeof teimor0913v2ReadFlat==='function'?teimor0913v2ReadFlat(arrayBuffer):[]; }catch(error){ flat=[]; }
+    const legacyItems=arr(parsed.items).filter(item=>item?.v0916LegacyWork);
+    const legacyMeasurements=legacyItems.reduce((sum,item)=>sum+num(item.v0916LegacyMeasurementRows),0);
+    const notes=[];
+    const bySheet={};
+    flat.forEach(record=>{ (bySheet[record.sheet] ||= []).push(record); });
+    Object.values(bySheet).forEach(records=>{
+      records.sort((a,b)=>a.rowIndex-b.rowIndex);
+      const aoa=records.map(record=>record.raw||[]);
+      notes.push(...extractLegacyObservations(aoa));
+    });
+    const uniqueNotes=[...new Set(notes.map(note=>tx(note)).filter(Boolean))];
+    if(legacyItems.length){
+      parsed.parseStats={...(parsed.parseStats||{}),legacyStructuredWorkItems:legacyItems.length,measurementLinesRemoved:Math.max(num(parsed.parseStats?.measurementLinesRemoved),legacyMeasurements)};
+      parsed.budget.parseStats=parsed.parseStats;
+      parsed.budget.workItemsMode='structured-short-long-measurement';
+      parsed.budget.workItemsCount=legacyItems.length;
+      parsed.warnings=arr(parsed.warnings);
+      parsed.warnings.push(fileName+': s’han separat '+legacyItems.length+' treballs amb concepte curt, descripció llarga i amidament.');
+    }
+    if(uniqueNotes.length || legacyItems.length){
+      parsed.budget.observations=uniqueNotes;
+      parsed.budget.notes=uniqueNotes.join('\n');
+      if(uniqueNotes.length) parsed.warnings.push(fileName+': s’han passat '+uniqueNotes.length+' observacions del bloc NOTA al pressupost.');
+    }
+    parsed.items=arr(parsed.items).map(item=>{
+      const clean={...item};
+      delete clean.v0916LegacyWork;
+      delete clean.v0916LegacyMeasurementRows;
+      return clean;
+    });
+    parsed.budget.lines=parsed.items.map(item=>({...item,id:item.id||uid('LIN')}));
+    /* V09.13.7 només actualitzava línies importades quan detectava el marcador
+       9.15.x. Aquest valor de compatibilitat permet corregir el mateix Excel
+       875 quan l’usuari el torna a importar, sense tocar línies editades a mà. */
+    if(legacyItems.length) parsed.budget.importParserVersion='9.15.99-legacy-structured-work-compat';
+    parsed.warnings=[...new Set(arr(parsed.warnings))];
+    return parsed;
+  };
+
+  /* -------------------- Estats i filtres combinables -------------------- */
+  budgetStatusOptions=function(current=''){ return statusOptions(current,'budget'); };
+  teimor09136StatusOptions=function(models,selected){ return filterOptions(selected,'job'); };
+  function budgetFilterOptions(selected){ return filterOptions(selected,'budget'); }
+  function jobStatusOptions(current=''){ return statusOptions(current,'job'); }
+
+  const baseBudgetRowsFilteredV0916=budgetRowsFiltered;
+  budgetRowsFiltered=function(){
+    const q=strip(document.getElementById('budgetSearch')?.value ?? state.budgetSearch ?? '');
+    const yearState=state.budgetYearFilter ?? (typeof activeYear==='function'?activeYear('budget'):'all');
+    const rawStatus=document.getElementById('budgetStatusFilter')?.value ?? state.budgetStatusFilter ?? '';
+    const status=statusCode(rawStatus,'budget');
+    const client=document.getElementById('budgetClientFilter')?.value ?? state.budgetClientFilter ?? '';
+    const rows=arr(data.budgets).filter(b=>{
+      const job=byId(data.jobs,b.jobId)||{};
+      const clientRow=byId(data.clients,b.clientId)||{};
+      const blob=[b.id,b.seqNumber,b.oldNumber,b.number,b.date,b.title,b.status,b.source,b.notes,b.observations,clientRow.name,clientRow.nif,clientRow.phone,clientRow.email,job.title,job.address,job.city,budgetYear(b)].join(' ');
+      const yearOk=!yearState || yearState==='all' || String(budgetYear(b))===String(yearState);
+      return (!q || strip(blob).includes(q)) && yearOk && (!status || statusCode(b.status,'budget')===status) && (!client || b.clientId===client);
+    });
+    return typeof sortByBudgetField==='function'?sortByBudgetField(rows):rows;
+  };
+
+  const baseRenderBudgetsV0916=renderBudgets;
+  renderBudgets=function(editId=''){
+    const result=baseRenderBudgetsV0916(editId);
+    const filter=document.getElementById('budgetStatusFilter');
+    if(filter){
+      const selected=state.budgetStatusFilter||'';
+      filter.innerHTML=budgetFilterOptions(selected);
+      filter.value=statusCode(selected,'budget')||'';
+    }
+    return result;
+  };
+
+  const baseObresFiltersV0916=teimor09136ObresFilters;
+  teimor09136ObresFilters=function(){
+    const filters=baseObresFiltersV0916();
+    filters.budgetStatus=strip(document.getElementById('v09136ObresBudgetStatus')?.value ?? state.obresBudgetStatusFilter ?? '');
+    return filters;
+  };
+  teimor09136FilterModels=function(models,filters){
+    return arr(models).filter(model=>{
+      const queryOk=!filters.q || String(model.blob||'').includes(filters.q);
+      const yearOk=!filters.year || String(model.year)===String(filters.year);
+      const clientOk=!filters.client || model.job.clientId===filters.client;
+      const workStatus=statusCode(model.job.status,'job');
+      const statusOk=!filters.status || workStatus===statusCode(filters.status,'job');
+      const budgetStatus=statusCode(filters.budgetStatus,'budget');
+      const budgetOk=!budgetStatus || model.budgets.some(budget=>statusCode(budget.status,'budget')===budgetStatus);
+      const hasBudget=model.budgets.length>0;
+      const hasInvoice=model.invoices.length>0;
+      let relationOk=true;
+      if(filters.relation==='pressupost') relationOk=hasBudget;
+      if(filters.relation==='factura') relationOk=hasInvoice;
+      if(filters.relation==='completa') relationOk=hasBudget&&hasInvoice;
+      if(filters.relation==='pendent-factura') relationOk=hasBudget&&!hasInvoice;
+      if(filters.relation==='sense-documents') relationOk=!hasBudget&&!hasInvoice;
+      return queryOk&&yearOk&&clientOk&&statusOk&&budgetOk&&relationOk;
+    });
+  };
+
+  function v0916JobRows(models){
+    if(!models.length) return '<tr><td colspan="10">'+empty('No hi ha obres que coincideixin amb aquests filtres.')+'</td></tr>';
+    return models.map(model=>{
+      const address=[model.address,model.city].filter(Boolean).join(' · ');
+      const label=model.keyword||'Obra sense identificació';
+      return '<tr class="v09140-job-row" data-v09136-obres-row="1"><td>'+esc(model.year||'')+'</td><td><div class="v09140-work-id"><strong>'+esc(label)+'</strong>'+(model.keywordNeedsReview?'<span class="v09140-review-badge">Revisar identificació</span>':'')+'</div><span class="v09140-work-address">'+esc(address||'Adreça pendent de completar')+'</span></td><td>'+esc(model.client?.name||clientName(model.job.clientId)||'Client pendent')+'</td><td class="num">'+model.budgets.length+'</td><td class="num">'+model.invoices.length+'</td><td class="num">'+model.certifications.length+'</td><td class="num">'+money(model.budgetTotal)+'</td><td class="num">'+money(model.invoiceBase)+'</td><td>'+statusPill(statusLabel(model.job.status,'job'))+'</td><td class="nowrap"><button class="primary small" data-v0913-trace-job="'+esc(model.job.id)+'" data-v09136-open-job="'+esc(model.job.id)+'">Obrir fitxa</button> <button class="ghost small" data-edit-job="'+esc(model.job.id)+'">Editar obra</button></td></tr>';
+    }).join('');
+  }
+  teimor09136JobRows=v0916JobRows;
+
+  const baseRenderObresV0916=teimor09136RenderObres;
+  teimor09136RenderObres=function(prepareData){
+    const result=baseRenderObresV0916(prepareData);
+    const status=document.getElementById('v09136ObresStatus');
+    if(status && !document.getElementById('v09136ObresBudgetStatus')){
+      status.closest('label')?.insertAdjacentHTML('afterend','<label>Estat pressupost<select id="v09136ObresBudgetStatus">'+budgetFilterOptions(state.obresBudgetStatusFilter||'')+'</select></label>');
+    }
+    const budgetStatus=document.getElementById('v09136ObresBudgetStatus');
+    if(budgetStatus){
+      budgetStatus.value=statusCode(state.obresBudgetStatusFilter||'','budget')||'';
+      budgetStatus.onchange=event=>{ state.obresBudgetStatusFilter=event.target.value||''; state.obresPage=1; teimor09136RenderObres(false); };
+    }
+    document.querySelectorAll('[data-v09136-clear-filters]').forEach(button=>button.onclick=event=>{
+      event.preventDefault();
+      state.obresSearch=''; state.obresYearFilter=''; state.obresClientFilter=''; state.obresStatusFilter=''; state.obresBudgetStatusFilter=''; state.obresRelationFilter=''; state.obresPage=1;
+      teimor09136RenderObres(false);
+    });
+    return result;
+  };
+
+  function v0916EnsureStatuses(){
+    data.budgets=arr(data.budgets); data.jobs=arr(data.jobs);
+    let changed=false;
+    data.budgets.forEach(budget=>{ if(!tx(budget.status)){ budget.status='Esborrany'; changed=true; } });
+    data.jobs.forEach(job=>{
+      if(tx(job.status)) return;
+      const hasBudget=data.budgets.some(budget=>budget.jobId===job.id);
+      job.status=hasBudget?'Històrica importada':'Pendent de pressupost';
+      changed=true;
+    });
+    if(changed) saveData();
+  }
+  v0916EnsureStatuses();
+
+  /* -------------------- Editor d’obra amb els estats nous -------------------- */
+  function openJobEditorV0916(jobId){
+    const job=byId(data.jobs,jobId);
+    if(!job) return alert('No s’ha trobat aquesta obra.');
+    state.view='obres'; state.selectedJobId=jobId;
+    const client=byId(data.clients,job.clientId)||{};
+    const address=job.workAddress||job.address||'';
+    const city=job.workCity||job.city||'';
+    const postal=job.workPostalCode||job.postalCode||'';
+    openModal('<div class="v0916-editor-head"><div><span class="v0916-kicker">FITXA D’OBRA</span><h2>Editar obra</h2><p>Canvia l’estat i les dades d’identificació des de la fitxa.</p></div></div><form id="v0916JobForm" class="form-grid v0916-job-form" data-job-id="'+esc(job.id)+'"><label class="wide">Identificació pràctica de l’obra<input name="keyword" required value="'+esc(job.keyword||job.title||'')+'" placeholder="Ex.: Coberta nau · Impermeabilització CP edifici"></label><label class="wide">Client<select name="clientId"><option value="">Client pendent</option>'+options(data.clients,job.clientId,c=>c.name||c.id)+'</select></label><label>Any<input name="year" type="number" min="2000" max="2100" value="'+esc(job.year||new Date().getFullYear())+'"></label><label>Estat de l’obra<select name="status">'+jobStatusOptions(job.status||'')+'</select></label><label class="wide">Títol intern<input name="title" value="'+esc(job.title||job.keyword||'')+'" placeholder="Descripció completa"></label><label class="wide">Adreça de l’obra<input name="workAddress" value="'+esc(address)+'" placeholder="Carrer, número, local o nau"></label><label>Població obra<input name="workCity" value="'+esc(city)+'"></label><label>Codi postal obra<input name="workPostalCode" value="'+esc(postal)+'"></label><label>Preu hora oficial<input name="officialRate" type="number" min="0" step="0.01" value="'+esc(job.officialRate||data.settings.officialHourRate||31)+'"></label><label>Preu hora manobre / ajudant<input name="laborerRate" type="number" min="0" step="0.01" value="'+esc(job.laborerRate||data.settings.laborerHourRate||27)+'"></label><label class="full">Notes<textarea name="notes">'+esc(job.notes||'')+'</textarea></label><div class="actions full"><button class="primary" type="submit">Guardar obra</button><button class="ghost" type="button" data-v0916-cancel-job>Cancel·lar</button></div></form>');
+    const form=document.getElementById('v0916JobForm');
+    if(form) form.onsubmit=event=>{
+      event.preventDefault();
+      const fields=formObj(form);
+      const old=byId(data.jobs,jobId)||job;
+      const keyword=cleanText(fields.keyword)||cleanText(fields.title)||'Obra pendent de revisar';
+      const addressValue=cleanText(fields.workAddress);
+      const cityValue=cleanText(fields.workCity);
+      const postalValue=cleanText(fields.workPostalCode);
+      data.jobs[data.jobs.findIndex(item=>item.id===jobId)]={...old,id:jobId,year:Number(fields.year)||new Date().getFullYear(),clientId:fields.clientId||'',keyword,title:cleanText(fields.title)||keyword,displayKeyword:keyword,address:addressValue,workAddress:addressValue,city:cityValue,workCity:cityValue,postalCode:postalValue,workPostalCode:postalValue,status:fields.status||old.status||'Activa',officialRate:num(fields.officialRate),laborerRate:num(fields.laborerRate),notes:fields.notes||''};
+      data.budgets.filter(budget=>budget.jobId===jobId).forEach(budget=>{ if(!tx(budget.keyword)) budget.keyword=keyword; if(!tx(budget.workAddress)) budget.workAddress=addressValue; if(!tx(budget.workCity)) budget.workCity=cityValue; if(!tx(budget.workPostalCode)) budget.workPostalCode=postalValue; });
+      saveData(); closeModal(); state.view='obres'; state.selectedJobId=jobId; teimor09136RenderObres(false);
+    };
+    document.querySelectorAll('[data-v0916-cancel-job]').forEach(button=>button.onclick=()=>closeModal());
+    form?.querySelector('[name="keyword"]')?.focus();
+  }
+  teimor09135OpenJobEditor=openJobEditorV0916;
+
+  /* -------------------- Pressupost en pantalla completa -------------------- */
+  function cleanImportedNoteLines(value){
+    return String(value??'').split(/\r?\n+/).map(tx).filter(Boolean).filter(note=>!/(?:pressupost importat|importada autom[aà]ticament des d['’]excel|treballs separats per marcador|revisar pu abans d['’]enviar|pendent de valoraci[oó] actualitzada)/i.test(norm(note)));
+  }
+  function budgetObservationHtml(b){
+    const values=arr(b.observations).map(tx).filter(Boolean);
+    const notes=values.length?values:cleanImportedNoteLines(b.notes);
+    if(!notes.length) return '<div class="empty">Aquest Excel no té observacions separades.</div>';
+    return '<div class="v0916-observation-list">'+notes.map(note=>'<div><span>•</span><p>'+esc(note.replace(/^\s*[.*•·-]\s*/,''))+'</p></div>').join('')+'</div>';
+  }
+  function budgetSourceHtml(b){
+    const stats=b.parseStats||{};
+    return '<div class="v0916-source-card"><div><span>Fitxer / origen</span><strong>'+esc(b.source||b.sourceFileName||'Excel importat')+'</strong></div><div><span>Lectura</span><strong>'+esc(b.importParserVersion||'Importació TEIMOR')+'</strong></div><div><span>Partides llegides</span><strong>'+esc((b.lines||[]).length)+'</strong></div><div><span>Observacions</span><strong>'+esc((b.observations||[]).length)+'</strong></div><div><span>Mesuraments convertits</span><strong>'+esc(stats.measurementLinesRemoved||0)+'</strong></div></div>';
+  }
+  function budgetScreenHtml(b,isNew){
+    const client=byId(data.clients,b.clientId)||{};
+    const job=byId(data.jobs,b.jobId)||{};
+    const identity=[job.address||job.workAddress||b.workAddress,job.city||job.workCity||b.workCity].filter(Boolean).join(' · ');
+    const formHtml=budgetFormCard(b,isNew).replace('<div class="card">','<div class="card v0916-budget-form-card">').replace('data-render-budgets','data-v0916-budget-cancel');
+    const linesHtml=budgetLinesCard(b).replace('<div class="card">','<div class="card v0916-budget-lines-card">');
+    const firstTab=isNew?'capcalera':'partides';
+    return '<div class="v0916-budget-screen" id="v0916BudgetScreen" data-budget-id="'+esc(b.id||'')+'"><header class="v0916-budget-header"><div><span class="v0916-kicker">PRESSUPOST · EXCEL</span><h2>'+esc(isNew?'Nou pressupost':'Pressupost '+(budgetOldNumberV098(b)||b.number||b.id))+'</h2><p><strong>'+esc(client.name||'Client pendent')+'</strong><br>'+esc(b.title||job.title||'Concepte pendent de revisar')+(identity?'<br><span>'+esc(identity)+'</span>':'')+'</p></div><div class="v0916-budget-header-actions"><button class="ghost" type="button" data-preview-budget-modal="'+esc(b.id||'')+'" '+(isNew?'disabled':'')+'>Previsualitzar A4 / PDF</button><button class="ghost" type="button" data-v0916-budget-close>× Tancar</button></div></header><div class="v0916-budget-kpis"><div><span>Estat</span><strong>'+esc(statusLabel(b.status||'Esborrany','budget'))+'</strong></div><div><span>Partides</span><strong>'+esc((b.lines||[]).length)+'</strong></div><div><span>Base s/IVA</span><strong>'+money(budgetBase(b))+'</strong></div><div><span>Total IVA inclòs</span><strong>'+money(budgetTotal(b))+'</strong></div></div><nav class="v0916-budget-tabs" role="tablist"><button type="button" class="'+(firstTab==='partides'?'active':'')+'" data-v0916-budget-tab="partides">Partides del pressupost</button><button type="button" class="'+(firstTab==='capcalera'?'active':'')+'" data-v0916-budget-tab="capcalera">Capçalera i estat</button><button type="button" class="'+(firstTab==='observacions'?'active':'')+'" data-v0916-budget-tab="observacions">Observacions de l’Excel</button></nav><main class="v0916-budget-panels"><section class="v0916-budget-panel '+(firstTab==='partides'?'active':'')+'" data-v0916-budget-panel="partides"><div class="v0916-budget-panel-intro"><div><span class="v0916-kicker">LECTURA ESTRUCTURADA</span><h3>Partides, amidaments i preus</h3><p>Concepte curt i descripció llarga separats. Les files de mesurament de l’Excel s’han convertit en quantitat, unitat i preu unitari.</p></div><div class="v0916-source-badge">'+esc((b.lines||[]).length)+' línies de pressupost</div></div>'+linesHtml+'</section><section class="v0916-budget-panel '+(firstTab==='capcalera'?'active':'')+'" data-v0916-budget-panel="capcalera">'+formHtml+'</section><section class="v0916-budget-panel '+(firstTab==='observacions'?'active':'')+'" data-v0916-budget-panel="observacions"><div class="v0916-budget-panel-intro"><div><span class="v0916-kicker">NOTA / OBSERVACIONS</span><h3>Text conservat de l’Excel</h3><p>Aquestes línies informatives no compten com a partides i es poden editar des de la capçalera del pressupost.</p></div></div>'+budgetSourceHtml(b)+'<div class="card v0916-observation-card">'+budgetObservationHtml(b)+'</div></section></main></div>';
+  }
+  function closeBudgetScreen(){
+    const returnJob=state.v09139ReturnJobId||'';
+    const returnTab=state.v09139ReturnJobTab||'pressupost';
+    state.v09139ReturnJobId=''; state.v09139ReturnJobTab='';
+    closeModal();
+    if(returnJob){ state.view='obres'; state.selectedJobId=returnJob; state.obresJobTab=returnTab; try{ teimor09136RenderObres(false); }catch(error){ render(); } }
+  }
+  const baseCloseModalV0916=closeModal;
+  closeModal=function(){
+    document.getElementById('modal')?.classList.remove('v09150-budget-modal');
+    document.getElementById('modal')?.querySelector('.modal-box')?.classList.remove('v09150-budget-modal-box');
+    return baseCloseModalV0916();
+  };
+  const baseOpenBudgetModalV0916=openBudgetModal;
+  openBudgetModal=function(id=''){
+    const isNew=id==='__new'||!id;
+    const source=isNew?null:byId(data.budgets,id);
+    if(!isNew&&!source) return alert('No s’ha trobat aquest pressupost.');
+    if(document.getElementById('v09137JobOverlay') && state.selectedJobId && !state.v09139ReturnJobId){ state.v09139ReturnJobId=state.selectedJobId; state.v09139ReturnJobTab='pressupost'; }
+    const returnJob=state.v09139ReturnJobId?byId(data.jobs,state.v09139ReturnJobId):null;
+    const b=isNew?{id:'',seqNumber:nextBudgetNumber(today()),oldNumber:'',number:'',lines:[],date:today(),clientId:returnJob?.clientId||'',jobId:returnJob?.id||'',title:returnJob?.keyword||'',ci:data.settings.defaultCI,dge:data.settings.defaultDGE,bi:data.settings.defaultBI,iva:data.settings.defaultIVA,status:'Esborrany',notes:data.settings.defaultObservations||''}:{...source,lines:arr(source.lines).map(line=>({...line}))};
+    state.editBudgetId=isNew?'__new':b.id; state.selectedBudgetId=isNew?'':b.id;
+    openModal(budgetScreenHtml(b,isNew));
+    const modal=document.getElementById('modal');
+    modal?.classList.add('v09150-budget-modal');
+    modal?.querySelector('.modal-box')?.classList.add('v09150-budget-modal-box');
+    document.querySelectorAll('[data-v0916-budget-tab]').forEach(button=>button.onclick=()=>{
+      const key=button.dataset.v0916BudgetTab;
+      document.querySelectorAll('[data-v0916-budget-tab]').forEach(item=>item.classList.toggle('active',item===button));
+      document.querySelectorAll('[data-v0916-budget-panel]').forEach(panel=>panel.classList.toggle('active',panel.dataset.v0916BudgetPanel===key));
+    });
+    document.querySelectorAll('[data-v0916-budget-close]').forEach(button=>button.onclick=closeBudgetScreen);
+    document.querySelectorAll('[data-v0916-budget-cancel]').forEach(button=>button.onclick=closeBudgetScreen);
+    document.querySelectorAll('[data-preview-budget-modal]').forEach(button=>{ if(!button.disabled) button.onclick=()=>openBudgetPreview(button.dataset.previewBudgetModal); });
+    return b;
+  };
+  /* Manté les camps client/obra que l’editor anterior injectava quan la fitxa
+     d’obra obre un pressupost nou. */
+  void baseOpenBudgetModalV0916;
+
+  data.meta=data.meta||{};
+  data.meta.version=VERSION;
+})();
+
+/* =========================================================
    TEIMOR V09.13.8 · FILTRES D’ANY, FITXERS ORIGINALS I PDF
    - Els botons d’anys sincronitzen també el selector intern.
    - Factures incorpora el mateix selector ràpid d’anys que Obres.
@@ -9622,7 +10060,7 @@ teimor09132RenderObresSafe=function(){ return renderObresV0913(); };
     const seen=new Set();
     const result=[];
     splitNotes(values).forEach(value=>{
-      const normalized=key(value).replace(/[.;:]+$/,'');
+      const normalized=key(value).replace(/^\s*[.*•·-]\s*/,'').replace(/[.;:]+$/,'');
       if(!normalized || seen.has(normalized)) return;
       seen.add(normalized);
       result.push(value);
@@ -9871,6 +10309,8 @@ teimor09132RenderObresSafe=function(){ return renderObresV0913(); };
       job.address=address; job.workAddress=address;
       budget.workAddress=address;
       client.workAddress=client.workAddress||address;
+      client.reviewIssues=arr(client.reviewIssues).filter(issue=>!/(?:adre[cç]a|direcci[oó]n).*(?:obra|empla[cç]ament)/i.test(String(issue)));
+      client.needsReview=arr(client.reviewIssues).length>0;
     }
     const sourceLines=arr(budget.lines).length?budget.lines:arr(parsed.items);
     const excelObservations=extractExcelObservationNotes(flat);
@@ -9893,7 +10333,7 @@ teimor09132RenderObresSafe=function(){ return renderObresV0913(); };
     const importedNotes=uniqueNotes(splitNotes(budget.notes).filter(note=>!generatedImportNote(note)).concat(observations)).filter(note=>!generatedImportNote(note));
     budget.notes=importedNotes.join('\n');
     if(cleaned.observations.length||cleaned.measurements){
-      parsed.parseStats={...(parsed.parseStats||{}),observationLines:cleaned.observations.length,measurementLinesRemoved:cleaned.measurements};
+      parsed.parseStats={...(parsed.parseStats||{}),observationLines:cleaned.observations.length,measurementLinesRemoved:Math.max(num(parsed.parseStats?.measurementLinesRemoved),cleaned.measurements)};
       budget.parseStats=parsed.parseStats;
       parsed.warnings=arr(parsed.warnings);
       if(cleaned.observations.length) parsed.warnings.push(fileName+': '+cleaned.observations.length+' línia/es de Nota/Observacions passades a observacions.');
@@ -10261,4 +10701,14 @@ teimor09132RenderObresSafe=function(){ return renderObresV0913(); };
   window.teimor09140OpenTimeBoard=openTimeBoard;
 
   data.meta.version=VERSION;
+})();
+
+/* Activació final V09.16: els blocs històrics anteriors poden actualitzar el
+   distintiu de versió mentre es carreguen; aquesta és la versió que queda
+   activa després de totes les capes de compatibilitat. */
+(function(){
+  const VERSION='9.16.0-lector-875-estats-fitxa-completa';
+  data.meta=data.meta||{};
+  data.meta.version=VERSION;
+  data.meta.release='V09.16';
 })();

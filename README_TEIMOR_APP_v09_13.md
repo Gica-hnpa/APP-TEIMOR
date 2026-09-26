@@ -1,6 +1,6 @@
-# TEIMOR V09.15 · importació afinada i pantalles superposades
+# TEIMOR V09.16 · lector antic 875, estats i fitxa completa
 
-V09.15 parteix de V09.14 i manté les versions anteriors intactes.
+V09.16 parteix de V09.15 i manté les versions anteriors intactes.
 
 Canvis principals:
 
@@ -59,6 +59,11 @@ Canvis principals:
 - El concepte de l’etiqueta «CONCEPTE/Concepto» es conserva encara que descrigui una feina com impermeabilització o coberta.
 - Les observacions es llegeixen del bloc «NOTA/Observacions» de l’Excel i no s’hi afegeix el text genèric de l’aplicació als pressupostos importats.
 - El quadre de jornades té pestanyes «Jornades», «Materials» i «Resum per dia»; cada alta s’obre en una pantalla superposada pròpia.
+- Els pressupostos antics amb el patró «TREBALLS» es llegeixen separant cada treball real en concepte curt, descripció llarga, unitat, quantitat, preu/unitat i total.
+- El patró del pressupost antic 875 queda interpretat com 3 partides reals; les línies «67,00 m² × preu = total» no es creen com partides independents.
+- El bloc final «NOTA» / «Observacions» es conserva com observacions del pressupost i no entra en la suma ni en el recompte de partides.
+- Pressupostos i obres disposen d’estats recomanats i filtres combinables per any, client, estat i relació.
+- La fitxa de pressupost s’obre a pantalla completa, amb pestanyes de partides, capçalera/estat i observacions de l’Excel.
 
 Ús recomanat:
 
