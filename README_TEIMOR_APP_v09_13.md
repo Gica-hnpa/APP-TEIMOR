@@ -1,4 +1,4 @@
-# TEIMOR V09.13.7 · importació incremental, arrencada ràpida i fitxa d’obra
+# TEIMOR V09.13.8 · filtres d’any, fitxers originals i PDF
 
 V09.13 parteix de V09.12 i manté les versions anteriors intactes.
 
@@ -39,6 +39,10 @@ Canvis principals:
 - La importació de pressupostos és incremental: reimportar els mateixos Excels actualitza dades buides o errònies i no duplica pressupostos, clients ni obres.
 - La reparació global de dades no bloqueja el login ni es repeteix en cada canvi de pestanya; s’executa en segon pla quan és necessària.
 - La fitxa d’obra s’obre com una finestra superior independent, amb pantalla completa al mòbil i totes les pestanyes de treball.
+- Els anys clicables d’Obres sincronitzen el selector superior i filtren realment la llista.
+- Factures té també botons ràpids d’any, a més del selector, i conserva el recompte real abans/després de cada importació.
+- Reimportar una factura ja existent no la duplica: actualitza les dades buides i guarda el fitxer original si abans faltava.
+- Els botons «Veure PDF», «Editar» i «Descarregar factura» continuen actius quan la fitxa és al modal superior.
 
 Ús recomanat:
 
@@ -49,6 +53,6 @@ Canvis principals:
 
 Configuració Render:
 
-Root Directory: `App_TEIMOR_gestor_pressupostos_v09_13_7_IMPORTACIO_INCREMENTAL_FITXA_MODAL`
+Root Directory: `App_TEIMOR_gestor_pressupostos_v09_13_8_FACTURES_ANY_PDF`
 Build Command: `echo "No build needed"`
 Publish Directory: `.`

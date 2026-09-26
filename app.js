@@ -8685,3 +8685,248 @@ renderObresV0913=function(){
   catch(error){ console.error('No s’ha pogut obrir la fitxa d’obra:',error); return teimor09132RenderObresFallback(error); }
 };
 teimor09132RenderObresSafe=function(){ return renderObresV0913(); };
+
+/* =========================================================
+   TEIMOR V09.13.8 · FILTRES D’ANY, FITXERS ORIGINALS I PDF
+   - Els botons d’anys sincronitzen també el selector intern.
+   - Factures incorpora el mateix selector ràpid d’anys que Obres.
+   - La fitxa modal conserva els botons PDF, editar i descarregar.
+   - Reimportar una factura existent actualitza el fitxer original sense
+     crear una segona factura.
+   ========================================================= */
+(function(){
+  const VERSION='9.13.8-filtres-any-factures-pdf-fitxers';
+  data.meta=data.meta||{};
+  data.meta.version=VERSION;
+
+  function text(value){ return String(value??'').trim(); }
+  function normId(value){ return typeof teimor0913NormId==='function' ? teimor0913NormId(value) : text(value).toLowerCase().replace(/[^a-z0-9]+/g,''); }
+  function sourceName(value){ return typeof teimor0913SourceName==='function' ? teimor0913SourceName(value) : text(value).split('/').pop(); }
+  function dateKey(value){
+    const raw=text(value);
+    if(!raw) return '';
+    if(typeof parseDateValue==='function'){
+      try{ return parseDateValue(raw)||raw.slice(0,10); }catch(error){}
+    }
+    return raw.slice(0,10);
+  }
+  function addUnique(list,values){
+    const target=Array.isArray(list)?list:[];
+    (Array.isArray(values)?values:[values]).filter(Boolean).forEach(value=>{ if(!target.includes(value)) target.push(value); });
+    return target;
+  }
+  function genericConcept(value){
+    return !text(value) || /^(factura importada|concepte pendent|concepte pendent de revisar|certificaci[oó] importada|pendent de revisar)$/i.test(text(value));
+  }
+  function sameFinancialDocument(existing,source,kind){
+    const current=existing||{};
+    const incoming=source||{};
+    const sameKind=(current.kind||kind)===kind || (kind==='factura' && (current.documentType||'')==='factura') || (kind==='certificacio' && (current.documentType||'')==='certificacio');
+    if(!sameKind) return false;
+    const incomingNumber=normId(incoming.number);
+    const currentNumber=normId(current.number);
+    const incomingDate=dateKey(incoming.date);
+    const currentDate=dateKey(current.date);
+    const sameNumber=incomingNumber && currentNumber && incomingNumber===currentNumber;
+    const sameDate=!incomingDate || !currentDate || incomingDate===currentDate;
+    if(sameNumber && sameDate) return true;
+    const incomingSource=normId(sourceName(incoming.sourceFile||incoming.__sourceName));
+    const currentSource=normId(sourceName(current.sourceFile||current.sourceFileName||current.source));
+    return !!(incomingSource && currentSource && incomingSource===currentSource && (!incomingNumber || !currentNumber || incomingNumber===currentNumber));
+  }
+  function mergeFinancialRecord(existing,source){
+    if(!existing || !source) return;
+    const fields=['number','date','sourceFile','sourceFileName','sourceText','concept','base','iva','ivaAmount','total','status','matchReason','matchConfidence'];
+    fields.forEach(field=>{
+      const next=source[field];
+      const current=existing[field];
+      if(next===undefined||next===null||next==='') return;
+      const numeric=['base','iva','ivaAmount','total','matchConfidence'].includes(field);
+      const canFill=numeric ? (!Number(current)||Number(current)===0) : (!text(current)||(field==='concept'&&genericConcept(current)));
+      if(canFill) existing[field]=next;
+    });
+    if(!existing.clientId&&source.clientId) existing.clientId=source.clientId;
+    if(!existing.jobId&&source.jobId) existing.jobId=source.jobId;
+    if(!existing.budgetId&&source.budgetId) existing.budgetId=source.budgetId;
+    if(existing.matchStatus!=='manual' && source.matchStatus==='automatica'){
+      existing.matchStatus=source.matchStatus;
+      existing.matchConfidence=source.matchConfidence||existing.matchConfidence||0;
+      existing.matchReason=source.matchReason||existing.matchReason||'';
+    }
+    const incomingSnapshot=source.clientSnapshot||{};
+    const currentSnapshot=existing.clientSnapshot=existing.clientSnapshot||{};
+    ['name','nif','fiscalAddress','postalCode','city','workAddress','workCity','workPostalCode'].forEach(field=>{
+      if(!text(currentSnapshot[field])&&text(incomingSnapshot[field])) currentSnapshot[field]=incomingSnapshot[field];
+    });
+    existing.sourceFiles=addUnique(existing.sourceFiles,[...(source.sourceFiles||[]),source.sourceFile]);
+    existing.sourceFiles=existing.sourceFiles.filter(Boolean);
+    if(!existing.sourceFile&&source.sourceFile) existing.sourceFile=source.sourceFile;
+    if(!existing.sourceFileName&&source.sourceFileName) existing.sourceFileName=source.sourceFileName;
+    if(!existing.notes&&source.notes) existing.notes=source.notes;
+    if(!existing.fileStatus) existing.fileStatus='Fitxer original pendent de guardar';
+  }
+
+  /* La importació financera és incremental també quan troba una factura ja
+     existent: s’enriqueix i, si venia un Excel nou, se’n guarda el fitxer. */
+  confirmFinancialImportV0913=async function(){
+    if(typeof teimor0913EnsureData==='function') teimor0913EnsureData();
+    const draft=state.financialDraft;
+    if(!draft || !(draft.documents||[]).length) return alert('No hi ha documents financers per confirmar.');
+    const kind=draft.kind||'factura';
+    const target=kind==='certificacio'?data.certifications:data.invoices;
+    const beforeCount=target.length;
+    let added=0,duplicates=0,updated=0,pending=0,savedFiles=0,failedFiles=0;
+    for(const source of draft.documents){
+      const duplicate=target.find(existing=>sameFinancialDocument(existing,source,kind));
+      if(duplicate){
+        duplicates++;
+        mergeFinancialRecord(duplicate,source);
+        if(duplicate.matchStatus!=='manual' && !duplicate.jobId && !duplicate.budgetId && typeof teimor0913ApplyMatch==='function'){
+          try{ teimor0913ApplyMatch(duplicate); }catch(error){ console.warn('No s’ha pogut recalcular la coincidència:',error); }
+        }
+        updated++;
+        if(source.__sourceBlob && !duplicate.attachmentId){
+          try{
+            const stored=await teimor09132StoreInvoiceSource(duplicate,source,kind);
+            if(stored.saved) savedFiles++; else failedFiles++;
+          }catch(error){
+            console.error('No s’ha pogut guardar el fitxer original existent:',error);
+            duplicate.fileStatus='Fitxer original no guardat';
+            failedFiles++;
+          }
+        }
+        continue;
+      }
+      const item={...source,id:uid(kind==='certificacio'?'CERT':'FAC'),importedAt:new Date().toISOString(),sourceFiles:[source.sourceFile].filter(Boolean),status:source.matchStatus==='automatica'?'Importada · vinculada':'Importada · pendent de revisar',fileStatus:'Fitxer original pendent de guardar'};
+      if(item.budgetId){
+        const budget=byId(data.budgets,item.budgetId);
+        if(budget){ item.jobId=budget.jobId||item.jobId; item.clientId=budget.clientId||item.clientId; }
+      }
+      try{
+        const stored=await teimor09132StoreInvoiceSource(item,source,kind);
+        if(stored.saved) savedFiles++; else failedFiles++;
+      }catch(error){
+        console.error('No s’ha pogut guardar el fitxer original:',error);
+        item.fileStatus='Fitxer original no guardat';
+        failedFiles++;
+      }
+      if(item.matchStatus!=='automatica') pending++;
+      target.push(item);
+      added++;
+    }
+    const afterCount=target.length;
+    data.importLogs=data.importLogs||[];
+    data.importLogs.push({
+      id:uid('IMP'),date:new Date().toISOString(),files:draft.files||[],kind,
+      countDocuments:draft.documents.length,added,duplicates,updated,
+      newDocuments:added,existingDocuments:duplicates,beforeCount,afterCount,
+      pendingMatches:pending,originalFilesSaved:savedFiles,originalFilesFailed:failedFiles,
+      incrementalFinancial:true,libraryAdded:0,libraryManualOnly:true
+    });
+    state.financialDraft=null;
+    saveData();
+    alert(`${teimor0913KindLabel(kind)} importada. Fitxers llegits: ${draft.documents.length}. Nous: ${added}. Ja existien i s’han actualitzat: ${duplicates}. Total actual: ${afterCount}. Fitxers originals guardats: ${savedFiles}. Pendents de vincular/revisar: ${pending}.`);
+    /* La pantalla de certificacions s’obre des d’Obres; el llistat financer
+       disponible és el de Factures, que també mostra el resultat de la
+       importació i permet tornar a importar certificacions. */
+    state.view='invoices';
+    render();
+  };
+
+  function invoiceYearButtons(){
+    const years=[...new Set((data.invoices||[]).map(invoice=>teimor0913Year(invoice.date||invoice.sourceFile)).filter(Boolean))].sort((a,b)=>b-a);
+    const selected=String(state.invoiceYearFilter||'');
+    return '<div class="actions v09138-invoice-years" style="flex-wrap:wrap;margin:8px 0 0"><button class="'+(!selected?'primary':'ghost')+' small" data-v09138-invoice-year="">Tots els anys</button>'+years.map(year=>'<button class="'+(selected===String(year)?'primary':'ghost')+' small" data-v09138-invoice-year="'+esc(year)+'">'+esc(year)+'</button>').join('')+'</div>';
+  }
+
+  const baseInvoiceListV09138=teimor09133InvoiceListCardHtml;
+  teimor09133InvoiceListCardHtml=function(){
+    let html=baseInvoiceListV09138();
+    const latest=[...(data.importLogs||[])].reverse().find(log=>log.kind==='factura'&&log.incrementalFinancial);
+    const note=latest?'<div class="small-text v09138-import-note">Darrera importació: '+esc(latest.countDocuments||0)+' fitxers llegits · '+esc(latest.newDocuments||0)+' nous · '+esc(latest.existingDocuments||0)+' ja existents · total actual '+esc(latest.afterCount??data.invoices.length)+'.</div>':'';
+    const marker='<div id="v09133InvoiceFilterInfo"';
+    if(html.includes(marker)) html=html.replace(marker,invoiceYearButtons()+note+marker);
+    else html+=invoiceYearButtons()+note;
+    return html;
+  };
+
+  function setInvoiceYearButtons(value){
+    const selected=String(value||'');
+    document.querySelectorAll('[data-v09138-invoice-year]').forEach(button=>{
+      const active=String(button.dataset.v09138InvoiceYear||'')===selected;
+      button.classList.toggle('primary',active);
+      button.classList.toggle('ghost',!active);
+    });
+  }
+  const baseBindInvoiceV09138=teimor09133BindInvoiceActions;
+  teimor09133BindInvoiceActions=function(){
+    baseBindInvoiceV09138();
+    document.querySelectorAll('[data-v09134-invoice-pdf]').forEach(button=>button.onclick=event=>{
+      event.preventDefault();
+      event.stopPropagation();
+      openInvoicePreview(button.dataset.v09134InvoicePdf);
+    });
+    document.querySelectorAll('[data-v09132-download-invoice]').forEach(button=>button.onclick=event=>{
+      event.preventDefault();
+      event.stopPropagation();
+      downloadInvoiceFileV09132(button.dataset.v09132DownloadInvoice);
+    });
+    document.querySelectorAll('[data-v09138-invoice-year]').forEach(button=>button.onclick=event=>{
+      event.preventDefault();
+      const value=button.dataset.v09138InvoiceYear||'';
+      const select=document.getElementById('v09133InvoiceYear');
+      if(select) select.value=value;
+      state.invoiceYearFilter=value;
+      setInvoiceYearButtons(value);
+      filterInvoicesV09133({target:{id:'v09133InvoiceYear',value}});
+    });
+  };
+
+  /* El selector superior i el botó ràpid han de representar el mateix estat. */
+  const baseBindObresV09138=teimor09136BindObresUi;
+  teimor09136BindObresUi=function(){
+    baseBindObresV09138();
+    document.querySelectorAll('[data-v09136-year]').forEach(button=>button.onclick=event=>{
+      event.preventDefault();
+      const value=button.dataset.v09136Year||'';
+      const select=document.getElementById('v09136ObresYear');
+      if(select) select.value=value;
+      state.obresYearFilter=value;
+      state.obresPage=1;
+      teimor09136RenderObres(false);
+    });
+  };
+
+  /* Quan la fitxa es mou al modal, els listeners que depenien del contingut
+     principal ja no poden trobar els botons: els tornem a activar després del
+     moviment. */
+  const baseRenderObresV09138=teimor09136RenderObres;
+  teimor09136RenderObres=function(prepareData){
+    const result=baseRenderObresV09138(prepareData);
+    const scope=document.getElementById('v09137JobOverlay')||document;
+    scope.querySelectorAll?.('[data-v09134-invoice-pdf]').forEach(button=>button.onclick=event=>{
+      event.preventDefault();
+      event.stopPropagation();
+      openInvoicePreview(button.dataset.v09134InvoicePdf);
+    });
+    scope.querySelectorAll?.('[data-v09132-download-invoice]').forEach(button=>button.onclick=event=>{
+      event.preventDefault();
+      event.stopPropagation();
+      downloadInvoiceFileV09132(button.dataset.v09132DownloadInvoice);
+    });
+    scope.querySelectorAll?.('[data-edit-invoice]').forEach(button=>button.onclick=event=>{
+      event.preventDefault();
+      event.stopPropagation();
+      teimor09134OpenInvoiceEditor(button.dataset.editInvoice);
+    });
+    return result;
+  };
+
+  data.meta.version=VERSION;
+})();
+data.meta.version='9.13.8-filtres-any-factures-pdf-fitxers';
+renderObresV0913=function(){
+  try{ return teimor09136RenderObres(false); }
+  catch(error){ console.error('No s’ha pogut obrir la fitxa d’obra:',error); return teimor09132RenderObresFallback(error); }
+};
+teimor09132RenderObresSafe=function(){ return renderObresV0913(); };
