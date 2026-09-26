@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: teimor-gestor-pressupostos-v09-13
+    name: teimor-gestor-pressupostos-v09-15
     env: static
     buildCommand: echo "No build needed"
     staticPublishPath: .

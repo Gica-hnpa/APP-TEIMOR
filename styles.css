@@ -285,3 +285,35 @@ tbody tr:hover{background:#fffaf7}
 .v09140-money-row strong{font-size:17px}
 .v09140-economy-footer{display:flex;justify-content:space-between;gap:12px;margin-top:16px;padding:12px;border-radius:12px;background:#fff1e9;color:#d9551e;font-weight:800}
 @media(max-width:800px){.v09140-welcome{display:block;padding:22px}.v09140-welcome-side{margin-top:18px}.v09140-dashboard-grid{grid-template-columns:1fr}}
+
+/* Tauler de jornades per pestanyes i pantalles superposades V09.15 */
+.v09140-board-tabs{display:flex;gap:8px;flex-wrap:wrap;padding:18px 30px 0;background:#f7f9fc}
+.v09140-board-tabs button{border:1px solid #dce4ef;border-radius:12px 12px 0 0;background:#fff;color:#53627a;padding:12px 18px;font-weight:800;cursor:pointer}
+.v09140-board-tabs button:hover{border-color:#f29a70;color:#d9551e}
+.v09140-board-tabs button.active{background:#fff1e9;border-color:#f08350;color:#d9551e;box-shadow:0 -2px 0 #f06b2e inset}
+.v09140-board-tab-actions{display:flex;justify-content:space-between;align-items:center;gap:18px;padding:18px 30px;background:#fff;border-top:1px solid #e6ebf2;border-bottom:1px solid #e6ebf2}
+.v09140-board-tab-actions strong,.v09140-board-tab-actions span{display:block}
+.v09140-board-tab-actions span{margin-top:4px;color:#7b8798;font-size:12px}
+.v09140-board-tab-actions .actions{justify-content:flex-end;flex-wrap:wrap}
+.v09140-board-content{padding:20px 30px 30px;background:#f7f9fc}
+.v09140-board-empty{padding:30px;text-align:center;border:1px dashed #cdd8e6;background:#fff}
+.v09140-summary-card{background:#fff}
+.v09140-entry-overlay{position:fixed;inset:0;z-index:240;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(8,20,40,.72);backdrop-filter:blur(7px)}
+.v09140-entry-modal{width:min(720px,96vw);max-height:94vh;overflow:auto;border:1px solid rgba(255,255,255,.75);border-radius:24px;background:#fff;box-shadow:0 35px 100px rgba(8,20,40,.42)}
+.v09140-entry-header{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding:25px 28px 19px;background:linear-gradient(135deg,#10203a,#253d68);color:#fff}
+.v09140-entry-header h2{margin:7px 0 4px;color:#fff;font-size:24px}
+.v09140-entry-header p{margin:0;color:#cbd7e8}
+.v09140-entry-header .ghost{border-color:rgba(255,255,255,.3);background:rgba(255,255,255,.1);color:#fff;white-space:nowrap}
+.v09140-entry-form{display:grid;gap:14px;padding:24px 28px 28px}
+.v09140-entry-form label{font-size:12px;color:#65758c;font-weight:700}
+.v09140-entry-form input,.v09140-entry-form textarea{margin-top:5px}
+.v09140-entry-actions{justify-content:flex-end;padding-top:8px;border-top:1px solid #edf1f6}
+@media(max-width:800px){
+  .v09140-board-tabs,.v09140-board-content{padding-left:18px;padding-right:18px}
+  .v09140-board-tab-actions{display:block;padding-left:18px;padding-right:18px}
+  .v09140-board-tab-actions .actions{justify-content:flex-start;margin-top:14px}
+  .v09140-entry-overlay{padding:0}
+  .v09140-entry-modal{width:100vw;max-width:100vw;height:100vh;max-height:100vh;border-radius:0}
+  .v09140-entry-header{padding:20px 18px 16px}
+  .v09140-entry-form{padding:20px 18px 24px}
+}

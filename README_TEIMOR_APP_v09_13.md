@@ -1,6 +1,6 @@
-# TEIMOR V09.14 · disseny modern, observacions i quadre de jornades
+# TEIMOR V09.15 · importació afinada i pantalles superposades
 
-V09.13 parteix de V09.12 i manté les versions anteriors intactes.
+V09.15 parteix de V09.14 i manté les versions anteriors intactes.
 
 Canvis principals:
 
@@ -53,9 +53,12 @@ Canvis principals:
 - L’inici queda reduït a indicadors i obres recents; les accions principals es mantenen al menú lateral i dins de la fitxa.
 - La identificació d’obra prioritza la dada que acompanya el camp «Obra» i no mostra el concepte com si fos una adreça.
 - Les línies finals de l’Excel que comencen per «Nota», «Observacions» o són exclusions passen a observacions del pressupost; les línies de mesurament sense preu no es compten com a partides.
-- Configuració incorpora observacions per defecte editables, que s’afegeixen als pressupostos nous i a les importacions.
+- Configuració incorpora observacions per defecte editables, que s’afegeixen als pressupostos nous; les importacions conserven les notes del seu Excel.
 - Temps i materials disposen d’un quadre superior per dia amb oficial, manobre, preu/h, materials i total de jornada, amb guardat local immediat.
 - El sistema visual de la fitxa, les targetes, taules i botons s’ha actualitzat per facilitar la lectura i l’ús en mòbil.
+- El concepte de l’etiqueta «CONCEPTE/Concepto» es conserva encara que descrigui una feina com impermeabilització o coberta.
+- Les observacions es llegeixen del bloc «NOTA/Observacions» de l’Excel i no s’hi afegeix el text genèric de l’aplicació als pressupostos importats.
+- El quadre de jornades té pestanyes «Jornades», «Materials» i «Resum per dia»; cada alta s’obre en una pantalla superposada pròpia.
 
 Ús recomanat:
 
@@ -66,6 +69,6 @@ Canvis principals:
 
 Configuració Render:
 
-Root Directory: `teimor_v09_14_modern_observacions_jornades`
+Root Directory: `teimor_v09_15_importacio_pantalles_superposades`
 Build Command: `echo "No build needed"`
 Publish Directory: `.`
