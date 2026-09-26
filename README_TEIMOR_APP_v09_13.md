@@ -1,4 +1,4 @@
-# TEIMOR V09.13.9 · fitxa d’obra autocontinguda i flux de treball
+# TEIMOR V09.14 · disseny modern, observacions i quadre de jornades
 
 V09.13 parteix de V09.12 i manté les versions anteriors intactes.
 
@@ -51,6 +51,11 @@ Canvis principals:
 - Documentació i albarans es guarden dins de la fitxa; un albarà genera una línia de material pendent de revisar a Temps i materials.
 - Temps i materials inclouen jornada, hores d’oficial i manobre, preu hora per obra o configuració, materials manuals i detecció bàsica des dels albarans.
 - L’inici queda reduït a indicadors i obres recents; les accions principals es mantenen al menú lateral i dins de la fitxa.
+- La identificació d’obra prioritza la dada que acompanya el camp «Obra» i no mostra el concepte com si fos una adreça.
+- Les línies finals de l’Excel que comencen per «Nota», «Observacions» o són exclusions passen a observacions del pressupost; les línies de mesurament sense preu no es compten com a partides.
+- Configuració incorpora observacions per defecte editables, que s’afegeixen als pressupostos nous i a les importacions.
+- Temps i materials disposen d’un quadre superior per dia amb oficial, manobre, preu/h, materials i total de jornada, amb guardat local immediat.
+- El sistema visual de la fitxa, les targetes, taules i botons s’ha actualitzat per facilitar la lectura i l’ús en mòbil.
 
 Ús recomanat:
 
@@ -61,6 +66,6 @@ Canvis principals:
 
 Configuració Render:
 
-Root Directory: `App_TEIMOR_gestor_pressupostos_v09_13_9_FITXA_OBRA`
+Root Directory: `teimor_v09_14_modern_observacions_jornades`
 Build Command: `echo "No build needed"`
 Publish Directory: `.`

@@ -1,1 +1,1 @@
-Carpeta neta V09.13.9. Fitxers necessaris: index.html, app.js, styles.css, render.yaml, README_TEIMOR_APP_v09_13.md.
+Carpeta neta V09.14. Fitxers necessaris: index.html, app.js, styles.css, render.yaml, README_TEIMOR_APP_v09_13.md.
