@@ -9454,6 +9454,13 @@ teimor09132RenderObresSafe=function(){ return renderObresV0913(); };
     const rows=normalizedRows(aoa);
     const start=rows.findIndex(row=>row.some(value=>/^treballs?\s*[:：-]?$/i.test(value)||/^treballs?\s*[:：-]\s*.+/i.test(value)));
     if(start<0) return [];
+    /* En la plantilla antiga «TREBALLS» és l’etiqueta de la columna esquerra
+       i la primera partida ocupa la mateixa fila. Si comencem a start + 1
+       perdem precisament la primera partida (el cas del pressupost 875). */
+    const markerRow=rows[start]||[];
+    const markerIndex=markerRow.findIndex(value=>/^treballs?\s*[:：-]?$/i.test(value)||/^treballs?\s*[:：-]\s*.+/i.test(value));
+    const sameRow=markerIndex>=0?markerRow.slice(markerIndex+1).map(value=>tx(value).replace(/^treballs?\s*[:：-]?\s*/i,'')).filter(Boolean):[];
+    const workRows=sameRow.length?[sameRow,...rows.slice(start+1)]:rows.slice(start+1);
     let current=null;
     const result=[];
     const flush=()=>{
@@ -9476,8 +9483,7 @@ teimor09132RenderObresSafe=function(){ return renderObresV0913(); };
       result.push(line);
       current=null;
     };
-    for(let index=start+1;index<rows.length;index++){
-      const row=rows[index];
+    for(const row of workRows){
       if(!row.length) continue;
       if(observationMarker(row[0]) || row.some(summaryMarker)) break;
       const measurement=measurementFromRow(row);
