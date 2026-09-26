@@ -1,6 +1,6 @@
-# TEIMOR V09.16 · lector antic 875, estats i fitxa completa
+# TEIMOR V09.18 · clients únics, estat visible, numeració comercial i Excel original
 
-V09.16 parteix de V09.15 i manté les versions anteriors intactes.
+V09.18 parteix de V09.17 i manté les versions anteriors intactes.
 
 Canvis principals:
 
@@ -65,6 +65,12 @@ Canvis principals:
 - Pressupostos i obres disposen d’estats recomanats i filtres combinables per any, client, estat i relació.
 - La fitxa de pressupost s’obre a pantalla completa, amb pestanyes de partides, capçalera/estat i observacions de l’Excel.
 - Les fitxes importades en versions anteriors mostren un avís i s’han de reimportar des del mateix Excel perquè el lector nou pugui reconstruir les partides i les observacions; la reimportació actualitza el pressupost existent sense duplicar-lo.
+- L’estat de l’obra es veu directament al llistat d’Obres, sense entrar a la fitxa; continua sent editable des de «Editar obra».
+- La documentació del pressupost mostra el fitxer Excel original vinculat a l’obra i al pressupost, conservant l’extensió i el format d’origen.
+- La previsualització imprimible mostra només la data i el número comercial nou `0000/AA`; el bloc d’observacions porta l’encapçalament **OBSERVACIONS** en negreta i no mostra el número antic ni el número tècnic anual.
+- El mateix client normalitzat pel nom —incloses variants com `S.L.`, `SL`, majúscules, minúscules o accents— no torna a crear una fitxa nova.
+- En carregar la versió es consoliden els duplicats existents, es reassignen pressupostos, obres, factures i documents, i es guarda una còpia reversible de la fusió.
+- L’acció «Fusionar duplicats» utilitza la mateixa regla; els clients sense NIF/DNI/CIF real es marquen com a pendents, però no es dupliquen per aquest motiu.
 
 Ús recomanat:
 

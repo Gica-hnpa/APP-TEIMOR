@@ -385,3 +385,7 @@ tbody tr:hover{background:#fffaf7}
   .v0916-source-card{grid-template-columns:1fr}
   .v0916-budget-header h2{font-size:23px}
 }
+
+/* V09.17: l'estat de l'obra també queda visible dins de la identificació. */
+.v0917-inline-job-status{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px;color:#64748b;font-size:11px}
+.v0917-inline-job-status .status-pill{font-size:10px;padding:2px 7px}

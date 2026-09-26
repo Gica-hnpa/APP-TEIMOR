@@ -604,7 +604,7 @@ function renderAttachments(){
 }
 function attachmentsTable(){
   return table(['Nom','Categoria','Client','Feina','Pressupost','Mida','JSON','Data','Accions'], data.attachments.map(a=>`
-    <tr><td><strong>${esc(a.name)}</strong><br><span class="muted">${esc(a.type||'')}</span></td><td>${esc(a.category||'')}</td><td>${esc(clientName(a.clientId))}</td><td>${esc(jobName(a.jobId))}</td><td>${esc(budgetName(a.budgetId))}</td><td class="num">${((a.size||0)/1024).toFixed(1)} KB</td><td>${a.includeInJson?statusPill('Sí'):statusPill('No')}</td><td>${esc(a.createdAt||'')}</td><td><button class="ghost small" data-download-attachment="${esc(a.id)}">Obrir</button> <button class="danger small" data-delete-attachment="${esc(a.id)}">Eliminar</button></td></tr>`));
+    <tr><td><strong>${esc(a.name)}</strong><br><span class="muted">${esc(a.type||'')}</span></td><td>${esc(a.category||'')}</td><td>${esc(clientName(a.clientId))}</td><td>${esc(jobName(a.jobId))}</td><td>${esc(budgetName(a.budgetId))}</td><td class="num">${((a.size||0)/1024).toFixed(1)} KB</td><td>${a.includeInJson?statusPill('Sí'):statusPill('No')}</td><td>${esc(a.createdAt||'')}</td><td><button class="ghost small" data-download-attachment="${esc(a.id)}">${/Excel original/i.test(String(a.category||''))?'Descarregar Excel original':'Obrir'}</button> <button class="danger small" data-delete-attachment="${esc(a.id)}">Eliminar</button></td></tr>`));
 }
 function renderImporter(){
   setHeader('Importar Excels / ZIP','Importació massiva local: clients del requadre, feines, pressupostos, partides i llibreria.');
@@ -898,6 +898,9 @@ async function handleImportFiles(files){
   if(typeof XLSX === 'undefined'){ alert('No s’ha carregat la llibreria per llegir Excel. Revisa connexió o instal·la SheetJS localment.'); return; }
   state.draftLog=[];
   const excelFiles=[];
+  /* Conservem també els bytes originals per poder-los vincular després
+     al pressupost i mostrar-los a Documents sense transformar el format. */
+  const originalFiles=[];
   for(const file of files){
     const name=(file.webkitRelativePath || file.name || '').toLowerCase();
     if(name.endsWith('.rar')){
@@ -909,12 +912,19 @@ async function handleImportFiles(files){
       const zip=await JSZip.loadAsync(file);
       const entries=Object.values(zip.files).filter(x=>!x.dir && /\.(xls|xlsx|xlsm|csv)$/i.test(x.name));
       state.draftLog.push(`ZIP ${file.name}: ${entries.length} Excels detectats.`);
-      for(const entry of entries){ excelFiles.push({name:entry.name, arrayBuffer:await entry.async('arraybuffer')}); }
+      for(const entry of entries){
+        const arrayBuffer=await entry.async('arraybuffer');
+        const record={name:entry.name, arrayBuffer};
+        excelFiles.push(record);
+        originalFiles.push(record);
+      }
     } else if(/\.(xls|xlsx|xlsm|csv)$/i.test(name)) {
-      excelFiles.push({name:file.webkitRelativePath || file.name, arrayBuffer:await file.arrayBuffer()});
+      const record={name:file.webkitRelativePath || file.name, arrayBuffer:await file.arrayBuffer()};
+      excelFiles.push(record);
+      originalFiles.push(record);
     }
   }
-  const draft={files:[],clients:[],jobs:[],budgets:[],items:[],log:state.draftLog};
+  const draft={files:[],clients:[],jobs:[],budgets:[],items:[],originalFiles,log:state.draftLog};
   for(const f of excelFiles){
     try{
       const parsed=parseWorkbook(f.name, f.arrayBuffer);
@@ -952,7 +962,7 @@ function parseWorkbook(fileName, arrayBuffer){
   const importedBase = sheetTotals.length ? Math.max(...sheetTotals) : 0;
   if(importedBase) warnings.push(`${fileName}: total/base imposable detectat: ${money(importedBase)}.`);
   const job = {id:uid('F'), year, clientTempKey:client.tempKey, title:detectJobTitle(fileName, flat), address:client.workAddress || detectAddress(flat), city:client.city || detectCity(flat), status:'Històrica', source:fileName, notes:'Importada automàticament des d’Excel antic.'};
-  const budget = {id:uid('P'), number:detectBudgetNumber(fileName, flat), date:detectedDate || `${year}-01-01`, clientTempKey:client.tempKey, jobTempKey:job.id, title:job.title, status:'Històric importat', ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, iva:data.settings.defaultIVA, importedBase, source:fileName, notes:'Pressupost importat. Revisa partides sense amidament/preu.', lines:[]};
+  const budget = {id:uid('P'), number:detectBudgetNumber(fileName, flat), date:detectedDate || `${year}-01-01`, clientTempKey:client.tempKey, jobTempKey:job.id, title:job.title, status:'Històric importat', ci:data.settings.defaultCI, dge:data.settings.defaultDGE, bi:data.settings.defaultBI, iva:data.settings.defaultIVA, importedBase, source:fileName, sourceFileName:fileName, originalFileName:fileName, notes:'Pressupost importat. Revisa partides sense amidament/preu.', lines:[]};
   budget.lines = parsedItems.map(it=>({...it,id:uid('LIN')}));
   const items = parsedItems.map(it=>({...it, origin:fileName, sourceBudget:budget.number || fileName}));
   if(!parsedItems.length) warnings.push(`${fileName}: no s’han detectat partides separades. Es guardarà només client/pressupost si confirmes.`);
@@ -3511,7 +3521,7 @@ function budgetsTable(rows){
   normalizeBudgetSequentialNumbersV098();
   if(!rows.length) return empty();
   const headers=[
-    '<th>Sel.</th>', sortableTh('Any','budget','year'), sortableTh('Data','budget','date'), sortableTh('Núm. any','budget','number'), sortableTh('Núm. antic Excel','budget','oldNumber'), sortableTh('Client','budget','client'), sortableTh('Concepte / obra','budget','title'), sortableTh('Estat','budget','status'), sortableTh('Base s/IVA','budget','base'), sortableTh('Total IVA incl.','budget','total'), sortableTh('Tipus import','budget','type'), sortableTh('Partides','budget','lines'), '<th>Accions</th>'
+    '<th>Sel.</th>', sortableTh('Any','budget','year'), sortableTh('Data','budget','date'), sortableTh('Número','budget','number'), sortableTh('Núm. antic Excel','budget','oldNumber'), sortableTh('Client','budget','client'), sortableTh('Concepte / obra','budget','title'), sortableTh('Estat','budget','status'), sortableTh('Base s/IVA','budget','base'), sortableTh('Total IVA incl.','budget','total'), sortableTh('Tipus import','budget','type'), sortableTh('Partides','budget','lines'), '<th>Accions</th>'
   ].join('');
   return `<div class="table-wrap"><table><thead><tr>${headers}</tr></thead><tbody>${rows.map(b=>{
     const lineSum = budgetLineSum(b);
@@ -3523,7 +3533,7 @@ function budgetsTable(rows){
       <td><input type="checkbox" class="select-budget" value="${esc(b.id)}" data-no-row-open></td>
       <td>${esc(budgetYear(b)||'')}</td>
       <td>${dateDisplay(b.date)}</td>
-      <td><strong>${esc(budgetSeqNumberV098(b)||'')}</strong></td>
+      <td><strong>${esc(teimor0917BudgetDisplayNumber(b)||'')}</strong></td>
       <td>${esc(budgetOldNumberV098(b)||'')}</td>
       <td>${esc(clientName(b.clientId))}</td>
       <td><strong>${esc(title)}</strong>${addr && strip(addr)!==strip(title)?`<br><span class="muted">${esc(addr)}</span>`:''}</td>
@@ -8231,7 +8241,7 @@ function teimor09136SummaryTab(model){
 
 function teimor09136BudgetsTab(model){
   if(!model.budgets.length) return '<div class="card">'+empty('Aquesta obra encara no té cap pressupost vinculat.')+'<button class="primary small" data-go="budgets">Anar a Pressupostos</button></div>';
-  return '<div class="card"><div class="toolbar"><h3>Pressupostos vinculats</h3><button class="ghost small" data-go="budgets">Veure tots els pressupostos</button></div>'+table(['Any','Número','Data','Concepte','Estat','Base','Total','Acció'],model.budgets.map(budget=>'<tr><td>'+esc(budgetYear(budget)||model.year||'')+'</td><td><strong>'+esc(budget.number||budget.id)+'</strong></td><td>'+dateDisplay(budget.date)+'</td><td>'+esc(budget.title||budget.keyword||'')+'</td><td>'+statusPill(budget.status||'')+'</td><td class="num">'+money(budgetBase(budget))+'</td><td class="num">'+money(budgetTotal(budget))+'</td><td><button class="ghost small" data-open-budget="'+esc(budget.id)+'">Obrir pressupost</button></td></tr>'))+'</div>';
+  return '<div class="card"><div class="toolbar"><h3>Pressupostos vinculats</h3><button class="ghost small" data-go="budgets">Veure tots els pressupostos</button></div>'+table(['Any','Número','Data','Concepte','Estat','Base','Total','Acció'],model.budgets.map(budget=>'<tr><td>'+esc(budgetYear(budget)||model.year||'')+'</td><td><strong>'+esc(teimor0917BudgetDisplayNumber(budget)||budget.id)+'</strong></td><td>'+dateDisplay(budget.date)+'</td><td>'+esc(budget.title||budget.keyword||'')+'</td><td>'+statusPill(budget.status||'')+'</td><td class="num">'+money(budgetBase(budget))+'</td><td class="num">'+money(budgetTotal(budget))+'</td><td><button class="ghost small" data-open-budget="'+esc(budget.id)+'">Obrir pressupost</button></td></tr>'))+'</div>';
 }
 
 function teimor09136InvoicesTab(model){
@@ -8243,7 +8253,7 @@ function teimor09136InvoicesTab(model){
 function teimor09136DocumentsTab(model,onlyAlbarans=false){
   const rows=(model.attachments||[]).filter(item=>!onlyAlbarans || /albar[aà]n|entrega|delivery/i.test([item.name,item.category,item.type,item.notes].filter(Boolean).join(' ')));
   if(!rows.length) return '<div class="card">'+empty(onlyAlbarans?'No hi ha albarans vinculats a aquesta obra.':'No hi ha documentació vinculada a aquesta obra.')+'<button class="primary small" data-go="attachments">Anar a Arxius / albarans</button></div>';
-  return '<div class="card"><div class="toolbar"><h3>'+ (onlyAlbarans?'Albarans':'Documentació vinculada') +'</h3><button class="ghost small" data-go="attachments">Gestionar arxius</button></div>'+table(['Nom','Tipus','Categoria','Mida','Notes','Acció'],rows.map(item=>'<tr><td><strong>'+esc(item.name||item.id)+'</strong></td><td>'+esc(item.type||'')+'</td><td>'+esc(item.category||'')+'</td><td class="num">'+(num(item.size)/1024).toFixed(1)+' KB</td><td>'+esc(item.notes||'')+'</td><td><button class="ghost small" data-download-attachment="'+esc(item.id)+'">Obrir</button></td></tr>'))+'</div>';
+  return '<div class="card"><div class="toolbar"><h3>'+ (onlyAlbarans?'Albarans':'Documentació vinculada') +'</h3><button class="ghost small" data-go="attachments">Gestionar arxius</button></div>'+table(['Nom','Tipus','Categoria','Mida','Notes','Acció'],rows.map(item=>'<tr><td><strong>'+esc(item.name||item.id)+'</strong></td><td>'+esc(item.type||'')+'</td><td>'+esc(item.category||'')+'</td><td class="num">'+(num(item.size)/1024).toFixed(1)+' KB</td><td>'+esc(item.notes||'')+'</td><td><button class="ghost small" data-download-attachment="'+esc(item.id)+'">'+(/Excel original/i.test(String(item.category||''))?'Descarregar Excel original':'Obrir')+'</button></td></tr>'))+'</div>';
 }
 
 function teimor09136TimeMaterialsTab(model){
@@ -10726,4 +10736,349 @@ teimor09132RenderObresSafe=function(){ return renderObresV0913(); };
   data.meta=data.meta||{};
   data.meta.version=VERSION;
   data.meta.release='V09.16';
+})();
+
+/* =========================================================
+   TEIMOR V09.17 · ESTAT VISIBLE, NUMERACIÓ COMERCIAL I EXCEL ORIGINAL
+   - Mostra l'estat de l'obra directament al llistat, sense obrir la fitxa.
+   - Presenta el número nou com 0000/AA i amaga la numeració tècnica/antiga
+     de la previsualització imprimible.
+   - Conserva cada Excel importat com a document original vinculat a la seva
+     obra i pressupost, mantenint el fitxer i l'extensió d'origen.
+   ========================================================= */
+
+function teimor0917BudgetDisplayNumber(budget){
+  const b=budget||{};
+  let seq=Number(typeof budgetSeqNumberV098==='function'?budgetSeqNumberV098(b):(b.seqNumber||b.yearSeq||b.internalNumber||0));
+  let year=Number(typeof budgetYear==='function'?budgetYear(b):String(b.date||'').slice(0,4));
+  const formatted=String(b.number||'').match(/^(\d{1,4})\/(\d{2}|\d{4})$/);
+  if(!seq && formatted){
+    seq=Number(formatted[1]);
+    year=Number(formatted[2].length===2?'20'+formatted[2]:formatted[2]);
+  }
+  if(!seq) return String(b.number||b.id||'');
+  const yearText=String(year||new Date().getFullYear()).slice(-2);
+  return String(seq).padStart(4,'0')+'/'+yearText;
+}
+
+(function(){
+  const VERSION='9.17.0-estat-visible-numero-excel-original';
+  const baseName=value=>String(value??'').split(/[\\/]/).pop().trim();
+  const sameSource=(a,b)=>baseName(a).toLowerCase()===baseName(b).toLowerCase();
+  const excelMime=name=>{
+    const lower=String(name||'').toLowerCase();
+    if(lower.endsWith('.xls')) return 'application/vnd.ms-excel';
+    if(lower.endsWith('.xlsm')) return 'application/vnd.ms-excel.sheet.macroEnabled.12';
+    if(lower.endsWith('.csv')) return 'text/csv';
+    return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  };
+  const noteLines=budget=>{
+    const values=[];
+    if(Array.isArray(budget?.observations)) values.push(...budget.observations);
+    String(budget?.notes||'').split(/\r?\n+/).forEach(value=>values.push(value));
+    const generated=/^(?:pressupost importat|importada autom[aà]ticament|treballs separats per marcador|revisa pu abans|pendent de valoraci[oó] actualitzada|fitxa importada)/i;
+    return [...new Set(values.map(value=>String(value??'').replace(/^\s*[.*•·-]\s*/,'').trim()).filter(value=>value&&!generated.test(value)))];
+  };
+
+  /* Estat visible també dins de la identificació, perquè no desaparegui en
+     pantalles estretes quan la taula s'ha de desplaçar horitzontalment. */
+  teimor09136JobRows=function(models){
+    if(!models.length) return '<tr><td colspan="10">'+empty('No hi ha obres que coincideixin amb aquests filtres.')+'</td></tr>';
+    return models.map(model=>{
+      const address=[model.address,model.city].filter(Boolean).join(' · ');
+      const label=model.keyword||'Obra sense identificació';
+      const status=model.job.status||'Pendent de revisar';
+      return '<tr class="v09140-job-row" data-v09136-obres-row="1"><td>'+esc(model.year||'')+'</td><td><div class="v09140-work-id"><strong>'+esc(label)+'</strong>'+(model.keywordNeedsReview?'<span class="v09140-review-badge">Revisar identificació</span>':'')+'</div><span class="v09140-work-address">'+esc(address||'Adreça pendent de completar')+'</span><div class="v0917-inline-job-status"><span>Estat de l’obra</span>'+statusPill(status)+'</div></td><td>'+esc(model.client?.name||clientName(model.job.clientId)||'Client pendent')+'</td><td class="num">'+model.budgets.length+'</td><td class="num">'+model.invoices.length+'</td><td class="num">'+model.certifications.length+'</td><td class="num">'+money(model.budgetTotal)+'</td><td class="num">'+money(model.invoiceBase)+'</td><td>'+statusPill(status)+'</td><td class="nowrap"><button class="primary small" data-v0913-trace-job="'+esc(model.job.id)+'" data-v09136-open-job="'+esc(model.job.id)+'">Obrir fitxa</button> <button class="ghost small" data-edit-job="'+esc(model.job.id)+'">Editar obra</button></td></tr>';
+    }).join('');
+  };
+
+  /* Capçalera imprimible del pressupost: data + número comercial nou. */
+  openBudgetPreview=function(id){
+    const b=byId(data.budgets,id); if(!b) return alert('No s’ha trobat el pressupost.');
+    const c=byId(data.clients,b.clientId)||{}; const j=byId(data.jobs,b.jobId)||{}; const s=data.settings.contractista||{};
+    const displayNumber=teimor0917BudgetDisplayNumber(b);
+    const rows=(b.lines||[]).map((l,idx)=>'<tr><td>'+idx+1+'</td><td>'+esc(l.unit||'')+'</td><td><strong>'+esc(l.concept||'')+'</strong>'+(l.longDesc?'<div class="preview-desc">'+esc(l.longDesc)+'</div>':'')+'</td><td class="num">'+(l.qty?num(l.qty).toLocaleString('ca-ES'):'')+'</td><td class="num">'+(l.unitPrice?money(l.unitPrice):'')+'</td><td class="num">'+money(lineTotal(l))+'</td></tr>').join('');
+    const observations=noteLines(b);
+    const observationsHtml=observations.length?'<section class="preview-observations"><h3>OBSERVACIONS</h3><div>'+observations.map(note=>'<p>'+esc(note)+'</p>').join('')+'</div></section>':'';
+    const html='<div class="preview-toolbar actions"><button class="primary" onclick="window.print()">Imprimir / guardar PDF</button><button class="ghost" onclick="window.close()">Tancar</button></div><div class="a4-sheet"><div class="preview-colorbar"></div><div class="preview-header"><div><h1>'+esc(s.name||'TEIMOR')+'</h1><p>'+esc(s.nif||'')+'<br>'+esc(s.address||'')+'<br>'+esc(s.city||'')+'<br>'+esc(s.phone||'')+'</p></div><div class="client-box"><span>Client</span><strong>'+esc(c.name||'Client pendent de revisar')+'</strong><br>'+esc(c.nif||'')+'<br>'+esc(c.fiscalAddress||'')+'<br>'+esc(c.postalCode||'')+' '+esc(c.city||'')+'</div></div><div class="preview-meta"><div><strong>Data:</strong> '+dateDisplay(b.date)+'</div><div><strong>Pressupost:</strong> '+esc(displayNumber)+'</div></div><h2>'+esc(b.title||j.title||'Pressupost')+'</h2>'+(j.address?'<p><strong>Obra:</strong> '+esc([j.address,j.city].filter(Boolean).join(' · '))+'</p>':'')+'<table class="preview-table"><thead><tr><th>Part.</th><th>Ut</th><th>Concepte / descripció</th><th>Quantitat</th><th>Preu/ut</th><th>Total</th></tr></thead><tbody>'+(rows||'<tr><td colspan="6">Sense línies detallades. Import detectat de l’Excel original.</td></tr>')+'</tbody></table><div class="preview-totals"><div>Base s/IVA: <strong>'+money(budgetBase(b))+'</strong></div><div>IVA '+num(b.iva)+'%: <strong>'+money(budgetIVA(b))+'</strong></div><div>Total: <strong>'+money(budgetTotal(b))+'</strong></div></div>'+observationsHtml+'</div>';
+    const w=window.open('', '_blank');
+    if(!w) return alert('El navegador ha bloquejat la finestra de previsualització. Permet pop-ups per aquesta app.');
+    w.document.write('<!doctype html><html lang="ca"><head><meta charset="utf-8"><title>Pressupost '+esc(displayNumber)+'</title><style>'+previewCss()+' .preview-observations{margin-top:10mm;border-top:2px solid #7c2d12;padding-top:5mm;font-size:11px;line-height:1.45}.preview-observations h3{margin:0 0 4mm;font-size:13px;font-weight:800;letter-spacing:.05em;color:#7c2d12}.preview-observations p{margin:0 0 2mm;white-space:pre-wrap}</style></head><body>'+html+'</body></html>');
+    w.document.close();
+  };
+
+  const baseOpenBudgetModalV0917=openBudgetModal;
+  openBudgetModal=function(id=''){
+    const result=baseOpenBudgetModalV0917(id);
+    if(id&&id!=='__new'){
+      const budget=byId(data.budgets,id);
+      const heading=document.querySelector('#v0916BudgetScreen .v0916-budget-header h2');
+      if(budget&&heading) heading.textContent='Pressupost '+teimor0917BudgetDisplayNumber(budget);
+    }
+    return result;
+  };
+
+  /* El número visible és el nou; el número antic es conserva en les dades
+     per traçabilitat, però ja no surt al document imprimible. */
+  const baseBudgetNameV0917=budgetName;
+  budgetName=function(id){
+    const b=byId(data.budgets,id);
+    return b ? (teimor0917BudgetDisplayNumber(b)+' · '+(b.title||'')) : baseBudgetNameV0917(id);
+  };
+
+  /* Guarda els Excels originals després de la confirmació incremental. La
+     funció anterior continua resolent clients/obres/pressupostos; aquí només
+     afegim la còpia fidel del document i l'enllacem sense crear duplicats. */
+  const baseConfirmDraftImportV0917=confirmDraftImport;
+  async function persistOriginalBudgetFile(budget,fileRecord){
+    if(!budget||!fileRecord?.arrayBuffer) return false;
+    data.attachments=Array.isArray(data.attachments)?data.attachments:[];
+    const name=baseName(fileRecord.name||budget.sourceFileName||budget.source||'pressupost.xlsx');
+    const existing=data.attachments.find(item=>item.originalBudgetFile && item.budgetId===budget.id) || data.attachments.find(item=>item.category==='Pressupost original Excel' && item.budgetId===budget.id);
+    const id=existing?.id||uid('ARX');
+    const blob=new Blob([fileRecord.arrayBuffer],{type:excelMime(name)});
+    const meta={...(existing||{}),id,name,type:excelMime(name),size:blob.size,category:'Pressupost original Excel',clientId:budget.clientId||'',jobId:budget.jobId||'',budgetId:budget.id,includeInJson:true,originalBudgetFile:true,notes:'Excel original conservat sense transformar.',createdAt:existing?.createdAt||new Date().toISOString()};
+    await idbPut({id,blob,dataUrl:'',meta});
+    const index=data.attachments.findIndex(item=>item.id===id);
+    if(index>=0) data.attachments[index]=meta; else data.attachments.push(meta);
+    budget.originalFileAttachmentId=id;
+    budget.sourceFileName=name;
+    budget.sourceFileType=meta.type;
+    return true;
+  }
+  function draftFileForBudget(draft,budgetDraft){
+    const files=Array.isArray(draft?.originalFiles)?draft.originalFiles:[];
+    const candidates=[budgetDraft?.sourceFileName,budgetDraft?.originalFileName,budgetDraft?.source].filter(Boolean);
+    return files.find(file=>candidates.some(candidate=>String(file.name)===String(candidate))) || files.find(file=>candidates.some(candidate=>sameSource(file.name,candidate)));
+  }
+  function budgetForDraft(budgetDraft){
+    const candidates=[budgetDraft?.sourceFileName,budgetDraft?.originalFileName,budgetDraft?.source].filter(Boolean);
+    return data.budgets.find(budget=>String(budget.id)===String(budgetDraft?.id)) || data.budgets.find(budget=>Array.isArray(budget.sourceFiles)&&budget.sourceFiles.some(source=>candidates.some(candidate=>sameSource(source,candidate)))) || data.budgets.find(budget=>candidates.some(candidate=>sameSource(budget.sourceFileName,candidate)||String(budget.source||'').split(/\s*\|\s*/).some(source=>sameSource(source,candidate))));
+  }
+  confirmDraftImport=async function(){
+    const draft=state.importDraft;
+    if(!draft) return;
+    await baseConfirmDraftImportV0917();
+    let saved=0;
+    for(const budgetDraft of draft.budgets||[]){
+      const budget=budgetForDraft(budgetDraft);
+      const fileRecord=draftFileForBudget(draft,budgetDraft);
+      if(budget&&fileRecord){
+        try{ if(await persistOriginalBudgetFile(budget,fileRecord)) saved++; }
+        catch(error){ console.warn('No s’ha pogut guardar l’Excel original:',error); }
+      }
+    }
+    if(saved){ saveData(); render(); }
+  };
+
+  data.meta=data.meta||{};
+  data.meta.version=VERSION;
+  data.meta.release='V09.17';
+})();
+
+/* =========================================================
+   TEIMOR V09.18 · CLIENT ÚNIC PER NOM I FUSIÓ REAL
+   - El mateix nom normalitzat no pot crear una segona fitxa de client.
+   - La fusió conserva totes les obres, pressupostos, factures i documents.
+   - Els clients ja duplicats es consoliden automàticament amb còpia reversible.
+   - «Fusionar duplicats» utilitza aquesta mateixa regla i deixa de dependre
+     de coincidències accidentals d’adreça o NIF.
+   ========================================================= */
+(function(){
+  const VERSION='9.18.0-client-unic-per-nom-fusio-real';
+  const text=value=>String(value??'').trim();
+  const meaningfulName=value=>{
+    const raw=text(value);
+    if(!raw || /^(client pendent(?: de revisar)?|pendent de revisar|sense nom)$/i.test(raw)) return '';
+    return raw;
+  };
+  const normalizedName=value=>strip(value||'')
+    .replace(/[^a-z0-9]+/g,' ')
+    .replace(/\b(?:s\s*l\s*u|s\s*l|s\s*a|s\s*c\s*p|c\s*b|slu|sl|sa|scp|cb)\b/g,' ')
+    .replace(/\s+/g,' ').trim();
+  const normalizedNif=value=>text(value).toUpperCase().replace(/[^A-Z0-9]/g,'');
+  const normalizedPhone=value=>text(value).replace(/\D/g,'');
+  const normalizedEmail=value=>strip(value||'');
+  const clientKeys=client=>{
+    const keys=[];
+    const name=normalizedName(client?.name);
+    const nif=normalizedNif(client?.nif||client?.dni||client?.cif);
+    const email=normalizedEmail(client?.email);
+    const phone=normalizedPhone(client?.phone);
+    if(name) keys.push('name:'+name);
+    if(nif) keys.push('nif:'+nif);
+    if(email) keys.push('email:'+email);
+    if(phone.length>=8) keys.push('phone:'+phone.slice(-9));
+    return [...new Set(keys)];
+  };
+  const sameClient=(a,b)=>clientKeys(a).some(key=>clientKeys(b).includes(key));
+  const collections=['jobs','budgets','invoices','certifications','attachments','agenda','certificates','payments','hores','materials','timeEntries'];
+  const clone=value=>{
+    try{return JSON.parse(JSON.stringify(value));}catch(error){return value;}
+  };
+  const listUnique=values=>[...new Set((values||[]).flatMap(value=>Array.isArray(value)?value:[value]).filter(Boolean).map(text))];
+  const referenceCount=id=>collections.reduce((sum,key)=>sum+(Array.isArray(data[key])?data[key].filter(item=>item?.clientId===id).length:0),0);
+  const clientScore=client=>{
+    const name=normalizedName(client?.name);
+    return (name?10000:0)+(normalizedNif(client?.nif||client?.dni||client?.cif)?2000:0)+(text(client?.fiscalAddress)?400:0)+(text(client?.postalCode)?150:0)+(text(client?.city)?100:0)+(text(client?.email)?80:0)+(text(client?.phone)?70:0)+referenceCount(client?.id)*20+listUnique([client?.sourceFiles,client?.source]).length;
+  };
+  function mergeClientValues(target,source){
+    if(!target||!source) return target;
+    const sourceName=meaningfulName(source.name);
+    if(!meaningfulName(target.name)&&sourceName) target.name=source.name;
+    for(const field of ['nif','dni','cif','phone','email','contact','fiscalAddress','postalCode','city','status']){
+      if(!text(target[field])&&text(source[field])) target[field]=source[field];
+    }
+    const names=listUnique([target.alternateNames,target.name,source.alternateNames,source.name]);
+    target.alternateNames=names.filter(value=>normalizedName(value));
+    const fiscal=listUnique([target.fiscalAddresses,target.fiscalAddress,source.fiscalAddresses,source.fiscalAddress]);
+    target.fiscalAddresses=fiscal;
+    if(!text(target.fiscalAddress)) target.fiscalAddress=fiscal[0]||'';
+    const works=listUnique([target.workAddresses,target.workAddress,source.workAddresses,source.workAddress]);
+    target.workAddresses=works;
+    if(!text(target.workAddress)) target.workAddress=works[0]||'';
+    const workCities=listUnique([target.workCities,target.workCity,source.workCities,source.workCity]);
+    target.workCities=workCities;
+    if(!text(target.workCity)) target.workCity=workCities[0]||'';
+    const workPostals=listUnique([target.workPostals,target.workPostalCode,source.workPostals,source.workPostalCode]);
+    target.workPostals=workPostals;
+    if(!text(target.workPostalCode)) target.workPostalCode=workPostals[0]||'';
+    target.sourceFiles=listUnique([target.sourceFiles,target.source,source.sourceFiles,source.source]);
+    target.source=target.sourceFiles.join(' | ');
+    target.notes=listUnique([target.notes,source.notes]).join('\n');
+    target.reviewIssues=listUnique([target.reviewIssues,source.reviewIssues]).filter(issue=>!/^possible duplicat/i.test(issue));
+    target.mergedFromIds=listUnique([target.mergedFromIds,source.mergedFromIds,source.id]);
+    target.duplicateReview='validat';
+    target.duplicateReviewDate=today();
+    target.mergeStatus='Client únic consolidat';
+    target.needsReview=!normalizedNif(target.nif||target.dni||target.cif)||(target.reviewIssues||[]).length>0;
+    return target;
+  }
+  function groupClients(list){
+    const items=(list||[]).filter(Boolean);
+    const parent=items.map((_,index)=>index);
+    const find=index=>{let root=index;while(parent[root]!==root) root=parent[root];while(parent[index]!==index){const next=parent[index];parent[index]=root;index=next;}return root;};
+    const union=(a,b)=>{const left=find(a),right=find(b);if(left!==right) parent[right]=left;};
+    const owners=new Map();
+    items.forEach((item,index)=>clientKeys(item).forEach(key=>{if(owners.has(key)) union(index,owners.get(key)); else owners.set(key,index);}));
+    const grouped=new Map();
+    items.forEach((item,index)=>{const root=find(index);if(!grouped.has(root)) grouped.set(root,[]);grouped.get(root).push(item);});
+    return [...grouped.values()].filter(group=>group.length>1);
+  }
+  function duplicateReason(group){
+    const names=group.map(item=>normalizedName(item.name)).filter(Boolean);
+    if(names.length>1&&new Set(names).size===1) return 'Mateix nom de client';
+    const nifs=group.map(item=>normalizedNif(item.nif||item.dni||item.cif)).filter(Boolean);
+    if(nifs.length>1&&new Set(nifs).size===1) return 'Mateix NIF/DNI/CIF';
+    return 'Mateixa identificació del client';
+  }
+  function duplicateGroups(list=data.clients){
+    return groupClients(list).map((members,index)=>({members,reason:duplicateReason(members),key:members.map(item=>item.id||item.tempKey||String(index)).sort().join('|')}));
+  }
+  function repointClientReferences(oldIds,newId){
+    collections.forEach(collection=>{
+      if(!Array.isArray(data[collection])) return;
+      data[collection].forEach(item=>{if(oldIds.includes(item?.clientId)) item.clientId=newId;});
+    });
+  }
+  function mergeClientGroup(group){
+    const members=[...(group.members||[])].sort((a,b)=>clientScore(b)-clientScore(a));
+    const canonical=members[0];
+    const oldIds=members.slice(1).map(item=>item.id).filter(Boolean);
+    members.slice(1).forEach(item=>mergeClientValues(canonical,item));
+    repointClientReferences(oldIds,canonical.id);
+    data.clients=data.clients.filter(item=>!oldIds.includes(item.id));
+    canonical.mergedDuplicateCount=(canonical.mergedDuplicateCount||0)+oldIds.length;
+    canonical.mergeGroupReason=group.reason;
+    canonical.notes=listUnique([canonical.notes,'Clients duplicats fusionats el '+today()+'. Motiu: '+group.reason+'.']).join('\n');
+    return {canonicalId:canonical.id,removedIds:oldIds};
+  }
+  function consolidateClients(silent=true){
+    const groups=duplicateGroups(data.clients||[]);
+    if(!groups.length) return {changed:false,groups:[],removed:0};
+    data.clientMergeBackups=Array.isArray(data.clientMergeBackups)?data.clientMergeBackups:[];
+    const allIds=groups.flatMap(group=>group.members.map(item=>item.id)).filter(Boolean);
+    data.clientMergeBackups.push({id:uid('CLIBACK'),date:new Date().toISOString(),beforeClients:clone(data.clients||[]),beforeReferences:Object.fromEntries(collections.map(collection=>[collection,(data[collection]||[]).filter(item=>allIds.includes(item?.clientId)).map(item=>({id:item.id,data:clone(item)}))]).filter(([,items])=>items.length)),groups:groups.map(group=>({reason:group.reason,ids:group.members.map(item=>item.id)}))});
+    if(data.clientMergeBackups.length>5) data.clientMergeBackups=data.clientMergeBackups.slice(-5);
+    const result=groups.map(mergeClientGroup);
+    const removed=result.reduce((sum,item)=>sum+item.removedIds.length,0);
+    data.importLogs=data.importLogs||[];
+    data.importLogs.push({id:uid('CLIENTMERGE'),date:new Date().toISOString(),type:'Consolidació automàtica per mateix nom',groups:groups.length,removedClients:removed,reasons:groups.map(group=>group.reason)});
+    saveData();
+    if(!silent){alert('Clients consolidats: '+removed+' duplicats fusionats en '+groups.length+' client/s principals.');renderClients();}
+    return {changed:removed>0,groups,removed};
+  }
+
+  /* Redueix també els clients repetits dins del mateix bloc abans que la
+     confirmació els converteixi en registres definitius. */
+  function normalizeDraftClients(draft){
+    const source=draft?.clients||[];
+    const output=[];
+    source.forEach(raw=>{
+      const client={...raw};
+      const existing=output.find(item=>sameClient(item,client));
+      if(!existing){
+        client._tempKeys=listUnique([client._tempKeys,client.tempKey]);
+        output.push(client);
+      }else{
+        existing._tempKeys=listUnique([existing._tempKeys,existing.tempKey,client._tempKeys,client.tempKey]);
+        mergeClientValues(existing,client);
+      }
+    });
+    draft.clients=output;
+    return draft;
+  }
+
+  teimor0910DuplicateGroups=duplicateGroups;
+  teimor099DuplicateGroups=duplicateGroups;
+  const baseCanMergeV0918=teimor099CanMergeClients;
+  teimor099CanMergeClients=function(a,b){ return sameClient(a,b)||baseCanMergeV0918(a,b); };
+  teimor0910MergeSafeDuplicateClients=function(){
+    const result=consolidateClients(false);
+    if(!result.changed) return alert('No hi ha duplicats amb el mateix nom o identificador per fusionar.');
+  };
+
+  /* Guardar manualment un client amb un nom ja existent també fusiona les
+     fitxes i evita que l’edició torni a crear una variant. */
+  saveClient=function(event){
+    event.preventDefault();
+    const fields=formObj(event.target);
+    const current=byId(data.clients,fields.editId)||{};
+    const candidate={...current,id:fields.id||current.id||uid('CLI'),name:fields.name||'',nif:fields.nif||'',phone:fields.phone||'',email:fields.email||'',contact:fields.contact||'',fiscalAddress:fields.fiscalAddress||'',postalCode:fields.postalCode||'',workAddress:fields.workAddress||'',workPostalCode:fields.workPostalCode||'',workCity:fields.workCity||'',city:fields.city||'',status:fields.status||'Actiu',notes:fields.notes||''};
+    const duplicate=data.clients.find(item=>item.id!==candidate.id&&sameClient(item,candidate));
+    if(duplicate){
+      mergeClientValues(duplicate,candidate);
+      repointClientReferences([candidate.id],duplicate.id);
+      data.clients=data.clients.filter(item=>item.id!==candidate.id);
+    }else{
+      const index=data.clients.findIndex(item=>item.id===candidate.id||item.id===fields.editId);
+      if(index>=0) data.clients[index]=candidate; else data.clients.push(candidate);
+    }
+    saveData();
+    renderClients();
+  };
+
+  /* El diagnòstic no inventa NIF/DNI: simplement ho deixa clar perquè no es
+     confongui «Sense identificador» amb un client nou. */
+  const baseDiagnosticsV0918=teimor099ClientDiagnosticsHtml;
+  teimor099ClientDiagnosticsHtml=function(){ return baseDiagnosticsV0918().replace(/Sense identificador/g,'Sense NIF/DNI/CIF'); };
+
+  const baseConfirmImportV0918=confirmDraftImport;
+  confirmDraftImport=async function(){
+    const draft=state.importDraft;
+    if(!draft) return;
+    normalizeDraftClients(draft);
+    consolidateClients(true);
+    await baseConfirmImportV0918();
+    const result=consolidateClients(true);
+    if(result.changed){ saveData(); render(); }
+  };
+
+  /* Repara els duplicats que ja existien només una vegada en carregar la
+     versió. La còpia de seguretat permet restaurar l’última fusió. */
+  data.meta=data.meta||{};
+  data.meta.version=VERSION;
+  data.meta.release='V09.18';
+  const startupConsolidation=consolidateClients(true);
+  if(startupConsolidation.changed) saveData();
 })();
