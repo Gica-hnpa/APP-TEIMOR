@@ -1,4 +1,4 @@
-# TEIMOR V09.13.8 · filtres d’any, fitxers originals i PDF
+# TEIMOR V09.13.9 · fitxa d’obra autocontinguda i flux de treball
 
 V09.13 parteix de V09.12 i manté les versions anteriors intactes.
 
@@ -43,6 +43,14 @@ Canvis principals:
 - Factures té també botons ràpids d’any, a més del selector, i conserva el recompte real abans/després de cada importació.
 - Reimportar una factura ja existent no la duplica: actualitza les dades buides i guarda el fitxer original si abans faltava.
 - Els botons «Veure PDF», «Editar» i «Descarregar factura» continuen actius quan la fitxa és al modal superior.
+- La pestanya Obres queda marcada en taronja i la fitxa s’obre sempre com una pantalla superior independent.
+- Editar obra es fa dins d’un modal amb identificació pràctica, adreça d’obra, població, codi postal, client i preus hora; Guardar i Cancel·lar tanquen correctament.
+- Des de la fitxa es pot obrir i editar el pressupost, crear factura parcial o certificació parcial amb línies i quantitats, afegir una partida nova d’administració/feina i previsualitzar-la.
+- Les factures noves tenen numeració correlativa per any i neixen com a «Proforma pendent» fins a convertir-les en factura definitiva/Verifactu.
+- La importació d’una factura existent es pot iniciar dins de la fitxa i manté la revisió de client, obra i pressupost abans de confirmar.
+- Documentació i albarans es guarden dins de la fitxa; un albarà genera una línia de material pendent de revisar a Temps i materials.
+- Temps i materials inclouen jornada, hores d’oficial i manobre, preu hora per obra o configuració, materials manuals i detecció bàsica des dels albarans.
+- L’inici queda reduït a indicadors i obres recents; les accions principals es mantenen al menú lateral i dins de la fitxa.
 
 Ús recomanat:
 
@@ -53,6 +61,6 @@ Canvis principals:
 
 Configuració Render:
 
-Root Directory: `App_TEIMOR_gestor_pressupostos_v09_13_8_FACTURES_ANY_PDF`
+Root Directory: `App_TEIMOR_gestor_pressupostos_v09_13_9_FITXA_OBRA`
 Build Command: `echo "No build needed"`
 Publish Directory: `.`

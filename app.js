@@ -8687,6 +8687,611 @@ renderObresV0913=function(){
 teimor09132RenderObresSafe=function(){ return renderObresV0913(); };
 
 /* =========================================================
+   TEIMOR V09.13.9 · FITXA AUTOCONTINGUDA I FLUX DE TREBALL
+   - La pestanya activa sempre queda marcada al menú lateral.
+   - L’obra s’edita en un modal superior, amb Guardar i Cancel·lar fiables.
+   - Pressupost, factura/certificació, albarà, hores i materials es treballen
+     des de la fitxa, sense redirigir a les pantalles principals.
+   - Les factures noves neixen com a proforma i conserven la relació amb obra
+     i pressupost; la numeració nova és correlativa per any i tipus.
+   ========================================================= */
+(function(){
+  const VERSION='9.13.9-fitxa-autocontinguda-flux-obra';
+
+  function text(value){ return String(value??'').replace(/\s+/g,' ').trim(); }
+  function safeArray(value){ return Array.isArray(value)?value:[]; }
+  function currentJob(jobId){ return byId(data.jobs,jobId||state.selectedJobId)||null; }
+  function currentReturnJob(){ return state.v09139ReturnJobId || state.selectedJobId || ''; }
+  function hasOverlay(){ return !!document.getElementById('v09137JobOverlay'); }
+  function cleanKeyword(value){
+    let result=text(value);
+    result=result.replace(/^\s*[.*•·-]\s*/,'');
+    result=result.replace(/^(?:pressupost|presupuesto|obra|feina|treball|trabajo|concepte|concepto)\s*(?:n[úu]m(?:ero)?\.?\s*[:#-]?\s*[\w/-]+\s*[-:])?\s*/i,'');
+    result=result.replace(/\s*[-–—:]\s*$/,'').trim();
+    if(result.length>110){
+      const first=result.split(/[.;!?]\s+/)[0];
+      result=(first||result).slice(0,110).trim();
+    }
+    return result;
+  }
+  function genericKeyword(value){
+    const result=strip(value||'');
+    return !result || /^(?:obra|feina|obra sense nom|feina sense nom|concepte pendent(?: de revisar)?|pendent de revisar|pressupost importat|factura importada|certificaci[oó] importada)$/.test(result);
+  }
+  function badWorkAddress(value){
+    const result=text(value);
+    if(!result) return true;
+    return result.length>180 || /\b(?:partid(?:a|es)|unitat(?:s)?|quantitat|preu|import|descripci[oó]|concepte|treballs|total|iva|base)\b/i.test(result);
+  }
+  function practicalKeyword(job,budget){
+    const candidates=[job?.keyword,budget?.keyword,budget?.workKeyword,job?.displayKeyword,job?.title,budget?.title];
+    for(const candidate of candidates){
+      const value=cleanKeyword(candidate);
+      if(value && !genericKeyword(value) && !/^(?:factura|certificaci[oó]|materials?\s+i\s+m\.?o\.?)$/i.test(value)) return value;
+    }
+    const raw=text(job?.title||budget?.title||'');
+    const words=raw.split(/\s+/).filter(Boolean);
+    const useful=words.filter(word=>!/^\d+[\w/-]*$/.test(word)).slice(0,7).join(' ');
+    return cleanKeyword(useful||job?.workAddress||job?.address||'') || 'Obra pendent de revisar';
+  }
+  function workAddress(job,budget){
+    const candidates=[job?.workAddress,job?.address,budget?.workAddress,budget?.address];
+    return candidates.map(text).find(value=>value&&!badWorkAddress(value))||'';
+  }
+  function workCity(job,budget){ return text(job?.workCity||job?.city||budget?.workCity||budget?.city||''); }
+  function workPostal(job,budget){ return text(job?.workPostalCode||job?.postalCode||budget?.workPostalCode||budget?.postalCode||''); }
+  function returnToJob(jobId,tab='resum'){
+    const id=jobId||currentReturnJob();
+    state.v09139ReturnJobId='';
+    state.v09139ReturnJobTab='';
+    if(id) state.selectedJobId=id;
+    state.view='obres';
+    if(tab) state.obresJobTab=tab;
+    closeModal();
+    try{ teimor09136RenderObres(false); }catch(error){ console.error(error); render(); }
+  }
+  function ensureShape(){
+    if(typeof teimor0913EnsureData==='function') teimor0913EnsureData();
+    data.clients=safeArray(data.clients);
+    data.jobs=safeArray(data.jobs);
+    data.budgets=safeArray(data.budgets);
+    data.invoices=safeArray(data.invoices);
+    data.certifications=safeArray(data.certifications);
+    data.library=safeArray(data.library);
+    data.hores=safeArray(data.hores);
+    data.materials=safeArray(data.materials);
+    data.agenda=safeArray(data.agenda);
+    data.attachments=safeArray(data.attachments);
+    data.settings=data.settings||{};
+    if(!num(data.settings.officialHourRate)) data.settings.officialHourRate=31;
+    if(!num(data.settings.laborerHourRate)) data.settings.laborerHourRate=27;
+    state.v09139ReturnJobId=state.v09139ReturnJobId||'';
+    state.v09139ReturnJobTab=state.v09139ReturnJobTab||'';
+    state.v09139ImportContext=state.v09139ImportContext||null;
+  }
+  ensureShape();
+  data.meta=data.meta||{};
+  data.meta.version=VERSION;
+
+  /* La identificació visible usa una frase pràctica, però no destrueix el
+     títol llarg ni les dades importades. */
+  const baseBuildModelsV09139=teimor09136BuildModels;
+  teimor09136BuildModels=function(){
+    const built=baseBuildModelsV09139();
+    built.models.forEach(model=>{
+      model.keyword=practicalKeyword(model.job,model.budgets[0]);
+      model.address=workAddress(model.job,model.budgets[0])||model.address||'';
+      model.city=workCity(model.job,model.budgets[0])||model.city||'';
+    });
+    return built;
+  };
+
+  function clientOptions(selected){
+    return '<option value="">Client pendent</option>'+options(data.clients,selected,c=>c.name||c.id);
+  }
+  function jobEditorHtml(job){
+    const address=workAddress(job,null);
+    const city=workCity(job,null);
+    const postal=workPostal(job,null);
+    const keyword=practicalKeyword(job,null);
+    const rateOfficial=num(job.officialRate)||num(data.settings.officialHourRate)||31;
+    const rateLaborer=num(job.laborerRate)||num(data.settings.laborerHourRate)||27;
+    return '<div class="toolbar"><div><h2>Editar fitxa d’obra</h2><p class="muted">Aquesta edició queda en primer pla i no modifica la pantalla que hi ha a sota fins que guardis.</p></div></div>'+
+      '<form id="v09139JobForm" class="form-grid" data-job-id="'+esc(job.id)+'">'+
+      '<label class="wide">Identificació pràctica de l’obra<input name="keyword" required value="'+esc(keyword==='Obra pendent de revisar'?'':keyword)+'" placeholder="Ex.: Coberta nau · Impermeabilització CP edifici"></label>'+
+      '<label class="wide">Client<select name="clientId">'+clientOptions(job.clientId)+'</select></label>'+
+      '<label>Any<input name="year" type="number" min="2000" max="2100" value="'+esc(job.year||new Date().getFullYear())+'"></label>'+ 
+      '<label>Estat<select name="status"><option '+(job.status==='Activa'?'selected':'')+'>Activa</option><option '+(job.status==='En curs'?'selected':'')+'>En curs</option><option '+(job.status==='Pendent'?'selected':'')+'>Pendent</option><option '+(job.status==='Acabada'?'selected':'')+'>Acabada</option><option '+(job.status==='Històrica'?'selected':'')+'>Històrica</option></select></label>'+ 
+      '<label class="wide">Descripció completa / títol intern<input name="title" value="'+esc(job.title||keyword)+'" placeholder="Descripció llarga si cal"></label>'+ 
+      '<label class="wide">Adreça de l’obra<input name="workAddress" value="'+esc(address)+'" placeholder="Carrer, número, local o nau"></label>'+ 
+      '<label>Població obra<input name="workCity" value="'+esc(city)+'"></label>'+ 
+      '<label>Codi postal obra<input name="workPostalCode" value="'+esc(postal)+'"></label>'+ 
+      '<label>Preu hora oficial<input name="officialRate" type="number" min="0" step="0.01" value="'+esc(rateOfficial)+'"></label>'+ 
+      '<label>Preu hora manobre / ajudant<input name="laborerRate" type="number" min="0" step="0.01" value="'+esc(rateLaborer)+'"></label>'+ 
+      '<label class="full">Notes<textarea name="notes">'+esc(job.notes||'')+'</textarea></label>'+ 
+      '<div class="actions full"><button class="primary" type="submit">Guardar obra</button><button class="ghost" type="button" data-v09139-cancel-job>Cancel·lar</button></div></form>';
+  }
+  function saveJobFromFicha(event){
+    event.preventDefault();
+    const form=event.target;
+    const fields=formObj(form);
+    const id=form.dataset.jobId||fields.id;
+    const old=byId(data.jobs,id);
+    if(!old) return alert('No s’ha trobat aquesta obra.');
+    const keyword=cleanKeyword(fields.keyword)||cleanKeyword(fields.title)||'Obra pendent de revisar';
+    const title=text(fields.title)||keyword;
+    const address=text(fields.workAddress);
+    const city=text(fields.workCity);
+    const postal=text(fields.workPostalCode);
+    const updated={...old,id,year:Number(fields.year)||new Date().getFullYear(),clientId:fields.clientId||'',keyword,title,displayKeyword:keyword,address,workAddress:address,city,workCity:city,postalCode:postal,workPostalCode:postal,status:fields.status||old.status||'Activa',officialRate:num(fields.officialRate),laborerRate:num(fields.laborerRate),notes:fields.notes||''};
+    const index=data.jobs.findIndex(item=>item.id===id);
+    if(index<0) return alert('No s’ha trobat l’obra per guardar.');
+    data.jobs[index]=updated;
+    data.budgets.filter(item=>item.jobId===id).forEach(budget=>{
+      if(!text(budget.keyword)||genericKeyword(budget.keyword)) budget.keyword=keyword;
+      if(!text(budget.workAddress)||badWorkAddress(budget.workAddress)) budget.workAddress=address;
+      if(!text(budget.workCity)) budget.workCity=city;
+      if(!text(budget.workPostalCode)) budget.workPostalCode=postal;
+    });
+    saveData();
+    const tab=state.obresJobTab||'resum';
+    closeModal();
+    state.view='obres'; state.selectedJobId=id;
+    try{ teimor09136RenderObres(false); }catch(error){ console.error(error); render(); }
+    if(tab) state.obresJobTab=tab;
+  }
+  function openJobEditor(jobId){
+    const job=byId(data.jobs,jobId);
+    if(!job) return alert('No s’ha trobat aquesta obra.');
+    state.view='obres'; state.selectedJobId=jobId;
+    openModal(jobEditorHtml(job));
+    const form=document.getElementById('v09139JobForm');
+    if(form) form.onsubmit=saveJobFromFicha;
+    document.querySelectorAll('[data-v09139-cancel-job]').forEach(button=>button.onclick=()=>closeModal());
+    form?.querySelector('[name="keyword"]')?.focus();
+  }
+  teimor09135OpenJobEditor=openJobEditor;
+
+  /* Pressupostos oberts des de la fitxa tornen a la mateixa pestanya en
+     guardar o cancel·lar. */
+  const baseOpenBudgetV09139=openBudgetModal;
+  openBudgetModal=function(id=''){
+    if(hasOverlay() && state.selectedJobId && !state.v09139ReturnJobId){
+      state.v09139ReturnJobId=state.selectedJobId;
+      state.v09139ReturnJobTab='pressupost';
+    }
+    const result=baseOpenBudgetV09139(id);
+    const returnJob=state.v09139ReturnJobId;
+    if(returnJob){
+      const budgetForm=document.getElementById('budgetForm');
+      const job=byId(data.jobs,returnJob);
+      if(budgetForm && job){
+        const jobField=budgetForm.querySelector('[name="jobId"]');
+        const clientField=budgetForm.querySelector('[name="clientId"]');
+        if(jobField && !jobField.value) jobField.value=job.id;
+        if(clientField && !clientField.value) clientField.value=job.clientId||'';
+      }
+      document.querySelectorAll('[data-render-budgets]').forEach(button=>button.onclick=()=>returnToJob(returnJob,'pressupost'));
+    }
+    return result;
+  };
+  const baseSaveBudgetV09139=saveBudget;
+  saveBudget=function(event){
+    const returnJob=state.v09139ReturnJobId;
+    if(!returnJob) return baseSaveBudgetV09139(event);
+    const tab=state.v09139ReturnJobTab||'pressupost';
+    baseSaveBudgetV09139(event);
+    returnToJob(returnJob,tab);
+  };
+
+  function budgetForJob(jobId,budgetId){ return byId(data.budgets,budgetId)||data.budgets.find(item=>item.jobId===jobId)||null; }
+  function invoiceLineRows(budget,doc){
+    const existing=safeArray(doc?.lines||doc?.invoiceLines);
+    if(existing.length) return existing.map(line=>({...line,id:line.id||uid('IL')}));
+    const budgetLines=safeArray(budget?.lines);
+    if(budgetLines.length){
+      return budgetLines.map(source=>{
+        const billed=(data.invoices||[]).filter(item=>item.budgetId===budget.id&&item.id!==doc?.id).flatMap(item=>safeArray(item.lines||item.invoiceLines)).filter(line=>line.budgetLineId===source.id).reduce((sum,line)=>sum+num(line.qty),0);
+        const budgetQty=num(source.qty);
+        const remaining=budgetQty>0?Math.max(0,budgetQty-billed):1;
+        return {id:uid('IL'),budgetLineId:source.id,code:source.code||'',chapter:source.chapter||'',unit:source.unit||'',concept:source.concept||'',longDesc:source.longDesc||'',qty:remaining,unitPrice:num(source.unitPrice),total:remaining*num(source.unitPrice)};
+      });
+    }
+    if(budget) return [{id:uid('IL'),budgetLineId:'',unit:'',concept:budget.title||'Treballs de l’obra',longDesc:'',qty:1,unitPrice:budgetBase(budget),total:budgetBase(budget)}];
+    return [{id:uid('IL'),unit:'',concept:'Nova feina / administració',longDesc:'',qty:1,unitPrice:0,total:0}];
+  }
+  function invoiceLineRowHtml(line){
+    return '<tr data-v09139-invoice-line="1" data-line-id="'+esc(line.id)+'"><td><input data-v09139-line-field="concept" value="'+esc(line.concept||'')+'" placeholder="Feina / administració"></td><td><input data-v09139-line-field="longDesc" value="'+esc(line.longDesc||'')+'" placeholder="Descripció"></td><td><input data-v09139-line-field="unit" value="'+esc(line.unit||'')+'" placeholder="ud"></td><td><input class="num" type="number" step="0.0001" data-v09139-line-field="qty" value="'+esc(line.qty??0)+'"></td><td><input class="num" type="number" step="0.01" data-v09139-line-field="unitPrice" value="'+esc(line.unitPrice??0)+'"></td><td class="num"><strong data-v09139-line-total>'+money(num(line.qty)*num(line.unitPrice))+'</strong></td><td><button type="button" class="danger small" data-v09139-remove-line>Eliminar</button></td></tr>';
+  }
+  function nextFinancialNumber(kind,date){
+    const year=(parseDateValue(date)||String(date||today())).slice(0,4)||String(new Date().getFullYear());
+    const prefix=kind==='certificacio'?'CERT':'FAC';
+    const docs=kind==='certificacio'?data.certifications:data.invoices;
+    const max=docs.reduce((highest,item)=>{
+      const value=String(item.number||'');
+      const match=value.match(new RegExp('(?:'+prefix+'[- ]?)?'+year+'[-/](\\d+)$','i'));
+      return match?Math.max(highest,Number(match[1])||0):highest;
+    },0);
+    return prefix+'-'+year+'-'+String(max+1).padStart(3,'0');
+  }
+  function financialStateOptions(kind,doc){
+    if(kind==='certificacio') return '<option value="Pendent" '+(!doc?.status||/pendent/i.test(doc.status)?'selected':'')+'>Pendent</option><option value="Emesa" '+(/emesa|accept/i.test(doc?.status||'')?'selected':'')+'>Emesa</option><option value="Pagada" '+(/pagad|cobrat/i.test(doc?.status||'')?'selected':'')+'>Pagada</option>';
+    const proforma=doc?.proforma||/proforma/i.test(doc?.status||'');
+    const definitive=!proforma&&/definitiva|factura/i.test(doc?.status||'');
+    const imported=!!doc&&!proforma&&!definitive&&!/pagad|cobrat|anul/i.test(doc?.status||'');
+    return '<option value="Proforma" '+(proforma||!doc?'selected':'')+'>Proforma pendent</option><option value="Definitiva" '+(definitive?'selected':'')+'>Factura definitiva (Verifactu)</option><option value="Importada" '+(imported?'selected':'')+'>Importada / pendent de revisar</option><option value="Pagada" '+(/pagad|cobrat/i.test(doc?.status||'')?'selected':'')+'>Pagada</option><option value="Anul·lada" '+(/anul/i.test(doc?.status||'')?'selected':'')+'>Anul·lada</option>';
+  }
+  function financialFormHtml(doc,kind,jobId,budgetId){
+    const job=byId(data.jobs,jobId)||currentJob(jobId)||{};
+    const budget=budgetForJob(jobId,budgetId||doc?.budgetId);
+    const lines=invoiceLineRows(budget,doc);
+    const isNew=!doc?.id;
+    const id=doc?.id||uid(kind==='certificacio'?'CERT':'FAC');
+    const selectedJob=doc?.jobId||budget?.jobId||job.id||'';
+    const selectedClient=doc?.clientId||budget?.clientId||job.clientId||'';
+    const selectedBudget=doc?.budgetId||budget?.id||'';
+    const defaultNumber=doc?.number||nextFinancialNumber(kind,doc?.date||today());
+    const concept=doc?.concept||budget?.title||practicalKeyword(job,budget)||'';
+    const base=doc?.base||(!doc?.id?lines.reduce((sum,line)=>sum+num(line.qty)*num(line.unitPrice),0):0);
+    return '<div class="toolbar"><div><h2>'+ (isNew?(kind==='certificacio'?'Nova certificació':'Nova factura des del pressupost'):(kind==='certificacio'?'Editar certificació':'Editar factura'))+'</h2><p class="muted">'+(kind==='certificacio'?'La certificació queda relacionada amb l’obra i el pressupost.':'Les factures noves es guarden inicialment com a proforma; la factura definitiva/Verifactu es farà quan correspongui.')+'</p></div></div>'+ 
+      '<form id="v09139FinancialForm" class="form-grid" data-kind="'+esc(kind)+'" data-edit-id="'+esc(doc?.id||'')+'" data-doc-id="'+esc(id)+'"><input type="hidden" name="editId" value="'+esc(doc?.id||'')+'"><input type="hidden" name="docId" value="'+esc(id)+'">'+
+      '<label>Número / referència<input name="number" value="'+esc(defaultNumber)+'" required></label>'+ 
+      '<label>Data<input name="date" type="date" value="'+esc(doc?.date||today())+'" required></label>'+ 
+      '<label class="wide">Client<select name="clientId">'+clientOptions(selectedClient)+'</select></label>'+ 
+      '<label class="wide">Obra<select name="jobId"><option value="">Sense obra</option>'+options(data.jobs,selectedJob,j=>`${j.year||''} · ${practicalKeyword(j,null)}`)+'</select></label>'+ 
+      '<label class="wide">Pressupost<select name="budgetId"><option value="">Sense pressupost</option>'+options(data.budgets,selectedBudget,b=>`${b.number||b.id} · ${b.title||''}`)+'</select></label>'+ 
+      '<label class="wide">Concepte<input name="concept" value="'+esc(concept)+'" placeholder="Feines, administració, ampliació..."></label>'+ 
+      '<label>Estat<select name="documentState">'+financialStateOptions(kind,doc)+'</select></label>'+ 
+      '<label>IVA %<input name="iva" type="number" step="0.01" value="'+esc(doc?.iva??data.settings.defaultIVA)+'"></label>'+ 
+      (kind==='certificacio'?'<label>Percentatge certificat %<input name="percentage" type="number" step="0.01" value="'+esc(doc?.percentage||'')+'"></label>':'<label>Pagada<select name="paid"><option value="false" '+(!doc?.paid?'selected':'')+'>No</option><option value="true" '+(doc?.paid?'selected':'')+'>Sí</option></select></label>')+
+      '<label class="full">Base manual s/IVA <input name="base" type="number" step="0.01" value="'+esc(base)+'" placeholder="Si no hi ha línies detallades"></label>'+ 
+      '<div class="card full"><div class="toolbar"><div><h3>Feines a '+(kind==='certificacio'?'certificar':'facturar')+'</h3><p class="muted">Canvia les quantitats. Pots afegir una partida nova d’administració o una feina no prevista al pressupost.</p></div><button type="button" class="ghost" data-v09139-add-line>+ Afegir línia nova</button></div><div class="table-wrap"><table id="v09139InvoiceLines"><thead><tr><th>Concepte</th><th>Descripció</th><th>Ut.</th><th>Quant.</th><th>Preu/ut.</th><th>Total</th><th></th></tr></thead><tbody>'+lines.map(invoiceLineRowHtml).join('')+'</tbody></table></div><div class="budget-total">Base calculada: <strong id="v09139InvoiceBasePreview">'+money(base)+'</strong></div></div>'+ 
+      '<label class="full">Notes<textarea name="notes">'+esc(doc?.notes||'')+'</textarea></label>'+ 
+      '<div class="actions full"><button class="primary" type="submit">Guardar '+(kind==='certificacio'?'certificació':'factura')+'</button><button class="ghost" type="button" data-v09139-cancel-financial>Cancel·lar</button></div></form>';
+  }
+  function updateInvoiceLineTotals(){
+    let base=0;
+    document.querySelectorAll('#v09139InvoiceLines [data-v09139-invoice-line]').forEach(row=>{
+      const qty=num(row.querySelector('[data-v09139-line-field="qty"]')?.value);
+      const price=num(row.querySelector('[data-v09139-line-field="unitPrice"]')?.value);
+      base+=qty*price;
+      const total=row.querySelector('[data-v09139-line-total]'); if(total) total.textContent=money(qty*price);
+    });
+    const preview=document.getElementById('v09139InvoiceBasePreview');
+    if(preview) preview.textContent=money(base);
+  }
+  function addInvoiceLine(){
+    const tbody=document.querySelector('#v09139InvoiceLines tbody');
+    if(!tbody) return;
+    const line={id:uid('IL'),unit:'',concept:'Nova feina / administració',longDesc:'',qty:1,unitPrice:0};
+    tbody.insertAdjacentHTML('beforeend',invoiceLineRowHtml(line));
+    bindFinancialForm();
+    const last=tbody.lastElementChild?.querySelector('[data-v09139-line-field="concept"]'); last?.focus();
+  }
+  function collectInvoiceLines(){
+    return [...document.querySelectorAll('#v09139InvoiceLines [data-v09139-invoice-line]')].map(row=>({
+      id:row.dataset.lineId||uid('IL'),
+      concept:row.querySelector('[data-v09139-line-field="concept"]')?.value||'',
+      longDesc:row.querySelector('[data-v09139-line-field="longDesc"]')?.value||'',
+      unit:row.querySelector('[data-v09139-line-field="unit"]')?.value||'',
+      qty:num(row.querySelector('[data-v09139-line-field="qty"]')?.value),
+      unitPrice:num(row.querySelector('[data-v09139-line-field="unitPrice"]')?.value)
+    })).map(line=>({...line,total:Number((line.qty*line.unitPrice).toFixed(2))})).filter(line=>line.concept||line.longDesc||line.qty||line.unitPrice);
+  }
+  function saveFinancialFromFicha(event){
+    event.preventDefault();
+    const form=event.target;
+    const fields=formObj(form);
+    const kind=form.dataset.kind==='certificacio'?'certificacio':'factura';
+    const target=kind==='certificacio'?data.certifications:data.invoices;
+    const old=byId(target,fields.editId)||{};
+    const budget=byId(data.budgets,fields.budgetId);
+    const job=byId(data.jobs,fields.jobId||budget?.jobId);
+    const lines=collectInvoiceLines();
+    const lineBase=lines.reduce((sum,line)=>sum+line.total,0);
+    const base=lineBase>0?Number(lineBase.toFixed(2)):num(fields.base);
+    const iva=num(fields.iva);
+    const status=kind==='certificacio' ? (fields.documentState||'Pendent') : (fields.documentState==='Definitiva'?'Factura definitiva':fields.documentState==='Importada'?(old.status||'Importada · pendent de revisar'):fields.documentState==='Pagada'?'Pagada':fields.documentState==='Anul·lada'?'Anul·lada':'Proforma pendent');
+    const item={...old,id:fields.docId||old.id||uid(kind==='certificacio'?'CERT':'FAC'),kind,documentType:kind==='certificacio'?'certificacio':'factura',number:text(fields.number)||nextFinancialNumber(kind,fields.date),date:fields.date||today(),clientId:fields.clientId||budget?.clientId||job?.clientId||'',jobId:budget?.jobId||fields.jobId||'',budgetId:fields.budgetId||'',type:old.type||'Client',concept:text(fields.concept)||'Feines de l’obra',base,iva,total:Number((base*(1+iva/100)).toFixed(2)),paid:fields.paid==='true',proforma:kind==='factura'&&status==='Proforma pendent',status,percentage:kind==='certificacio'?num(fields.percentage):old.percentage||0,notes:fields.notes||'',lines,invoiceLines:lines,source:old.source||'Manual des de fitxa'};
+    if(item.budgetId && budget){ item.jobId=budget.jobId||item.jobId; item.clientId=budget.clientId||item.clientId; }
+    item.matchStatus=item.jobId||item.budgetId?'manual':'pendent';
+    item.matchConfidence=item.jobId||item.budgetId?100:0;
+    item.matchReason=item.jobId||item.budgetId?'Relació creada/validada des de la fitxa d’obra.':'Sense obra ni pressupost vinculats.';
+    const index=target.findIndex(existing=>existing.id===fields.editId||existing.id===item.id);
+    if(index>=0) target[index]=item; else target.push(item);
+    saveData();
+    const returnJob=state.v09139ReturnJobId||item.jobId||state.selectedJobId;
+    const returnTab=kind==='certificacio'?'certificacions':'factures';
+    if(returnJob) returnToJob(returnJob,returnTab); else { closeModal(); state.view='invoices'; render(); }
+  }
+  function bindFinancialForm(){
+    const form=document.getElementById('v09139FinancialForm');
+    if(form) form.onsubmit=saveFinancialFromFicha;
+    document.querySelectorAll('[data-v09139-cancel-financial]').forEach(button=>button.onclick=()=>{
+      const id=state.v09139ReturnJobId;
+      if(id) returnToJob(id,form?.dataset.kind==='certificacio'?'certificacions':'factures');
+      else closeModal();
+    });
+    document.querySelectorAll('[data-v09139-add-line]').forEach(button=>button.onclick=addInvoiceLine);
+    document.querySelectorAll('#v09139InvoiceLines input').forEach(input=>input.oninput=updateInvoiceLineTotals);
+    document.querySelectorAll('[data-v09139-remove-line]').forEach(button=>button.onclick=()=>{ button.closest('tr')?.remove(); updateInvoiceLineTotals(); });
+    updateInvoiceLineTotals();
+  }
+  function openFinancialEditor(id='',kind='factura',jobId='',budgetId=''){
+    let doc='';
+    if(id){ doc=kind==='certificacio'?byId(data.certifications,id):byId(data.invoices,id); if(!doc) return alert('No s’ha trobat el document.'); }
+    const resolvedJob=jobId||doc?.jobId||(hasOverlay()?state.selectedJobId:'')||'';
+    const resolvedBudget=budgetId||doc?.budgetId||'';
+    if(resolvedJob){ state.v09139ReturnJobId=resolvedJob; state.v09139ReturnJobTab=kind==='certificacio'?'certificacions':'factures'; }
+    openModal(financialFormHtml(doc,kind,resolvedJob,resolvedBudget));
+    bindFinancialForm();
+  }
+  function openInvoiceFromBudget(button,kind){
+    const budgetId=button.dataset.v09139BudgetId||'';
+    const budget=byId(data.budgets,budgetId);
+    if(!budget) return alert('No s’ha trobat el pressupost.');
+    state.v09139ReturnJobId=budget.jobId||state.selectedJobId||'';
+    state.v09139ReturnJobTab=kind==='certificacio'?'certificacions':'factures';
+    openFinancialEditor('',kind,budget.jobId||'',budget.id);
+  }
+  teimor09134OpenInvoiceEditor=function(id){ openFinancialEditor(id,'factura'); };
+
+  teimor09136BudgetsTab=function(model){
+    const actions='<div class="actions"><button class="primary small" data-v09139-new-budget-job="'+esc(model.job.id)+'">+ Afegir pressupost</button></div>';
+    if(!model.budgets.length) return '<div class="card"><div class="toolbar"><h3>Pressupostos</h3>'+actions+'</div>'+empty('Aquesta obra encara no té cap pressupost vinculat.')+'</div>';
+    return '<div class="card"><div class="toolbar"><div><h3>Pressupostos vinculats</h3><p class="muted">Des d’aquí pots editar el pressupost, facturar una part i certificar-ne una altra.</p></div>'+actions+'</div>'+table(['Any','Número','Data','Concepte','Estat','Base','Total','Acció'],model.budgets.map(budget=>'<tr><td>'+esc(budgetYear(budget)||model.year||'')+'</td><td><strong>'+esc(budget.number||budget.id)+'</strong></td><td>'+dateDisplay(budget.date)+'</td><td>'+esc(budget.title||budget.keyword||'')+'</td><td>'+statusPill(budget.status||'')+'</td><td class="num">'+money(budgetBase(budget))+'</td><td class="num">'+money(budgetTotal(budget))+'</td><td class="nowrap"><button class="ghost small" data-open-budget="'+esc(budget.id)+'">Obrir / editar</button> <button class="primary small" data-v09139-create-invoice data-v09139-budget-id="'+esc(budget.id)+'">Factura parcial</button> <button class="ghost small" data-v09139-create-cert data-v09139-budget-id="'+esc(budget.id)+'">Certificació</button></td></tr>'))+'</div>';
+  };
+  teimor09136InvoicesTab=function(model){
+    const newBudget=model.budgets[0];
+    const top='<div class="actions"><button class="primary small" data-v09139-new-invoice data-v09139-job-id="'+esc(model.job.id)+'"'+(newBudget?' data-v09139-budget-id="'+esc(newBudget.id)+'"':'')+'>+ Crear factura'+(newBudget?' des del pressupost':'')+'</button><button class="ghost small" data-v09139-import-invoice data-v09139-job-id="'+esc(model.job.id)+'">Importar factura existent</button></div>';
+    if(!model.invoices.length) return '<div class="card"><div class="toolbar"><div><h3>Factures</h3><p class="muted">Crea una factura parcial des del pressupost o importa una factura antiga i valida la relació.</p></div>'+top+'</div>'+empty('Aquesta obra encara no té cap factura vinculada.')+'</div>';
+    const rows=model.invoices.map(invoice=>'<tr><td>'+esc(dateDisplay(invoice.date))+'</td><td><strong>'+esc(invoice.number||invoice.id)+'</strong></td><td>'+esc(invoice.concept||'')+'</td><td><select data-v09136-invoice-job="'+esc(invoice.id)+'">'+teimor09136InvoiceJobOptions(model,invoice)+'</select></td><td><select data-v09136-invoice-budget="'+esc(invoice.id)+'">'+teimor09136InvoiceBudgetOptions(model,invoice)+'</select></td><td class="num">'+money(invoiceBase(invoice))+'</td><td class="num">'+money(invoiceTotal(invoice))+'</td><td class="nowrap"><button class="primary small" data-v09136-save-invoice="'+esc(invoice.id)+'">Guardar relació</button> <button class="ghost small" data-edit-invoice="'+esc(invoice.id)+'">Editar</button> <button class="ghost small" data-v09134-invoice-pdf="'+esc(invoice.id)+'">Veure PDF</button> <button class="ghost small" data-v09132-download-invoice="'+esc(invoice.id)+'">Descarregar factura</button></td></tr>');
+    return '<div class="card"><div class="toolbar"><div><h3>Factures vinculades</h3><p class="muted">La fitxa és el lloc de treball: editar, relacionar, previsualitzar i descarregar.</p></div>'+top+'</div>'+table(['Data','Número','Concepte','Obra','Pressupost','Base','Total','Acció'],rows)+'</div>';
+  };
+  teimor09136CertificationsTab=function(model){
+    const budget=model.budgets[0];
+    const top='<div class="actions"><button class="primary small" data-v09139-create-cert'+(budget?' data-v09139-budget-id="'+esc(budget.id)+'"':'')+'>+ Crear certificació parcial</button></div>';
+    const body=model.certifications.length?teimor0913TraceCertificationHtml(model.certifications):empty('Aquesta obra encara no té certificacions vinculades.');
+    return '<div class="card"><div class="toolbar"><div><h3>Certificacions</h3><p class="muted">Pots certificar només les quantitats que vulguis del pressupost.</p></div>'+top+'</div>'+body+(model.certifications.length?'<div class="table-wrap" style="margin-top:12px"><table><tbody>'+model.certifications.map(item=>'<tr><td>'+esc(item.number||item.id)+'</td><td><button class="ghost small" data-v09139-edit-cert="'+esc(item.id)+'">Editar</button></td></tr>').join('')+'</tbody></table></div>':'')+'</div>';
+  };
+
+  /* La fitxa no redirigeix a Arxius: guarda el fitxer i el relaciona amb
+     l’obra. En un albarà, la detecció inicial del material surt del nom del
+     fitxer i queda editable a Temps i materials. */
+  function detectMaterialFromAttachment(meta){
+    if(!/albar[aà]n|entrega|delivery/i.test(meta.category||meta.name||'')) return;
+    const exists=data.materials.some(item=>item.attachmentId===meta.id);
+    if(exists) return;
+    const name=text(meta.name||'Albarà').replace(/\.[^.]+$/,'').replace(/[_-]+/g,' ');
+    data.materials.push({id:uid('MAT'),jobId:meta.jobId||'',attachmentId:meta.id,name,concept:name,unit:'ud',qty:1,unitPrice:0,total:0,source:'Albarà detectat',status:'Pendent de completar',notes:'Detectat pel nom de l’albarà; revisa material, quantitat i preu.'});
+  }
+  async function saveJobAttachment(event){
+    event.preventDefault();
+    const form=event.target;
+    const file=form.querySelector('[name="file"]')?.files?.[0];
+    if(!file) return alert('Selecciona un arxiu.');
+    const fields=formObj(form);
+    const id=uid('ARX');
+    const include=fields.includeInJson==='true';
+    const meta={id,name:file.name,type:file.type,size:file.size,category:fields.category||'Albarà',clientId:fields.clientId||byId(data.jobs,fields.jobId)?.clientId||'',jobId:fields.jobId||'',budgetId:fields.budgetId||'',includeInJson:include,notes:fields.notes||'',createdAt:new Date().toISOString()};
+    const dataUrl=include?await fileToDataUrl(file):'';
+    await idbPut({id,blob:file,dataUrl,meta});
+    data.attachments.push(meta); detectMaterialFromAttachment(meta); saveData();
+    returnToJob(meta.jobId,form.dataset.onlyAlbarans==='1'?'albarans':'documentacio');
+  }
+  async function deleteJobAttachment(id,jobId,tab){
+    if(!confirm('Eliminar aquest arxiu de l’obra?')) return;
+    data.attachments=data.attachments.filter(item=>item.id!==id);
+    data.materials=data.materials.filter(item=>item.attachmentId!==id);
+    try{ await idbDelete(id); }catch(error){ console.warn(error); }
+    saveData(); returnToJob(jobId,tab);
+  }
+  function fichaAttachmentForm(model,onlyAlbarans){
+    const category=onlyAlbarans?'Albarà':'Albarà';
+    return '<div class="card-tight notice-blue" style="margin-bottom:12px">'+(onlyAlbarans?'Adjunta l’albarà aquí. La fitxa el relaciona amb l’obra i crea una línia de material pendent de revisar.':'Pots adjuntar documentació de l’obra sense sortir de la fitxa.')+'</div><form id="v09139AttachmentForm" class="form-grid" data-job-id="'+esc(model.job.id)+'" data-only-albarans="'+(onlyAlbarans?'1':'0')+'"><input type="hidden" name="jobId" value="'+esc(model.job.id)+'"><input type="hidden" name="clientId" value="'+esc(model.job.clientId||'')+'">'+(onlyAlbarans?'<input type="hidden" name="category" value="Albarà">':'<label>Categoria<select name="category"><option>Albarà</option><option>Factura</option><option>Pressupost original</option><option>Foto</option><option>Altres</option></select></label>')+'<label class="wide">Arxiu<input name="file" type="file" required></label><label>Incloure al JSON<select name="includeInJson"><option value="false">No, només referència local</option><option value="true">Sí, còpia transferible</option></select></label><label class="wide">Pressupost relacionat<select name="budgetId"><option value="">Sense pressupost</option>'+options(model.budgets,'',b=>`${b.number||b.id} · ${b.title||''}`)+'</select></label><label class="full">Notes / material que hi veus<textarea name="notes" placeholder="Ex.: rajola 60x60, sacs de morter..."></textarea></label><div class="actions full"><button class="primary">Guardar arxiu a l’obra</button></div></form>';
+  }
+  teimor09136DocumentsTab=function(model,onlyAlbarans=false){
+    const rows=(model.attachments||[]).filter(item=>!onlyAlbarans||/albar[aà]n|entrega|delivery/i.test([item.name,item.category,item.type,item.notes].filter(Boolean).join(' ')));
+    const list=rows.length?table(['Nom','Categoria','Mida','Notes','Acció'],rows.map(item=>'<tr><td><strong>'+esc(item.name||item.id)+'</strong></td><td>'+esc(item.category||'')+'</td><td class="num">'+(num(item.size)/1024).toFixed(1)+' KB</td><td>'+esc(item.notes||'')+'</td><td class="nowrap"><button class="ghost small" data-download-attachment="'+esc(item.id)+'">Obrir</button> <button class="danger small" data-v09139-delete-attachment="'+esc(item.id)+'" data-v09139-job-id="'+esc(model.job.id)+'">Eliminar</button></td></tr>')):empty(onlyAlbarans?'No hi ha albarans vinculats a aquesta obra.':'No hi ha documentació vinculada a aquesta obra.');
+    return '<div class="card"><div class="toolbar"><div><h3>'+(onlyAlbarans?'Albarans':'Documentació de l’obra')+'</h3><p class="muted">Gestiona els arxius des d’aquesta fitxa.</p></div></div>'+fichaAttachmentForm(model,onlyAlbarans)+'</div><div class="card"><h3>Arxius vinculats</h3>'+list+'</div>';
+  };
+
+  function saveHour(event){
+    event.preventDefault();
+    const fields=formObj(event.target);
+    const item={id:uid('HRS'),jobId:fields.jobId,date:fields.date||today(),officialHours:num(fields.officialHours),officialRate:num(fields.officialRate),laborerHours:num(fields.laborerHours),laborerRate:num(fields.laborerRate),hours:num(fields.officialHours)+num(fields.laborerHours),total:Number((num(fields.officialHours)*num(fields.officialRate)+num(fields.laborerHours)*num(fields.laborerRate)).toFixed(2)),concept:fields.concept||'Jornada d’obra',notes:fields.notes||'',status:'Manual'};
+    data.hores.push(item); saveData(); returnToJob(item.jobId,'temps');
+  }
+  function saveMaterial(event){
+    event.preventDefault();
+    const fields=formObj(event.target);
+    const item={id:uid('MAT'),jobId:fields.jobId,concept:fields.concept||'Material',name:fields.concept||'Material',unit:fields.unit||'ud',qty:num(fields.qty),unitPrice:num(fields.unitPrice),total:Number((num(fields.qty)*num(fields.unitPrice)).toFixed(2)),source:fields.source||'Manual',notes:fields.notes||'',status:'Manual'};
+    data.materials.push(item); saveData(); returnToJob(item.jobId,'temps');
+  }
+  function detectJobMaterials(jobId){
+    data.attachments.filter(item=>item.jobId===jobId&&/albar[aà]n|entrega|delivery/i.test([item.name,item.category,item.notes].join(' '))).forEach(detectMaterialFromAttachment);
+    saveData(); returnToJob(jobId,'temps');
+  }
+  async function deleteHour(id,jobId){ if(!confirm('Eliminar aquesta imputació d’hores?')) return; data.hores=data.hores.filter(item=>item.id!==id); saveData(); returnToJob(jobId,'temps'); }
+  async function deleteMaterial(id,jobId){ if(!confirm('Eliminar aquest material?')) return; data.materials=data.materials.filter(item=>item.id!==id); saveData(); returnToJob(jobId,'temps'); }
+  teimor09136TimeMaterialsTab=function(model){
+    const officialRate=num(model.job.officialRate)||num(data.settings.officialHourRate)||31;
+    const laborerRate=num(model.job.laborerRate)||num(data.settings.laborerHourRate)||27;
+    const hours=model.hours||[];
+    const materials=(model.materials||[]).filter(item=>item.attachmentId||item.source||item.name||item.concept).slice(0,200);
+    const hourRows=hours.length?table(['Data','Concepte','Oficial h','Manobre h','Total','Acció'],hours.map(item=>'<tr><td>'+esc(dateDisplay(item.date))+'</td><td>'+esc(item.concept||item.title||item.notes||'')+'</td><td class="num">'+num(item.officialHours||0).toFixed(2)+' · '+money(item.officialRate||0)+'</td><td class="num">'+num(item.laborerHours||0).toFixed(2)+' · '+money(item.laborerRate||0)+'</td><td class="num">'+money(item.total||item.cost||0)+'</td><td><button class="danger small" data-v09139-delete-hour="'+esc(item.id)+'" data-v09139-job-id="'+esc(model.job.id)+'">Eliminar</button></td></tr>')):empty('Encara no hi ha jornades imputades.');
+    const matRows=materials.length?table(['Origen','Material','Ut.','Quantitat','Preu/ut.','Total','Acció'],materials.map(item=>'<tr><td>'+esc(item.sourceBudget||item.source||item.attachmentId||'')+'</td><td>'+esc(item.concept||item.name||'')+'</td><td>'+esc(item.unit||'')+'</td><td class="num">'+num(item.qty||item.quantity||0).toFixed(3)+'</td><td class="num">'+money(item.unitPrice||item.price||0)+'</td><td class="num">'+money(item.total||lineTotal(item))+'</td><td>'+(item.id&&data.materials.some(candidate=>candidate.id===item.id)?'<button class="danger small" data-v09139-delete-material="'+esc(item.id)+'" data-v09139-job-id="'+esc(model.job.id)+'">Eliminar</button>':'')+'</td></tr>')):empty('Encara no hi ha materials separats.');
+    return '<div class="grid two"><div class="card"><div class="toolbar"><div><h3>Imputació de temps</h3><p class="muted">Preus per defecte: oficial '+money(officialRate)+'/h · manobre '+money(laborerRate)+'/h. Els pots canviar per obra o a Configuració.</p></div></div><form id="v09139HourForm" class="form-grid" data-job-id="'+esc(model.job.id)+'"><input type="hidden" name="jobId" value="'+esc(model.job.id)+'"><label>Dia treballat<input name="date" type="date" value="'+today()+'" required></label><label class="wide">Concepte<input name="concept" value="Jornada d’obra"></label><label>Hores oficial<input name="officialHours" type="number" step="0.25" min="0" value="0"></label><label>Preu/h oficial<input name="officialRate" type="number" step="0.01" min="0" value="'+esc(officialRate)+'"></label><label>Hores manobre<input name="laborerHours" type="number" step="0.25" min="0" value="0"></label><label>Preu/h manobre<input name="laborerRate" type="number" step="0.01" min="0" value="'+esc(laborerRate)+'"></label><label class="full">Notes<textarea name="notes"></textarea></label><div class="actions full"><button class="primary">Afegir jornada</button></div></form>'+hourRows+'</div><div class="card"><div class="toolbar"><div><h3>Materials</h3><p class="muted">Els albarans creen una línia pendent a revisar; completa-la aquí.</p></div><button class="ghost small" type="button" data-v09139-detect-materials="'+esc(model.job.id)+'">Detectar albarans</button></div><form id="v09139MaterialForm" class="form-grid" data-job-id="'+esc(model.job.id)+'"><input type="hidden" name="jobId" value="'+esc(model.job.id)+'"><label class="wide">Material / concepte<input name="concept" required placeholder="Rajola, morter, làmina..."></label><label>Unitat<input name="unit" value="ud"></label><label>Quantitat<input name="qty" type="number" step="0.001" min="0" value="1"></label><label>Preu/ut. €<input name="unitPrice" type="number" step="0.01" min="0" value="0"></label><label class="wide">Origen<input name="source" placeholder="Albarà núm. / proveïdor"></label><label class="full">Notes<textarea name="notes"></textarea></label><div class="actions full"><button class="primary">Afegir material</button></div></form>'+matRows+'</div></div>';
+  };
+
+  /* Ajustos horaris visibles també a Configuració. */
+  const baseRenderSettingsV09139=renderSettings;
+  renderSettings=function(){
+    baseRenderSettingsV09139();
+    const content=document.getElementById('content');
+    if(!content) return;
+    content.insertAdjacentHTML('beforeend','<div class="card"><h2>Preus hora per defecte</h2><p class="muted">S’utilitzen en les noves imputacions de temps. A cada obra es poden substituir.</p><form id="v09139RatesForm" class="form-grid"><label>Oficial €/h<input name="officialHourRate" type="number" step="0.01" min="0" value="'+esc(data.settings.officialHourRate||31)+'"></label><label>Manobre / ajudant €/h<input name="laborerHourRate" type="number" step="0.01" min="0" value="'+esc(data.settings.laborerHourRate||27)+'"></label><div class="actions full"><button class="primary">Guardar preus hora</button></div></form></div>');
+    const form=document.getElementById('v09139RatesForm');
+    if(form) form.onsubmit=event=>{ event.preventDefault(); const fields=formObj(form); data.settings.officialHourRate=num(fields.officialHourRate); data.settings.laborerHourRate=num(fields.laborerHourRate); saveData(); alert('Preus hora guardats.'); renderSettings(); };
+  };
+
+  /* Importació financera des de la fitxa: reutilitza el lector existent, però
+     el preview i la confirmació continuen dins del modal de l’obra. */
+  function openInvoiceImport(jobId){
+    state.financialDraft=null;
+    state.v09139ImportContext={jobId,kind:'factura',prepared:false};
+    openModal('<h2>Importar factura existent a aquesta obra</h2><p class="muted">Selecciona l’Excel/CSV o ZIP. Després podràs validar el client, obra i pressupost abans de confirmar.</p><div class="filter-grid"><label>Tipus<select id="v0913FinancialKind"><option value="factura" selected>Factura</option><option value="certificacio">Certificació</option></select></label></div><label class="primary file-label" style="display:inline-block">Seleccionar factures<input id="v09139FichaInvoiceInput" type="file" multiple accept=".xls,.xlsx,.xlsm,.csv,.zip,.rar" hidden></label><div id="v09139FichaImportStatus" class="small-text" style="margin-top:12px">Encara no s’ha llegit cap fitxer.</div>');
+    const input=document.getElementById('v09139FichaInvoiceInput');
+    if(input) input.onchange=event=>handleFinancialImportV0913([...event.target.files]);
+  }
+  const baseHandleFinancialV09139=handleFinancialImportV0913;
+  handleFinancialImportV0913=async function(files){
+    await baseHandleFinancialV09139(files);
+    const draft=state.financialDraft;
+    if(!draft) return;
+    const direct=new Map((files||[]).map(file=>[file.webkitRelativePath||file.name,file]));
+    draft.documents.forEach(doc=>{
+      const file=direct.get(doc.sourceFile)||direct.get(teimor0913SourceName(doc.sourceFile));
+      if(file && typeof teimor09132RememberSource==='function') teimor09132RememberSource(doc,{name:file.name,blob:file});
+    });
+    if(state.v09139ImportContext) renderImporter();
+  };
+  const baseRenderImporterV09139=renderImporter;
+  renderImporter=function(){
+    const context=state.v09139ImportContext;
+    if(context && state.financialDraft){
+      const draft=state.financialDraft;
+      if(!context.prepared){
+        const job=byId(data.jobs,context.jobId);
+        draft.documents.forEach(doc=>{
+          if(!doc.jobId) doc.jobId=context.jobId;
+          if(job && !doc.clientId) doc.clientId=job.clientId||'';
+          if(!doc.jobId) return;
+          doc.matchStatus=doc.matchStatus==='automatica'?'automatica':'manual';
+          doc.matchReason=doc.matchReason||'Importada des de la fitxa de l’obra; validar abans de confirmar.';
+        });
+        context.prepared=true;
+      }
+      let preview=teimor0913FinancialPreviewHtml(draft);
+      preview=preview.replace('<button class="ghost" data-go="obres">Veure obres</button>','<button class="ghost" data-v09139-cancel-import>Cancel·lar</button>');
+      openModal('<div class="notice-blue card-tight"><strong>Importació dins de la fitxa:</strong> revisa les coincidències i confirma només quan el número, client i pressupost siguin correctes.</div>'+preview);
+      document.querySelectorAll('[data-v0913-financial-field]').forEach(field=>field.onchange=updateFinancialDraftFieldV0913);
+      const confirm=document.getElementById('v0913ConfirmFinancialImport'); if(confirm) confirm.onclick=confirmFinancialImportV0913;
+      const cancel=document.getElementById('v0913DiscardFinancialImport'); if(cancel) cancel.onclick=discardFinancialImportV0913;
+      document.querySelectorAll('[data-v09139-cancel-import]').forEach(button=>button.onclick=()=>discardFinancialImportV0913());
+      return;
+    }
+    return baseRenderImporterV09139();
+  };
+  const baseConfirmFinancialV09139=confirmFinancialImportV0913;
+  confirmFinancialImportV0913=async function(){
+    const context=state.v09139ImportContext;
+    await baseConfirmFinancialV09139();
+    if(context){
+      state.v09139ImportContext=null;
+      returnToJob(context.jobId,'factures');
+    }
+  };
+  const baseDiscardFinancialV09139=discardFinancialImportV0913;
+  discardFinancialImportV0913=function(){
+    const context=state.v09139ImportContext;
+    if(context){ state.financialDraft=null; state.v09139ImportContext=null; returnToJob(context.jobId,'factures'); return; }
+    return baseDiscardFinancialV09139();
+  };
+
+  /* Impressió comercial: mostra les línies de factura i només les
+     referències útils d’obra/pressupost, no missatges interns de relació. */
+  openInvoicePreview=function(id){
+    const invoice=byId(data.invoices,id);
+    if(!invoice) return alert('No s’ha trobat aquesta factura.');
+    const budget=teimor09135InvoiceBudget(invoice)||{};
+    const job=teimor09135InvoiceJob(invoice,budget)||{};
+    const client=byId(data.clients,invoice.clientId)||{};
+    const snapshot=invoice.clientSnapshot||{};
+    const settings=data.settings.contractista||{};
+    const name=client.name||snapshot.name||'Client pendent de revisar';
+    const nif=client.nif||snapshot.nif||'';
+    const fiscal=[client.fiscalAddress||snapshot.fiscalAddress,client.postalCode||snapshot.postalCode,client.city||snapshot.city].filter(Boolean).join(' · ');
+    const keyword=practicalKeyword(job,budget);
+    const address=workAddress(job,budget);
+    const city=workCity(job,budget);
+    const lines=safeArray(invoice.lines||invoice.invoiceLines);
+    const rows=lines.length?lines.map(line=>'<tr><td><strong>'+esc(line.concept||'')+'</strong>'+(line.longDesc?'<div class="preview-desc">'+esc(line.longDesc)+'</div>':'')+'</td><td class="num">'+esc(line.qty??'')+'</td><td>'+esc(line.unit||'')+'</td><td class="num">'+money(line.unitPrice)+'</td><td class="num">'+money(line.total||num(line.qty)*num(line.unitPrice))+'</td></tr>').join(''):'<tr><td><strong>'+esc(invoice.concept||'Factura')+'</strong></td><td class="num">1</td><td>ud</td><td class="num">'+money(invoiceBase(invoice))+'</td><td class="num">'+money(invoiceBase(invoice))+'</td></tr>';
+    const html='<div class="preview-toolbar actions"><button class="primary" onclick="window.print()">Imprimir / guardar PDF</button><button class="ghost" onclick="window.close()">Tancar</button></div><div class="a4-sheet"><div class="preview-colorbar"></div><div class="preview-header"><div><h1>'+esc(settings.name||'TEIMOR')+'</h1><p>'+esc(settings.nif||'')+'<br>'+esc(settings.address||'')+'<br>'+esc(settings.city||'')+'<br>'+esc(settings.phone||'')+'</p></div><div class="client-box"><span>Client</span><strong>'+esc(name)+'</strong><br>'+esc(nif)+'<br>'+esc(fiscal)+'</div></div><div class="preview-meta"><div><strong>Data:</strong> '+dateDisplay(invoice.date)+'</div><div><strong>Factura:</strong> '+esc(invoice.number||invoice.id)+'</div><div><strong>Estat:</strong> '+esc(invoice.status||'Proforma pendent')+'</div></div><div style="border:1px solid #fed7aa;border-left:5px solid #c2410c;background:#fff7ed;padding:8px 10px;margin:0 0 8mm;font-size:12px"><div><strong>Referència d’obra:</strong> '+esc(keyword)+'</div>'+(address||city?'<div><strong>Adreça de l’obra:</strong> '+esc([address,city].filter(Boolean).join(' · '))+'</div>':'')+(budget.number?'<div><strong>Pressupost:</strong> '+esc(budget.number)+'</div>':'')+'</div><h2>'+esc(invoice.concept||keyword||'Factura')+'</h2><table class="preview-table"><thead><tr><th>Concepte / descripció</th><th>Quant.</th><th>Ut.</th><th>Preu/ut.</th><th>Total</th></tr></thead><tbody>'+rows+'</tbody></table><div class="preview-totals"><div>Base s/IVA: <strong>'+money(invoiceBase(invoice))+'</strong></div><div>IVA '+num(invoice.iva).toFixed(2)+'%: <strong>'+money(invoiceTotal(invoice)-invoiceBase(invoice))+'</strong></div><div>Total: <strong>'+money(invoiceTotal(invoice))+'</strong></div></div>'+(teimor09135PrintableNotes(invoice)?'<div class="preview-notes">'+esc(teimor09135PrintableNotes(invoice))+'</div>':'')+'</div>';
+    const w=window.open('', '_blank');
+    if(!w) return alert('El navegador ha bloquejat la finestra de previsualització. Permet finestres emergents per aquesta app.');
+    w.document.write('<!doctype html><html lang="ca"><head><meta charset="utf-8"><title>Factura '+esc(invoice.number||invoice.id)+'</title><style>'+previewCss()+'</style></head><body>'+html+'</body></html>');
+    w.document.close();
+  };
+
+  /* Accions que es perden quan la fitxa passa al modal: es tornen a lligar
+     sempre després de cada render. */
+  const baseRenderObresV09139=teimor09136RenderObres;
+  teimor09136RenderObres=function(prepareData){
+    const result=baseRenderObresV09139(prepareData);
+    const scope=document.getElementById('v09137JobOverlay')||document;
+    scope.querySelectorAll?.('[data-edit-job]').forEach(button=>button.onclick=event=>{event.preventDefault();event.stopPropagation();openJobEditor(button.dataset.editJob);});
+    scope.querySelectorAll?.('[data-open-budget]').forEach(button=>button.onclick=event=>{event.preventDefault();event.stopPropagation();openBudgetModal(button.dataset.openBudget);});
+    scope.querySelectorAll?.('[data-edit-invoice]').forEach(button=>button.onclick=event=>{event.preventDefault();event.stopPropagation();openFinancialEditor(button.dataset.editInvoice,'factura');});
+    scope.querySelectorAll?.('[data-v09139-edit-cert]').forEach(button=>button.onclick=event=>{event.preventDefault();event.stopPropagation();openFinancialEditor(button.dataset.v09139EditCert,'certificacio');});
+    scope.querySelectorAll?.('[data-v09139-new-budget-job]').forEach(button=>button.onclick=()=>{state.v09139ReturnJobId=button.dataset.v09139NewBudgetJob;state.v09139ReturnJobTab='pressupost';openBudgetModal('__new');});
+    scope.querySelectorAll?.('[data-v09139-create-invoice]').forEach(button=>button.onclick=()=>openInvoiceFromBudget(button,'factura'));
+    scope.querySelectorAll?.('[data-v09139-create-cert]').forEach(button=>button.onclick=()=>openInvoiceFromBudget(button,'certificacio'));
+    scope.querySelectorAll?.('[data-v09139-new-invoice]').forEach(button=>button.onclick=()=>openFinancialEditor('', 'factura',button.dataset.v09139JobId||state.selectedJobId,button.dataset.v09139BudgetId||''));
+    scope.querySelectorAll?.('[data-v09139-import-invoice]').forEach(button=>button.onclick=()=>openInvoiceImport(button.dataset.v09139JobId||state.selectedJobId));
+    scope.querySelectorAll?.('[data-v09139-create-cert]:not([data-v09139-budget-id])').forEach(button=>button.onclick=()=>openFinancialEditor('', 'certificacio',state.selectedJobId,''));
+    scope.querySelectorAll?.('[data-v09136-save-invoice]').forEach(button=>button.onclick=event=>{event.preventDefault();const row=button.closest('tr');teimor09136SaveInvoiceRelation(button.dataset.v09136SaveInvoice,row);});
+    scope.querySelectorAll?.('[data-v09139AttachmentForm],#v09139AttachmentForm').forEach(form=>form.onsubmit=saveJobAttachment);
+    const attachmentForm=scope.querySelector?.('#v09139AttachmentForm'); if(attachmentForm) attachmentForm.onsubmit=saveJobAttachment;
+    scope.querySelectorAll?.('[data-download-attachment]').forEach(button=>button.onclick=()=>downloadAttachment(button.dataset.downloadAttachment));
+    scope.querySelectorAll?.('[data-v09139-delete-attachment]').forEach(button=>button.onclick=()=>deleteJobAttachment(button.dataset.v09139DeleteAttachment,button.dataset.v09139JobId,state.obresJobTab||'documentacio'));
+    const hourForm=scope.querySelector?.('#v09139HourForm'); if(hourForm) hourForm.onsubmit=saveHour;
+    const materialForm=scope.querySelector?.('#v09139MaterialForm'); if(materialForm) materialForm.onsubmit=saveMaterial;
+    scope.querySelectorAll?.('[data-v09139-detect-materials]').forEach(button=>button.onclick=()=>detectJobMaterials(button.dataset.v09139DetectMaterials));
+    scope.querySelectorAll?.('[data-v09139-delete-hour]').forEach(button=>button.onclick=()=>deleteHour(button.dataset.v09139DeleteHour,button.dataset.v09139JobId));
+    scope.querySelectorAll?.('[data-v09139-delete-material]').forEach(button=>button.onclick=()=>deleteMaterial(button.dataset.v09139DeleteMaterial,button.dataset.v09139JobId));
+    return result;
+  };
+  renderObresV0913=function(){
+    try{ return teimor09136RenderObres(false); }
+    catch(error){ console.error('No s’ha pogut obrir la fitxa d’obra:',error); return teimor09132RenderObresFallback(error); }
+  };
+
+  /* Inici més net: els accessos ja són al menú lateral; aquí només queden
+     els indicadors i les dades recents. */
+  renderDashboard=function(){
+    ensureShape();
+    setHeader('Inici','Resum ràpid. El menú lateral és el punt únic d’accés a cada àrea.');
+    const totalBudget=data.budgets.reduce((sum,item)=>sum+budgetBase(item),0);
+    const totalInvoice=data.invoices.reduce((sum,item)=>sum+invoiceTotal(item),0);
+    const recentJobs=[...data.jobs].sort((a,b)=>Number(b.year||0)-Number(a.year||0)).slice(0,8);
+    setContent('<div class="grid four"><div class="kpi"><span>Clients</span><strong>'+data.clients.length+'</strong></div><div class="kpi"><span>Obres</span><strong>'+data.jobs.length+'</strong></div><div class="kpi"><span>Pressupostos</span><strong>'+data.budgets.length+'</strong></div><div class="kpi"><span>Factures</span><strong>'+data.invoices.length+'</strong></div></div><div class="card notice-blue"><strong>Flux recomanat:</strong> entra a <strong>Obres</strong>, obre una fitxa i treballa-hi el pressupost, les factures, certificacions, albarans, hores, materials i notes. Les pantalles del menú queden per als llistats i filtres globals.</div><div class="grid two"><div class="card"><h2>Resum econòmic</h2><p>Pressupostat s/IVA: <strong>'+money(totalBudget)+'</strong><br>Facturat IVA inclòs: <strong>'+money(totalInvoice)+'</strong><br>Partides de llibreria de referència: <strong>'+data.library.length+'</strong></p></div><div class="card"><h2>Obres recents</h2>'+table(['Any','Identificació','Client','Acció'],recentJobs.map(job=>'<tr><td>'+esc(job.year||'')+'</td><td><strong>'+esc(practicalKeyword(job,null))+'</strong><br><span class="muted">'+esc([workAddress(job,null),workCity(job,null)].filter(Boolean).join(' · '))+'</span></td><td>'+esc(clientName(job.clientId)||'Client pendent')+'</td><td><button class="primary small" data-v09139-dashboard-job="'+esc(job.id)+'">Obrir fitxa</button></td></tr>'))+'</div></div>');
+    document.querySelectorAll('[data-v09139-dashboard-job]').forEach(button=>button.onclick=()=>{state.view='obres';state.selectedJobId=button.dataset.v09139DashboardJob;render();});
+  };
+
+  /* Obres és una pestanya real, no només un botó que canvia la vista. */
+  const baseRenderV09139=render;
+  render=function(){
+    ensureShape();
+    document.querySelectorAll('#tabs button').forEach(button=>button.classList.toggle('active',button.dataset.view===state.view));
+    const result=baseRenderV09139();
+    document.querySelectorAll('#tabs button').forEach(button=>button.classList.toggle('active',button.dataset.view===state.view));
+    return result;
+  };
+
+  /* Delegació final per als controls creats dins de la fitxa. */
+  const baseBindViewEventsV09139=bindViewEvents;
+  bindViewEvents=function(){
+    baseBindViewEventsV09139();
+    document.querySelectorAll('[data-v09139-dashboard-job]').forEach(button=>button.onclick=()=>{state.view='obres';state.selectedJobId=button.dataset.v09139DashboardJob;render();});
+    document.querySelectorAll('[data-v09139-create-cert]:not([data-v09139-budget-id])').forEach(button=>button.onclick=()=>openFinancialEditor('', 'certificacio',state.selectedJobId,''));
+  };
+
+  data.meta.version=VERSION;
+  saveData();
+})();
+
+/* =========================================================
    TEIMOR V09.13.8 · FILTRES D’ANY, FITXERS ORIGINALS I PDF
    - Els botons d’anys sincronitzen també el selector intern.
    - Factures incorpora el mateix selector ràpid d’anys que Obres.
@@ -8930,3 +9535,54 @@ renderObresV0913=function(){
   catch(error){ console.error('No s’ha pogut obrir la fitxa d’obra:',error); return teimor09132RenderObresFallback(error); }
 };
 teimor09132RenderObresSafe=function(){ return renderObresV0913(); };
+
+/* V09.13.8 és un bloc històric que es carrega abans d’aquest tancament final
+   i torna a embolcallar alguns listeners. Aquestes assignacions són la capa
+   definitiva perquè la versió activa sigui sempre la V09.13.9. */
+(function(){
+  const baseJobFichaV09139=teimor09136JobFicha;
+  teimor09136JobFicha=function(model){
+    const tabs=[['resum','Resum'],['pressupost','Pressupostos'],['factures','Factures'],['certificacions','Certificacions'],['documentacio','Documentació'],['albarans','Albarans'],['notes','Notes'],['temps','Temps i materials'],['rendiment','Rendiment']];
+    const tab=tabs.some(item=>item[0]===state.obresJobTab)?state.obresJobTab:'resum';
+    let body=teimor09136SummaryTab(model);
+    if(tab==='pressupost') body=teimor09136BudgetsTab(model);
+    if(tab==='factures') body=teimor09136InvoicesTab(model);
+    if(tab==='certificacions') body=teimor09136CertificationsTab(model);
+    if(tab==='documentacio') body=teimor09136DocumentsTab(model,false);
+    if(tab==='albarans') body=teimor09136DocumentsTab(model,true);
+    if(tab==='notes') body=teimor09136NotesTab(model);
+    if(tab==='temps') body=teimor09136TimeMaterialsTab(model);
+    if(tab==='rendiment') body=teimor09136PerformanceTab(model);
+    return '<div class="card" id="v09136JobFicha"><div class="toolbar"><div><h2>Fitxa d’obra: '+esc(model.keyword||'Obra sense nom')+'</h2><p class="muted">'+esc(clientName(model.job.clientId)||'Client pendent')+' · '+esc([model.address,model.city].filter(Boolean).join(' · ')||'Adreça pendent')+'</p></div><div class="actions"><button class="ghost" data-edit-job="'+esc(model.job.id)+'">Editar obra</button><button class="ghost" data-v09136-close-job>Tancar fitxa</button></div></div><div class="job-detail-tabs">'+tabs.map(item=>'<button class="'+(tab===item[0]?'active':'')+'" data-v09136-job-tab="'+item[0]+'">'+item[1]+'</button>').join('')+'</div><div style="margin-top:14px">'+body+'</div></div>';
+  };
+
+  const baseConfirmFinancialV09139Final=confirmFinancialImportV0913;
+  confirmFinancialImportV0913=async function(){
+    const context=state.v09139ImportContext;
+    await baseConfirmFinancialV09139Final();
+    if(context){
+      state.v09139ImportContext=null;
+      returnToJob(context.jobId,'factures');
+    }
+  };
+  const baseDownloadInvoiceV09139Final=downloadInvoiceFileV09132;
+  downloadInvoiceFileV09132=async function(id){
+    const invoice=byId(data.invoices,id);
+    if(!invoice) return alert('No s’ha trobat la factura.');
+    if(invoice.attachmentId) return baseDownloadInvoiceV09139Final(id);
+    const budget=byId(data.budgets,invoice.budgetId)||{};
+    const job=byId(data.jobs,invoice.jobId)||byId(data.jobs,budget.jobId)||{};
+    const client=byId(data.clients,invoice.clientId)||{};
+    const rows=(invoice.lines||invoice.invoiceLines||[]).length?(invoice.lines||invoice.invoiceLines).map(line=>'<tr><td>'+esc(line.concept||'')+'</td><td>'+esc(line.unit||'')+'</td><td>'+esc(line.qty||'')+'</td><td>'+money(line.unitPrice)+'</td><td>'+money(line.total||num(line.qty)*num(line.unitPrice))+'</td></tr>').join(''):'<tr><td>'+esc(invoice.concept||'Factura')+'</td><td>ud</td><td>1</td><td>'+money(invoiceBase(invoice))+'</td><td>'+money(invoiceBase(invoice))+'</td></tr>';
+    const html='<!doctype html><html lang="ca"><head><meta charset="utf-8"><title>Factura '+esc(invoice.number||invoice.id)+'</title><style>'+previewCss()+'</style></head><body><div class="preview-toolbar actions"><button class="primary" onclick="window.print()">Imprimir / guardar PDF</button></div><div class="a4-sheet"><div class="preview-colorbar"></div><h1>Factura '+esc(invoice.number||invoice.id)+'</h1><p><strong>Client:</strong> '+esc(client.name||invoice.clientSnapshot?.name||'Client pendent')+'<br><strong>Obra:</strong> '+esc(job.keyword||job.title||budget.title||'')+' · '+esc(job.address||job.workAddress||'')+'<br><strong>Pressupost:</strong> '+esc(budget.number||'')+'<br><strong>Data:</strong> '+dateDisplay(invoice.date)+'</p><table class="preview-table"><thead><tr><th>Concepte</th><th>Ut.</th><th>Quant.</th><th>Preu/ut.</th><th>Total</th></tr></thead><tbody>'+rows+'</tbody></table><div class="preview-totals"><div>Base s/IVA: <strong>'+money(invoiceBase(invoice))+'</strong></div><div>IVA '+num(invoice.iva).toFixed(2)+'%: <strong>'+money(invoiceTotal(invoice)-invoiceBase(invoice))+'</strong></div><div>Total: <strong>'+money(invoiceTotal(invoice))+'</strong></div></div></div></body></html>';
+    const blob=new Blob([html],{type:'text/html;charset=utf-8'});
+    const url=URL.createObjectURL(blob); const link=document.createElement('a'); link.href=url; link.download='factura_'+(invoice.number||invoice.id)+'.html'; document.body.appendChild(link); link.click(); link.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+  };
+  data.meta=data.meta||{};
+  data.meta.version='9.13.9-fitxa-autocontinguda-flux-obra';
+  renderObresV0913=function(){
+    try{ return teimor09136RenderObres(false); }
+    catch(error){ console.error('No s’ha pogut obrir la fitxa d’obra:',error); return teimor09132RenderObresFallback(error); }
+  };
+  teimor09132RenderObresSafe=function(){ return renderObresV0913(); };
+})();
