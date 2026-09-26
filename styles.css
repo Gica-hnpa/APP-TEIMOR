@@ -348,6 +348,7 @@ tbody tr:hover{background:#fffaf7}
 .v0916-budget-panel-intro h3{margin:5px 0 4px;font-size:21px;letter-spacing:-.025em}
 .v0916-budget-panel-intro p{margin:0;color:#718097;font-size:13px;line-height:1.45}
 .v0916-source-badge{padding:9px 12px;border:1px solid #ffd4c1;border-radius:999px;background:#fff4ed;color:#d9551e;font-size:12px;font-weight:800;white-space:nowrap}
+.v0916-reimport-warning{margin:0 0 14px;padding:13px 15px;border:1px solid #f3c46d;border-radius:14px;background:#fff8e6;color:#79530a;font-size:13px;line-height:1.45;flex:0 0 auto}
 .v0916-budget-lines-card{display:flex;flex-direction:column;min-height:0;overflow:hidden}
 .v0916-budget-lines-card .toolbar{flex:0 0 auto}
 .v0916-budget-lines-card .table-wrap{flex:1;min-height:0;overflow:auto}

@@ -64,6 +64,7 @@ Canvis principals:
 - El bloc final «NOTA» / «Observacions» es conserva com observacions del pressupost i no entra en la suma ni en el recompte de partides.
 - Pressupostos i obres disposen d’estats recomanats i filtres combinables per any, client, estat i relació.
 - La fitxa de pressupost s’obre a pantalla completa, amb pestanyes de partides, capçalera/estat i observacions de l’Excel.
+- Les fitxes importades en versions anteriors mostren un avís i s’han de reimportar des del mateix Excel perquè el lector nou pugui reconstruir les partides i les observacions; la reimportació actualitza el pressupost existent sense duplicar-lo.
 
 Ús recomanat:
 
