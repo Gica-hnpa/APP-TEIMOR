@@ -390,6 +390,6 @@ tbody tr:hover{background:#fffaf7}
 .v0917-inline-job-status{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px;color:#64748b;font-size:11px}
 .v0917-inline-job-status .status-pill{font-size:10px;padding:2px 7px}
 
-/* V09.21: l'acció principal queda sempre visible al menú lateral. */
-.v0921-static-client-merge{background:linear-gradient(135deg,#f97316,#c2410c)!important;color:#fff!important;border:1px solid rgba(255,255,255,.4)!important;font-weight:900!important;box-shadow:0 6px 16px rgba(194,65,12,.25);text-align:center!important}
-.v0921-static-client-merge:hover{background:linear-gradient(135deg,#fb923c,#9a3412)!important;transform:translateY(-1px)}
+/* V09.21: depuració ubicada dins del llistat de Clients. */
+.v0921-client-merge-bar{border-top:4px solid var(--brand);background:linear-gradient(135deg,#fff7ed,#fff)}
+.v0921-client-merge-bar strong{font-size:15px}

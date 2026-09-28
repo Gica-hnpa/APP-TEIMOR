@@ -11297,35 +11297,171 @@ function teimor0917BudgetDisplayNumber(budget){
 })();
 
 /* =========================================================
-   TEIMOR V09.21 · ACCIÓ DE CLIENTS SEMPRE VISIBLE
-   - El botó no depèn de la targeta de diagnòstic ni dels grups detectats.
-   - Es mostra directament a la capçalera de Clients.
-   - En entrar a Clients es torna a executar la consolidació automàtica.
+   TEIMOR V09.21 · DEPURACIÓ DE CLIENTS DINS DE CLIENTS
+   - L'acció només apareix dins del llistat de Clients.
+   - La còpia de seguretat és compacta: no duplica Excels ni documents.
+   - La fusió conserva i reassigna pressupostos, obres, factures i arxius.
    ========================================================= */
 (function(){
-  const VERSION='9.21.0-accio-clients-sempre-visible';
-  const merge=window.teimor0919MergeDuplicateClients||window.teimor0910MergeSafeDuplicateClients;
-  const autoMerge=window.teimor0919AutoMergeDuplicateClients;
+  const VERSION='9.21.1-depuracio-clients-dins-pantalla';
+  const text=value=>String(value??'').trim();
+  const meaningful=value=>{
+    const raw=text(value);
+    return raw&&!/^(?:client\s+pendent(?:\s+de\s+revisar)?|pendent\s+de\s+revisar|sense\s+(?:nom|identificador)|n\/d|n\/a|-+)$/i.test(raw);
+  };
+  const normalizeName=value=>text(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()
+    .replace(/&/g,' i ')
+    .replace(/\b(?:s[\s./_-]*l(?:[\s./_-]*u)?|s[\s./_-]*a|s[\s./_-]*c[\s./_-]*p|c[\s./_-]*b)\b/g,' ')
+    .replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();
+  const normalizeId=value=>{
+    const raw=text(value);
+    if(!raw||/^(?:sense|pendent|n\/d|n\/a|-)/i.test(raw)) return '';
+    return raw.toUpperCase().replace(/[^A-Z0-9]/g,'');
+  };
+  const normalizeEmail=value=>text(value).toLowerCase().replace(/\s/g,'');
+  const normalizePhone=value=>text(value).replace(/\D/g,'');
+  const unique=values=>[...new Set((values||[]).flatMap(value=>Array.isArray(value)?value:[value]).map(value=>text(value)).filter(Boolean))];
+  const clone=value=>{try{return JSON.parse(JSON.stringify(value));}catch(error){return value;}};
+  const keysFor=client=>{
+    const keys=[];
+    const name=normalizeName(client?.name);
+    const id=normalizeId(client?.nif||client?.dni||client?.cif);
+    const email=normalizeEmail(client?.email);
+    const phone=normalizePhone(client?.phone);
+    if(name&&meaningful(client?.name)) keys.push('nom:'+name);
+    if(id) keys.push('id:'+id);
+    if(email) keys.push('email:'+email);
+    if(phone.length>=8) keys.push('tel:'+phone.slice(-9));
+    return [...new Set(keys)];
+  };
+  function duplicateGroups(list){
+    const items=(list||[]).filter(Boolean);
+    items.forEach(item=>{if(!item.id) item.id=uid('CLI');});
+    const parent=items.map((item,index)=>index);
+    const find=index=>{let root=index;while(parent[root]!==root) root=parent[root];while(parent[index]!==index){const next=parent[index];parent[index]=root;index=next;}return root;};
+    const union=(left,right)=>{const a=find(left),b=find(right);if(a!==b) parent[b]=a;};
+    const owner=new Map();
+    items.forEach((item,index)=>keysFor(item).forEach(key=>{if(owner.has(key)) union(index,owner.get(key));else owner.set(key,index);}));
+    const grouped=new Map();
+    items.forEach((item,index)=>{const root=find(index);if(!grouped.has(root)) grouped.set(root,[]);grouped.get(root).push(item);});
+    return [...grouped.values()].filter(group=>group.length>1);
+  }
+  const refCollections=()=>Object.keys(data).filter(key=>key!=='clients'&&Array.isArray(data[key]));
+  const referenceCount=(id,collections)=>collections.reduce((sum,key)=>sum+(data[key]||[]).filter(item=>item?.clientId===id).length,0);
+  const clientScore=(client,collections)=>(meaningful(client?.name)?10000:0)+(normalizeId(client?.nif||client?.dni||client?.cif)?2000:0)+(meaningful(client?.fiscalAddress)?500:0)+(meaningful(client?.postalCode)?150:0)+(meaningful(client?.city)?100:0)+referenceCount(client?.id,collections)*20;
+  function mergeValues(target,source){
+    ['nif','dni','cif','phone','email','contact','fiscalAddress','postalCode','city','workAddress','workPostalCode','workCity','status'].forEach(field=>{
+      if(!meaningful(target[field])&&meaningful(source[field])) target[field]=source[field];
+    });
+    target.alternateNames=unique([target.alternateNames,target.name,source.alternateNames,source.name]).filter(value=>normalizeName(value));
+    target.fiscalAddresses=unique([target.fiscalAddresses,target.fiscalAddress,source.fiscalAddresses,source.fiscalAddress]);
+    target.workAddresses=unique([target.workAddresses,target.workAddress,source.workAddresses,source.workAddress]);
+    target.workCities=unique([target.workCities,target.workCity,source.workCities,source.workCity]);
+    target.workPostals=unique([target.workPostals,target.workPostalCode,source.workPostals,source.workPostalCode]);
+    if(!meaningful(target.fiscalAddress)) target.fiscalAddress=target.fiscalAddresses[0]||'';
+    if(!meaningful(target.workAddress)) target.workAddress=target.workAddresses[0]||'';
+    if(!meaningful(target.workCity)) target.workCity=target.workCities[0]||'';
+    if(!meaningful(target.workPostalCode)) target.workPostalCode=target.workPostals[0]||'';
+    target.sourceFiles=unique([target.sourceFiles,target.source,source.sourceFiles,source.source]);
+    target.source=target.sourceFiles.join(' | ');
+    target.notes=unique([target.notes,source.notes]).join('\n');
+    target.reviewIssues=unique([target.reviewIssues,source.reviewIssues]);
+    target.mergedFromIds=unique([target.mergedFromIds,source.mergedFromIds,source.id]);
+    target.duplicateReview='validat';
+    target.duplicateReviewDate=today();
+    target.mergeStatus='Client únic consolidat';
+    return target;
+  }
+  function compactBackup(backup){
+    const refs=Object.fromEntries(Object.entries(backup?.beforeReferences||{}).map(([key,items])=>[key,(items||[]).map(item=>({id:item.id,clientId:item.clientId||item.data?.clientId||''}))]));
+    return {id:backup?.id||uid('CLIBACK'),date:backup?.date||new Date().toISOString(),beforeClients:Array.isArray(backup?.beforeClients)?clone(backup.beforeClients):[],beforeReferences:refs,groups:backup?.groups||[]};
+  }
+  function snapshotReferences(ids,collections){
+    return Object.fromEntries(collections.map(key=>[key,(data[key]||[]).filter(item=>ids.includes(item?.clientId)).map(item=>({id:item.id,clientId:item.clientId}))]).filter(([,items])=>items.length));
+  }
+  function restoreReferences(snapshot){
+    Object.entries(snapshot||{}).forEach(([key,items])=>{
+      if(!Array.isArray(data[key])) return;
+      items.forEach(reference=>{
+        const item=data[key].find(candidate=>candidate?.id===reference.id);
+        if(item) item.clientId=reference.clientId;
+      });
+    });
+  }
+  function mergeDuplicates(){
+    const collections=refCollections();
+    const groups=duplicateGroups(data.clients||[]);
+    if(!groups.length){
+      alert('No hi ha duplicats segurs pendents de fusionar.');
+      return {changed:false,groups:[],removed:0};
+    }
+    const removedTotal=groups.reduce((sum,group)=>sum+group.length-1,0);
+    if(!confirm('Es fusionaran '+removedTotal+' fitxa/es repetides en '+groups.length+' client/s únics. Es conservaran les obres, pressupostos i factures. Vols continuar?')) return {changed:false,groups,removed:0};
+    const allIds=groups.flatMap(group=>group.map(client=>client.id)).filter(Boolean);
+    const beforeClients=clone(data.clients||[]);
+    const beforeReferences=snapshotReferences(allIds,collections);
+    const previousBackups=(Array.isArray(data.clientMergeBackups)?data.clientMergeBackups:[]).slice(-2).map(compactBackup);
+    let removed=0;
+    groups.forEach(group=>{
+      const members=[...group].sort((a,b)=>clientScore(b,collections)-clientScore(a,collections));
+      const canonical=members[0];
+      const oldIds=members.slice(1).map(item=>item.id).filter(Boolean);
+      members.slice(1).forEach(item=>mergeValues(canonical,item));
+      collections.forEach(key=>(data[key]||[]).forEach(item=>{if(oldIds.includes(item?.clientId)) item.clientId=canonical.id;}));
+      data.clients=data.clients.filter(item=>!oldIds.includes(item.id));
+      canonical.mergedDuplicateCount=(canonical.mergedDuplicateCount||0)+oldIds.length;
+      canonical.mergeGroupReason='Mateix nom o identificació del client';
+      canonical.notes=unique([canonical.notes,'Clients duplicats fusionats el '+today()+'.']).join('\n');
+      removed+=oldIds.length;
+    });
+    const backup=compactBackup({id:uid('CLIBACK'),date:new Date().toISOString(),beforeClients,beforeReferences,groups:groups.map(group=>({ids:group.map(item=>item.id)}))});
+    data.clientMergeBackups=[...previousBackups,backup].slice(-3);
+    data.importLogs=Array.isArray(data.importLogs)?data.importLogs:[];
+    data.importLogs.push({id:uid('CLIENTMERGE'),date:new Date().toISOString(),type:'Fusió real de clients',groups:groups.length,removedClients:removed});
+    data.meta=data.meta||{};
+    data.meta.release='V09.21';
+    try{
+      saveData();
+    }catch(error){
+      /* Si una còpia antiga ocupava quota, ho intentem una segona vegada amb
+         només la còpia compacta actual. No es perden les dades de la fusió. */
+      try{
+        data.clientMergeBackups=[backup];
+        saveData();
+      }catch(secondError){
+        data.clients=beforeClients;
+        restoreReferences(beforeReferences);
+        data.clientMergeBackups=previousBackups;
+        console.error('No s’ha pogut desar la fusió de clients:',secondError);
+        alert('No s’ha pogut desar la fusió. Les dades no s’han modificat.');
+        return {changed:false,groups,error:secondError};
+      }
+    }
+    alert('Fet: '+removed+' clients duplicats fusionats en '+groups.length+' grup/s.');
+    renderClients();
+    return {changed:removed>0,groups,removed};
+  }
+  window.teimor0919MergeDuplicateClients=mergeDuplicates;
+  window.teimor0910MergeSafeDuplicateClients=mergeDuplicates;
+  window.teimor0919AutoMergeDuplicateClients=()=>({changed:false,groups:duplicateGroups(data.clients||[]),removed:0});
   const baseRenderClientsV0921=renderClients;
   function mountClientMergeAction(){
     const content=document.getElementById('content');
-    if(!content||content.querySelector('[data-v0921-client-merge-bar]')) return;
-    const bar=document.createElement('div');
-    bar.setAttribute('data-v0921-client-merge-bar','1');
-    bar.className='card v0921-client-merge-bar';
-    bar.innerHTML='<div class="toolbar"><div><strong>Depuració de clients</strong><p class="muted">Revisa i fusiona els clients repetits en una sola fitxa, conservant obres, pressupostos, factures i documents.</p></div><button type="button" class="primary" data-v0921-merge-clients>Fusionar duplicats ara</button></div>';
-    content.insertBefore(bar,content.firstChild);
+    if(!content) return;
+    let bar=content.querySelector('[data-v0921-client-merge-bar]');
+    if(!bar){
+      bar=document.createElement('div');
+      bar.setAttribute('data-v0921-client-merge-bar','1');
+      bar.className='card v0921-client-merge-bar';
+      content.insertBefore(bar,content.firstChild);
+    }
+    const groups=duplicateGroups(data.clients||[]);
+    const total=groups.reduce((sum,group)=>sum+group.length-1,0);
+    bar.innerHTML='<div class="toolbar"><div><strong>Depuració de clients</strong><p class="muted">'+(total?'He detectat '+groups.length+' grup/s i '+total+' duplicat/s. Revisa la taula i fusiona\'ls quan siguin el mateix client.':'No hi ha duplicats segurs detectats ara mateix. Pots tornar a comprovar-ho després d\'importar.')+'</p></div><button type="button" class="primary" data-v0921-merge-clients>Fusionar duplicats ara</button></div>';
     const button=bar.querySelector('[data-v0921-merge-clients]');
-    if(button) button.onclick=event=>{
-      event.preventDefault();
-      if(typeof merge==='function') merge();
-      else alert('La funció de fusió no està disponible en aquesta versió. Obre la carpeta V09.21.');
-    };
+    if(button) button.onclick=event=>{event.preventDefault();event.stopPropagation();mergeDuplicates();};
   }
   renderClients=function(editId=''){
-    if(!editId&&typeof autoMerge==='function'){
-      try{autoMerge();}catch(error){console.error('No s’ha pogut consolidar els clients en obrir la pantalla:',error);}
-    }
     const result=baseRenderClientsV0921(editId);
     if(!editId) mountClientMergeAction();
     return result;

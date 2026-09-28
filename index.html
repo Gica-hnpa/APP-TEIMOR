@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="styles.css" />
   <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-  <script defer src="app.js?v=09210"></script>
+  <script defer src="app.js?v=09211"></script>
 </head>
 <body>
   <section id="loginScreen" class="login-screen">
@@ -43,7 +43,6 @@
       <nav id="tabs" class="tabs">
         <button data-view="dashboard" class="active">Inici</button>
         <button data-view="clients">Clients</button>
-        <button id="v0921StaticMergeButton" type="button" class="v0921-static-client-merge" aria-label="Fusionar duplicats de clients">Fusionar duplicats ara</button>
         <button data-view="library">Llibreria partides</button>
         <button data-view="budgets">Pressupostos</button>
         <button data-view="invoices">Factures</button>
@@ -86,7 +85,7 @@
        carregat és antic o queda en memòria cau, aquest botó continua funcionant. -->
   <script>
   (function(){
-    const button=document.getElementById('v0921StaticMergeButton');
+    const button=null;
     if(!button) return;
     const STORE_KEY='teimor_gestor_pressupostos_v09_1_neta';
     const text=value=>String(value??'').trim();
