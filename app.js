@@ -1866,13 +1866,13 @@ function importPreviewHtml(d){
 })();
 
 /* =========================================================
-   TEIMOR V09.19 · FUSIÓ DE CLIENTS GARANTIDA
+   TEIMOR V09.20 · FUSIÓ DE CLIENTS GARANTIDA I BOTÓ VISIBLE
    - Substitueix definitivament el diagnòstic antic de grups.
    - El mateix nom normalitzat sempre és una sola fitxa de client.
    - El botó visible executa la fusió real, desa i repinta la pantalla.
    ========================================================= */
 (function(){
-  const VERSION='9.19.0-fusio-clients-garantida';
+  const VERSION='9.20.0-fusio-clients-garantida-boto-visible';
   const text=value=>String(value??'').trim();
   const meaningful=value=>{
     const valueText=text(value);
@@ -1972,7 +1972,10 @@ function importPreviewHtml(d){
     const silent=options.silent!==false;
     const repaint=options.repaint!==false;
     const groups=groupsFor(data.clients||[]);
-    if(!groups.length) return {changed:false,groups:[],removed:0};
+    if(!groups.length){
+      if(!silent) alert('No hi ha duplicats pendents de fusionar.');
+      return {changed:false,groups:[],removed:0};
+    }
     const allIds=groups.flatMap(group=>group.members.map(item=>item.id)).filter(Boolean);
     const beforeClients=clone(data.clients||[]);
     const beforeReferences=snapshotReferences(allIds);
@@ -2010,8 +2013,8 @@ function importPreviewHtml(d){
   function diagnostics(){
     const groups=groupsFor(data.clients||[]);
     const unnamed=(data.clients||[]).filter(client=>!meaningful(client.name));
-    if(!groups.length&&!unnamed.length) return '<div class="card notice-green"><strong>Depuració de clients:</strong> no hi ha duplicats detectats. Els clients amb el mateix nom ja es mantenen en una sola fitxa.</div>';
-    let html='<div class="card notice-red" id="clientDiagnostics"><div class="toolbar"><div><h2>Depuració de clients</h2><p>He detectat '+groups.length+' grup/s de clients repetits. El mateix nom es fusionarà en una sola fitxa i es conservaran les obres, pressupostos, factures i adreces.</p></div>'+(groups.length?'<button type="button" class="primary" data-merge-safe-clients>Fusionar duplicats ara</button>':'')+'</div>';
+    if(!groups.length&&!unnamed.length) return '<div class="card notice-green"><div class="toolbar"><div><strong>Depuració de clients:</strong> no hi ha duplicats detectats. Els clients amb el mateix nom ja es mantenen en una sola fitxa.</div><button type="button" class="primary" data-merge-safe-clients>Fusionar duplicats ara</button></div></div>';
+    let html='<div class="card notice-red" id="clientDiagnostics"><div class="toolbar"><div><h2>Depuració de clients</h2><p>He detectat '+groups.length+' grup/s de clients repetits. El mateix nom es fusionarà en una sola fitxa i es conservaran les obres, pressupostos, factures i adreces.</p></div><button type="button" class="primary" data-merge-safe-clients>Fusionar duplicats ara</button></div>';
     if(groups.length){
       html+='<h3>Clients repetits pendents de fusionar</h3>';
       groups.forEach((group,index)=>{
@@ -2044,7 +2047,7 @@ function importPreviewHtml(d){
   window.teimor0919ClientDiagnostics=diagnostics;
   data.meta=data.meta||{};
   data.meta.version=VERSION;
-  data.meta.release='V09.19';
+  data.meta.release='V09.20';
   const startup=mergeAll({silent:true,repaint:false});
   if(startup.changed&&typeof render==='function') render();
   else if(typeof teimor099BindClientDiagnosticEvents==='function') teimor099BindClientDiagnosticEvents();
@@ -11284,8 +11287,8 @@ function teimor0917BudgetDisplayNumber(budget){
     });
   };
   data.meta=data.meta||{};
-  data.meta.version='9.19.0-fusio-clients-garantida';
-  data.meta.release='V09.19';
+  data.meta.version='9.20.0-fusio-clients-garantida-boto-visible';
+  data.meta.release='V09.20';
   let changed=false;
   try{changed=!!autoMerge?.().changed;}catch(error){console.error('No s’ha pogut consolidar els clients en carregar:',error);}
   try{saveData();}catch(error){console.warn('No s’ha pogut actualitzar la versió local de clients:',error);}
