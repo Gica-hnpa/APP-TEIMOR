@@ -1,6 +1,6 @@
-# TEIMOR V09.20 · fusió real de clients, estat visible, numeració comercial i Excel original
+# TEIMOR V09.21 · fusió real de clients, estat visible, numeració comercial i Excel original
 
-V09.20 parteix de V09.19 i manté les versions anteriors intactes.
+V09.21 parteix de V09.20 i manté les versions anteriors intactes.
 
 Canvis principals:
 
@@ -74,6 +74,7 @@ Canvis principals:
 - La pantalla de depuració ja no depèn dels grups antics: mostra el botó «Fusionar duplicats ara», executa la fusió real, desa les dades i elimina els grups de la pantalla en acabar.
 - La fusió final també es torna a executar després de carregar tots els blocs històrics de l’app, de manera que els duplicats que ja existien queden consolidats encara que vinguin de versions anteriors.
 - El botó «Fusionar duplicats ara» queda sempre visible a la part superior de Clients; si ja no hi ha duplicats, informa que no hi ha res pendent.
+- L’acció de fusió es pinta directament a la capçalera de la pantalla Clients i no depèn del diagnòstic ni de cap grup previ.
 
 Ús recomanat:
 

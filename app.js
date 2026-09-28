@@ -11295,3 +11295,44 @@ function teimor0917BudgetDisplayNumber(budget){
   if(typeof render==='function') render();
   else teimor099BindClientDiagnosticEvents();
 })();
+
+/* =========================================================
+   TEIMOR V09.21 · ACCIÓ DE CLIENTS SEMPRE VISIBLE
+   - El botó no depèn de la targeta de diagnòstic ni dels grups detectats.
+   - Es mostra directament a la capçalera de Clients.
+   - En entrar a Clients es torna a executar la consolidació automàtica.
+   ========================================================= */
+(function(){
+  const VERSION='9.21.0-accio-clients-sempre-visible';
+  const merge=window.teimor0919MergeDuplicateClients||window.teimor0910MergeSafeDuplicateClients;
+  const autoMerge=window.teimor0919AutoMergeDuplicateClients;
+  const baseRenderClientsV0921=renderClients;
+  function mountClientMergeAction(){
+    const content=document.getElementById('content');
+    if(!content||content.querySelector('[data-v0921-client-merge-bar]')) return;
+    const bar=document.createElement('div');
+    bar.setAttribute('data-v0921-client-merge-bar','1');
+    bar.className='card v0921-client-merge-bar';
+    bar.innerHTML='<div class="toolbar"><div><strong>Depuració de clients</strong><p class="muted">Revisa i fusiona els clients repetits en una sola fitxa, conservant obres, pressupostos, factures i documents.</p></div><button type="button" class="primary" data-v0921-merge-clients>Fusionar duplicats ara</button></div>';
+    content.insertBefore(bar,content.firstChild);
+    const button=bar.querySelector('[data-v0921-merge-clients]');
+    if(button) button.onclick=event=>{
+      event.preventDefault();
+      if(typeof merge==='function') merge();
+      else alert('La funció de fusió no està disponible en aquesta versió. Obre la carpeta V09.21.');
+    };
+  }
+  renderClients=function(editId=''){
+    if(!editId&&typeof autoMerge==='function'){
+      try{autoMerge();}catch(error){console.error('No s’ha pogut consolidar els clients en obrir la pantalla:',error);}
+    }
+    const result=baseRenderClientsV0921(editId);
+    if(!editId) mountClientMergeAction();
+    return result;
+  };
+  data.meta=data.meta||{};
+  data.meta.version=VERSION;
+  data.meta.release='V09.21';
+  try{saveData();}catch(error){console.warn('No s’ha pogut actualitzar la versió local:',error);}
+  if(typeof state!=='undefined'&&state.view==='clients') renderClients();
+})();
