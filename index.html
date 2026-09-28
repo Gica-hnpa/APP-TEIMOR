@@ -43,6 +43,7 @@
       <nav id="tabs" class="tabs">
         <button data-view="dashboard" class="active">Inici</button>
         <button data-view="clients">Clients</button>
+        <button id="v0921StaticMergeButton" type="button" class="v0921-static-client-merge" aria-label="Fusionar duplicats de clients">Fusionar duplicats ara</button>
         <button data-view="library">Llibreria partides</button>
         <button data-view="budgets">Pressupostos</button>
         <button data-view="invoices">Factures</button>
@@ -80,5 +81,129 @@
       <div id="modalContent"></div>
     </div>
   </div>
+
+  <!-- V09.21: acció de fusió independent de la pantalla Clients. Si l'app.js
+       carregat és antic o queda en memòria cau, aquest botó continua funcionant. -->
+  <script>
+  (function(){
+    const button=document.getElementById('v0921StaticMergeButton');
+    if(!button) return;
+    const STORE_KEY='teimor_gestor_pressupostos_v09_1_neta';
+    const text=value=>String(value??'').trim();
+    const meaningful=value=>{
+      const raw=text(value);
+      return raw&&!/^(?:client\s+pendent(?:\s+de\s+revisar)?|pendent\s+de\s+revisar|sense\s+(?:nom|identificador)|n\/d|n\/a|-+)$/i.test(raw);
+    };
+    const normalizeName=value=>text(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()
+      .replace(/&/g,' i ')
+      .replace(/\b(?:s[\s./_-]*l(?:[\s./_-]*u)?|s[\s./_-]*a|s[\s./_-]*c[\s./_-]*p|c[\s./_-]*b)\b/g,' ')
+      .replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();
+    const normalizeId=value=>{
+      const raw=text(value);
+      if(!raw||/^(?:sense|pendent|n\/d|n\/a|-)/i.test(raw)) return '';
+      return raw.toUpperCase().replace(/[^A-Z0-9]/g,'');
+    };
+    const normalizeEmail=value=>text(value).toLowerCase().replace(/\s/g,'');
+    const normalizePhone=value=>text(value).replace(/\D/g,'');
+    const unique=values=>[...new Set((values||[]).flatMap(value=>Array.isArray(value)?value:[value]).map(value=>text(value)).filter(Boolean))];
+    const clone=value=>{try{return JSON.parse(JSON.stringify(value));}catch(error){return value;}};
+    const uid=prefix=>prefix+'-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8).toUpperCase();
+    const keysFor=client=>{
+      const keys=[];
+      const name=normalizeName(client&&client.name);
+      const id=normalizeId(client&&(client.nif||client.dni||client.cif));
+      const email=normalizeEmail(client&&client.email);
+      const phone=normalizePhone(client&&client.phone);
+      if(name&&meaningful(client&&client.name)) keys.push('nom:'+name);
+      if(id) keys.push('id:'+id);
+      if(email) keys.push('email:'+email);
+      if(phone.length>=8) keys.push('tel:'+phone.slice(-9));
+      return [...new Set(keys)];
+    };
+    function duplicateGroups(clients){
+      const list=(clients||[]).filter(Boolean);
+      list.forEach(client=>{if(!client.id) client.id=uid('CLI');});
+      const parent=list.map((client,index)=>index);
+      const find=index=>{let root=index;while(parent[root]!==root) root=parent[root];while(parent[index]!==index){const next=parent[index];parent[index]=root;index=next;}return root;};
+      const union=(left,right)=>{const a=find(left),b=find(right);if(a!==b) parent[b]=a;};
+      const owner=new Map();
+      list.forEach((client,index)=>keysFor(client).forEach(key=>{if(owner.has(key)) union(index,owner.get(key));else owner.set(key,index);}));
+      const groups=new Map();
+      list.forEach((client,index)=>{const root=find(index);if(!groups.has(root)) groups.set(root,[]);groups.get(root).push(client);});
+      return [...groups.values()].filter(group=>group.length>1);
+    }
+    function refCount(data,clientId){
+      return Object.keys(data||{}).reduce((sum,key)=>sum+(Array.isArray(data[key])?data[key].filter(item=>item&&item.clientId===clientId).length:0),0);
+    }
+    function mergeClient(target,source){
+      ['nif','dni','cif','phone','email','contact','fiscalAddress','postalCode','city','workAddress','workPostalCode','workCity','status'].forEach(field=>{
+        if(!meaningful(target[field])&&meaningful(source[field])) target[field]=source[field];
+      });
+      [['alternateNames','name'],['fiscalAddresses','fiscalAddress'],['workAddresses','workAddress'],['workCities','workCity'],['workPostals','workPostalCode'],['sourceFiles','source']].forEach(([listField,scalarField])=>{
+        target[listField]=unique([target[listField],target[scalarField],source[listField],source[scalarField]]);
+      });
+      target.source=target.sourceFiles.join(' | ');
+      target.notes=unique([target.notes,source.notes]).join('\n');
+      target.reviewIssues=unique([target.reviewIssues,source.reviewIssues]);
+      target.mergedFromIds=unique([target.mergedFromIds,source.mergedFromIds,source.id]);
+      target.mergeStatus='Client únic consolidat';
+      target.duplicateReview='validat';
+      return target;
+    }
+    function fallbackMerge(){
+      let data;
+      try{data=JSON.parse(localStorage.getItem(STORE_KEY)||'null');}catch(error){data=null;}
+      if(!data||!Array.isArray(data.clients)){
+        alert('No he pogut obrir la base local de clients.');
+        return;
+      }
+      const groups=duplicateGroups(data.clients);
+      if(!groups.length){
+        alert('No hi ha duplicats segurs pendents de fusionar.');
+        return;
+      }
+      const total=groups.reduce((sum,group)=>sum+group.length-1,0);
+      if(!confirm('Es fusionaran '+total+' fitxa/es repetides en '+groups.length+' client/s únics. Vols continuar?')) return;
+      const arrays=Object.keys(data).filter(key=>Array.isArray(data[key]));
+      const allIds=groups.flatMap(group=>group.map(client=>client.id));
+      const references={};
+      arrays.filter(key=>key!=='clients').forEach(key=>{
+        const matches=data[key].filter(item=>item&&allIds.includes(item.clientId));
+        if(matches.length) references[key]=clone(matches);
+      });
+      const beforeClients=clone(data.clients);
+      let removed=0;
+      groups.forEach(group=>{
+        const members=[...group].sort((a,b)=>{
+          const score=client=>(meaningful(client.name)?10000:0)+(normalizeId(client.nif||client.dni||client.cif)?2000:0)+(meaningful(client.fiscalAddress)?500:0)+(refCount(data,client.id)*20);
+          return score(b)-score(a);
+        });
+        const canonical=members[0];
+        const oldIds=members.slice(1).map(client=>client.id);
+        members.slice(1).forEach(client=>mergeClient(canonical,client));
+        arrays.filter(key=>key!=='clients').forEach(key=>data[key].forEach(item=>{if(item&&oldIds.includes(item.clientId)) item.clientId=canonical.id;}));
+        data.clients=data.clients.filter(client=>!oldIds.includes(client.id));
+        canonical.mergedDuplicateCount=(canonical.mergedDuplicateCount||0)+oldIds.length;
+        removed+=oldIds.length;
+      });
+      data.clientMergeBackups=Array.isArray(data.clientMergeBackups)?data.clientMergeBackups:[];
+      data.clientMergeBackups.push({id:uid('CLIBACK'),date:new Date().toISOString(),beforeClients,beforeReferences:references,groups:groups.map(group=>group.map(client=>client.id))});
+      data.clientMergeBackups=data.clientMergeBackups.slice(-5);
+      data.importLogs=Array.isArray(data.importLogs)?data.importLogs:[];
+      data.importLogs.push({id:uid('CLIENTMERGE'),date:new Date().toISOString(),type:'Fusió real de clients pel mateix nom',groups:groups.length,removedClients:removed});
+      data.meta=data.meta||{};
+      data.meta.release='V09.21';
+      data.meta.updatedAt=new Date().toISOString();
+      localStorage.setItem(STORE_KEY,JSON.stringify(data));
+      alert('Fet: '+removed+' clients duplicats fusionats en '+groups.length+' grup/s.');
+      location.reload();
+    }
+    button.addEventListener('click',function(event){
+      event.preventDefault();
+      const merge=window.teimor0919MergeDuplicateClients||window.teimor0910MergeSafeDuplicateClients;
+      if(typeof merge==='function') merge(); else fallbackMerge();
+    });
+  })();
+  </script>
 </body>
 </html>
