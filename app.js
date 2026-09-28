@@ -1865,6 +1865,191 @@ function importPreviewHtml(d){
   if(data && data.meta){ data.meta.version = '9.2.0-ordre-llibreria'; }
 })();
 
+/* =========================================================
+   TEIMOR V09.19 · FUSIÓ DE CLIENTS GARANTIDA
+   - Substitueix definitivament el diagnòstic antic de grups.
+   - El mateix nom normalitzat sempre és una sola fitxa de client.
+   - El botó visible executa la fusió real, desa i repinta la pantalla.
+   ========================================================= */
+(function(){
+  const VERSION='9.19.0-fusio-clients-garantida';
+  const text=value=>String(value??'').trim();
+  const meaningful=value=>{
+    const valueText=text(value);
+    return valueText && !/^(?:client\s+pendent(?:\s+de\s+revisar)?|pendent\s+de\s+revisar|sense\s+(?:nom|identificador)|n\/d|n\/a|-+)$/i.test(valueText) ? valueText : '';
+  };
+  const normalizeName=value=>strip(value||'')
+    .replace(/&/g,' i ')
+    .replace(/[^a-z0-9]+/g,' ')
+    .replace(/\b(?:s\s*l\s*u|s\s*l|s\s*a|s\s*c\s*p|c\s*b|slu|sl|sa|scp|cb)\b/g,' ')
+    .replace(/\s+/g,' ').trim();
+  const normalizeId=value=>{
+    const raw=text(value);
+    if(!raw || /^(?:sense|pendent|n\/d|n\/a|-)/i.test(raw)) return '';
+    return raw.toUpperCase().replace(/[^A-Z0-9]/g,'');
+  };
+  const normalizeEmail=value=>strip(value||'');
+  const normalizePhone=value=>text(value).replace(/\D/g,'');
+  const keysFor=client=>{
+    const keys=[];
+    const name=normalizeName(client?.name);
+    const id=normalizeId(client?.nif||client?.dni||client?.cif);
+    const email=normalizeEmail(client?.email);
+    const phone=normalizePhone(client?.phone);
+    if(name&&meaningful(client?.name)) keys.push('nom:'+name);
+    if(id) keys.push('id:'+id);
+    if(email) keys.push('email:'+email);
+    if(phone.length>=8) keys.push('tel:'+phone.slice(-9));
+    return [...new Set(keys)];
+  };
+  const sameClient=(a,b)=>keysFor(a).some(key=>keysFor(b).includes(key));
+  const collections=['jobs','budgets','invoices','certifications','certificates','attachments','documents','agenda','payments','hores','materials','timeEntries','expenses','notes'];
+  const clone=value=>{ try{return JSON.parse(JSON.stringify(value));}catch(error){return value;} };
+  const unique=values=>[...new Set((values||[]).flatMap(value=>Array.isArray(value)?value:[value]).map(value=>text(value)).filter(Boolean))];
+  const refsFor=id=>collections.reduce((sum,collection)=>sum+(Array.isArray(data[collection])?data[collection].filter(item=>item?.clientId===id).length:0),0);
+  const score=client=>(meaningful(client?.name)?10000:0)+(normalizeId(client?.nif||client?.dni||client?.cif)?2000:0)+(text(client?.fiscalAddress)?500:0)+(text(client?.postalCode)?150:0)+(text(client?.city)?100:0)+refsFor(client?.id)*20;
+  function groupsFor(list){
+    const items=(list||[]).filter(Boolean);
+    items.forEach(item=>{if(!item.id) item.id=uid('CLI');});
+    const parent=items.map((_,index)=>index);
+    const find=index=>{let root=index;while(parent[root]!==root) root=parent[root];while(parent[index]!==index){const next=parent[index];parent[index]=root;index=next;}return root;};
+    const union=(left,right)=>{const a=find(left),b=find(right);if(a!==b) parent[b]=a;};
+    const owner=new Map();
+    items.forEach((item,index)=>keysFor(item).forEach(key=>{if(owner.has(key)) union(index,owner.get(key)); else owner.set(key,index);}));
+    const grouped=new Map();
+    items.forEach((item,index)=>{const root=find(index);if(!grouped.has(root)) grouped.set(root,[]);grouped.get(root).push(item);});
+    return [...grouped.values()].filter(group=>group.length>1).map((members,index)=>({
+      members,
+      key:members.map(item=>item.id||String(index)).sort().join('|'),
+      reason:members.map(item=>normalizeName(item.name)).filter(Boolean).length>1 && new Set(members.map(item=>normalizeName(item.name)).filter(Boolean)).size===1 ? 'Mateix nom de client' : 'Mateixa identificació del client'
+    }));
+  }
+  function mergeValues(target,source){
+    if(!target||!source) return target;
+    if(!meaningful(target.name)&&meaningful(source.name)) target.name=source.name;
+    for(const field of ['nif','dni','cif','phone','email','contact','fiscalAddress','postalCode','city','status']){
+      if(!text(target[field])&&text(source[field])) target[field]=source[field];
+    }
+    target.alternateNames=unique([target.alternateNames,target.name,source.alternateNames,source.name]).filter(value=>normalizeName(value));
+    target.fiscalAddresses=unique([target.fiscalAddresses,target.fiscalAddress,source.fiscalAddresses,source.fiscalAddress]);
+    target.workAddresses=unique([target.workAddresses,target.workAddress,source.workAddresses,source.workAddress]);
+    target.workCities=unique([target.workCities,target.workCity,source.workCities,source.workCity]);
+    target.workPostals=unique([target.workPostals,target.workPostalCode,source.workPostals,source.workPostalCode]);
+    if(!text(target.fiscalAddress)) target.fiscalAddress=target.fiscalAddresses[0]||'';
+    if(!text(target.workAddress)) target.workAddress=target.workAddresses[0]||'';
+    if(!text(target.workCity)) target.workCity=target.workCities[0]||'';
+    if(!text(target.workPostalCode)) target.workPostalCode=target.workPostals[0]||'';
+    target.sourceFiles=unique([target.sourceFiles,target.source,source.sourceFiles,source.source]);
+    target.source=target.sourceFiles.join(' | ');
+    target.notes=unique([target.notes,source.notes]).join('\n');
+    target.reviewIssues=unique([target.reviewIssues,source.reviewIssues]).filter(issue=>!/^possible duplicat/i.test(issue));
+    target.mergedFromIds=unique([target.mergedFromIds,source.mergedFromIds,source.id]);
+    target.duplicateReview='validat';
+    target.duplicateReviewDate=today();
+    target.mergeStatus='Client únic consolidat';
+    target.needsReview=!normalizeId(target.nif||target.dni||target.cif)||(target.reviewIssues||[]).length>0;
+    return target;
+  }
+  function snapshotReferences(ids){
+    return Object.fromEntries(collections.map(collection=>[collection,(data[collection]||[]).filter(item=>ids.includes(item?.clientId)).map(item=>({id:item.id,data:clone(item)}))]).filter(([,items])=>items.length));
+  }
+  function restoreReferences(snapshot){
+    for(const [collection,items] of Object.entries(snapshot||{})){
+      if(!Array.isArray(data[collection])) continue;
+      for(const item of items){
+        const index=data[collection].findIndex(candidate=>candidate.id===item.id);
+        if(index>=0) data[collection][index]=clone(item.data); else data[collection].push(clone(item.data));
+      }
+    }
+  }
+  function repoint(oldIds,newId){
+    collections.forEach(collection=>{
+      if(!Array.isArray(data[collection])) return;
+      data[collection].forEach(item=>{if(oldIds.includes(item?.clientId)) item.clientId=newId;});
+    });
+  }
+  function mergeAll(options={}){
+    const silent=options.silent!==false;
+    const repaint=options.repaint!==false;
+    const groups=groupsFor(data.clients||[]);
+    if(!groups.length) return {changed:false,groups:[],removed:0};
+    const allIds=groups.flatMap(group=>group.members.map(item=>item.id)).filter(Boolean);
+    const beforeClients=clone(data.clients||[]);
+    const beforeReferences=snapshotReferences(allIds);
+    const backup={id:uid('CLIBACK'),date:new Date().toISOString(),beforeClients,beforeReferences,groups:groups.map(group=>({reason:group.reason,ids:group.members.map(item=>item.id)}))};
+    let removed=0;
+    for(const group of groups){
+      const members=[...group.members].sort((a,b)=>score(b)-score(a));
+      const canonical=members[0];
+      const oldIds=members.slice(1).map(item=>item.id).filter(Boolean);
+      members.slice(1).forEach(item=>mergeValues(canonical,item));
+      repoint(oldIds,canonical.id);
+      data.clients=data.clients.filter(item=>!oldIds.includes(item.id));
+      canonical.mergedDuplicateCount=(canonical.mergedDuplicateCount||0)+oldIds.length;
+      canonical.mergeGroupReason=group.reason;
+      canonical.notes=unique([canonical.notes,'Clients duplicats fusionats el '+today()+'. Motiu: '+group.reason+'.']).join('\n');
+      removed+=oldIds.length;
+    }
+    data.clientMergeBackups=Array.isArray(data.clientMergeBackups)?data.clientMergeBackups:[];
+    data.clientMergeBackups.push(backup);
+    if(data.clientMergeBackups.length>5) data.clientMergeBackups=data.clientMergeBackups.slice(-5);
+    data.importLogs=data.importLogs||[];
+    data.importLogs.push({id:uid('CLIENTMERGE'),date:new Date().toISOString(),type:'Fusió real de clients pel mateix nom',groups:groups.length,removedClients:removed,reasons:groups.map(group=>group.reason)});
+    try{saveData();}
+    catch(error){
+      data.clients=beforeClients;
+      restoreReferences(beforeReferences);
+      console.error('No s’ha pogut desar la fusió de clients:',error);
+      if(!silent) alert('No s’ha pogut desar la fusió. Les dades no s’han modificat.');
+      return {changed:false,groups,error};
+    }
+    if(repaint&&typeof render==='function') render();
+    if(!silent) alert('Fet: '+removed+' clients duplicats fusionats en '+groups.length+' client/s únics.');
+    return {changed:removed>0,groups,removed};
+  }
+  function diagnostics(){
+    const groups=groupsFor(data.clients||[]);
+    const unnamed=(data.clients||[]).filter(client=>!meaningful(client.name));
+    if(!groups.length&&!unnamed.length) return '<div class="card notice-green"><strong>Depuració de clients:</strong> no hi ha duplicats detectats. Els clients amb el mateix nom ja es mantenen en una sola fitxa.</div>';
+    let html='<div class="card notice-red" id="clientDiagnostics"><div class="toolbar"><div><h2>Depuració de clients</h2><p>He detectat '+groups.length+' grup/s de clients repetits. El mateix nom es fusionarà en una sola fitxa i es conservaran les obres, pressupostos, factures i adreces.</p></div>'+(groups.length?'<button type="button" class="primary" data-merge-safe-clients>Fusionar duplicats ara</button>':'')+'</div>';
+    if(groups.length){
+      html+='<h3>Clients repetits pendents de fusionar</h3>';
+      groups.forEach((group,index)=>{
+        html+='<div class="detail-box client-duplicate-group"><div class="toolbar"><div><strong>Grup '+(index+1)+'</strong><br><span class="small-text">'+esc(group.reason)+'</span></div></div>';
+        html+='<div class="table-wrap"><table><thead><tr><th>Client</th><th>NIF/DNI/CIF</th><th>Adreça / municipi</th><th>Pressupostos</th><th>Origen</th></tr></thead><tbody>';
+        html+=group.members.map(client=>'<tr><td><strong>'+esc(client.name||'Client pendent de revisar')+'</strong></td><td>'+esc(client.nif||client.dni||client.cif||'Sense NIF/DNI/CIF')+'</td><td>'+esc([client.workAddress||client.fiscalAddress,client.workCity||client.city].filter(Boolean).join(' · '))+'</td><td class="num">'+((data.budgets||[]).filter(item=>item.clientId===client.id).length)+'</td><td><span class="small-text">'+esc(client.source||((client.sourceFiles||[]).join(' | ')))+'</span></td></tr>').join('');
+        html+='</tbody></table></div></div>';
+      });
+    }
+    if(unnamed.length){
+      html+='<h3>Clients sense nom</h3><p>Cal completar-los manualment; no els fusiono entre ells perquè no hi ha una identificació segura.</p>';
+    }
+    return html+'</div>';
+  }
+  const oldCanMerge=typeof teimor099CanMergeClients==='function'?teimor099CanMergeClients:()=>false;
+  teimor0910DuplicateGroups=groupsFor;
+  teimor099DuplicateGroups=groupsFor;
+  teimor099CanMergeClients=function(a,b){return sameClient(a,b)||oldCanMerge(a,b);};
+  teimor0910MergeSafeDuplicateClients=function(){return mergeAll({silent:false,repaint:true});};
+  teimor099ClientDiagnosticsHtml=diagnostics;
+  const oldBind=teimor099BindClientDiagnosticEvents;
+  teimor099BindClientDiagnosticEvents=function(){
+    try{oldBind();}catch(error){console.warn('Diagnòstic antic ignorat:',error);}
+    document.querySelectorAll('[data-merge-safe-clients]').forEach(button=>{
+      button.onclick=event=>{event.preventDefault();event.stopPropagation();mergeAll({silent:false,repaint:true});};
+    });
+  };
+  window.teimor0919MergeDuplicateClients=()=>mergeAll({silent:false,repaint:true});
+  window.teimor0919AutoMergeDuplicateClients=()=>mergeAll({silent:true,repaint:false});
+  window.teimor0919ClientDiagnostics=diagnostics;
+  data.meta=data.meta||{};
+  data.meta.version=VERSION;
+  data.meta.release='V09.19';
+  const startup=mergeAll({silent:true,repaint:false});
+  if(startup.changed&&typeof render==='function') render();
+  else if(typeof teimor099BindClientDiagnosticEvents==='function') teimor099BindClientDiagnosticEvents();
+})();
+
 function sortIcon(kind, key){
   const field = state[`${kind}SortField`] || (kind==='budget'?'date':kind==='client'?'name':'chapter');
   const dir = state[`${kind}SortDir`] || (kind==='budget'?'desc':'asc');
@@ -11081,4 +11266,29 @@ function teimor0917BudgetDisplayNumber(budget){
   data.meta.release='V09.18';
   const startupConsolidation=consolidateClients(true);
   if(startupConsolidation.changed) saveData();
+})();
+
+/* Activació final V09.19: els blocs antics que es carreguen després no poden
+   tornar a substituir ni el botó ni la pantalla de fusió. */
+(function(){
+  const merge=window.teimor0919MergeDuplicateClients;
+  const autoMerge=window.teimor0919AutoMergeDuplicateClients;
+  if(typeof merge!=='function') return;
+  teimor0910MergeSafeDuplicateClients=merge;
+  if(typeof window.teimor0919ClientDiagnostics==='function') teimor099ClientDiagnosticsHtml=window.teimor0919ClientDiagnostics;
+  const previousBind=teimor099BindClientDiagnosticEvents;
+  teimor099BindClientDiagnosticEvents=function(){
+    try{previousBind();}catch(error){console.warn('No s’ha pogut activar una revisió antiga de clients:',error);}
+    document.querySelectorAll('[data-merge-safe-clients]').forEach(button=>{
+      button.onclick=event=>{event.preventDefault();event.stopPropagation();merge();};
+    });
+  };
+  data.meta=data.meta||{};
+  data.meta.version='9.19.0-fusio-clients-garantida';
+  data.meta.release='V09.19';
+  let changed=false;
+  try{changed=!!autoMerge?.().changed;}catch(error){console.error('No s’ha pogut consolidar els clients en carregar:',error);}
+  try{saveData();}catch(error){console.warn('No s’ha pogut actualitzar la versió local de clients:',error);}
+  if(typeof render==='function') render();
+  else teimor099BindClientDiagnosticEvents();
 })();

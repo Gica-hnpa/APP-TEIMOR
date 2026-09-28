@@ -1,6 +1,6 @@
-# TEIMOR V09.18 · clients únics, estat visible, numeració comercial i Excel original
+# TEIMOR V09.19 · fusió real de clients, estat visible, numeració comercial i Excel original
 
-V09.18 parteix de V09.17 i manté les versions anteriors intactes.
+V09.19 parteix de V09.18 i manté les versions anteriors intactes.
 
 Canvis principals:
 
@@ -71,6 +71,8 @@ Canvis principals:
 - El mateix client normalitzat pel nom —incloses variants com `S.L.`, `SL`, majúscules, minúscules o accents— no torna a crear una fitxa nova.
 - En carregar la versió es consoliden els duplicats existents, es reassignen pressupostos, obres, factures i documents, i es guarda una còpia reversible de la fusió.
 - L’acció «Fusionar duplicats» utilitza la mateixa regla; els clients sense NIF/DNI/CIF real es marquen com a pendents, però no es dupliquen per aquest motiu.
+- La pantalla de depuració ja no depèn dels grups antics: mostra el botó «Fusionar duplicats ara», executa la fusió real, desa les dades i elimina els grups de la pantalla en acabar.
+- La fusió final també es torna a executar després de carregar tots els blocs històrics de l’app, de manera que els duplicats que ja existien queden consolidats encara que vinguin de versions anteriors.
 
 Ús recomanat:
 
